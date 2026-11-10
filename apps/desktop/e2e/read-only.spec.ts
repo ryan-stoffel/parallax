@@ -107,7 +107,7 @@ test("a read-only device reads the thread and is told why a message and a termin
   // The mini's own app makes it read-only.
   await host.getByRole("button", { name: "Profile", exact: true }).click();
   await host.getByRole("menuitem", { name: "Settings" }).click();
-  await host.getByRole("button", { name: "Connections" }).click();
+  await host.getByRole("button", { name: "Sharing & access" }).click();
   await host.getByRole("button", { name: "Make read-only" }).click();
   await expect(host.getByText(/This can't be undone/)).toBeVisible();
   await shot(host, "settings-confirm");

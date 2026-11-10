@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
@@ -18,6 +18,7 @@ import type {
 import { Notifications } from "../notifications";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { searchSettings } from "./search";
+import { SharingSettings } from "./SharingSettings";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.showPopover = () => {};
@@ -98,6 +99,7 @@ let profile: Profile | null = signedIn;
 const signIn = vi.fn(async (): Promise<string | undefined> => undefined);
 const removeHost = vi.fn(async (): Promise<string | undefined> => undefined);
 const installPlxd = vi.fn(async (): Promise<string | undefined> => undefined);
+const editRoutes = vi.fn(async (): Promise<string | undefined> => undefined);
 // What main tells every listener, as it does when something changes.
 const profileListeners = new Set<(profile: Profile | null) => void>();
 const deviceListeners = new Set<(devices: DeviceHost[]) => void>();
@@ -133,6 +135,7 @@ beforeEach(() => {
   signIn.mockReset().mockResolvedValue(undefined);
   removeHost.mockClear();
   installPlxd.mockClear();
+  editRoutes.mockClear();
   request.mockClear();
   pairLan.mockClear();
   registerRelay.mockClear();
@@ -162,6 +165,7 @@ beforeEach(() => {
     signIn,
     removeHost,
     installPlxd,
+    editRoutes,
     version: async () => "0.4.0",
     discoverAccount: async () => {},
     onKeyStanding: () => () => {},
@@ -196,6 +200,37 @@ const click = async (element: Element) => {
   await settle();
 };
 
+/** Renders one of the two Connections pages, with the app's notifications, and waits for it to settle. */
+async function show(Page: ComponentType) {
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() =>
+    root.render(
+      <>
+        <Page />
+        <Notifications />
+      </>,
+    ),
+  );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+}
+/** A computer's card on Computers, and a button in it. */
+const cardOf = (id: string) => document.querySelector(`li[data-device="${id}"]`);
+const inCard = (id: string, name: string) =>
+  [...cardOf(id)!.querySelectorAll("button")].find((b) => b.textContent === name)!;
+/** Picks `name` in Sharing & access' Showing access for. */
+const showAccessFor = (name: string) =>
+  click(
+    [
+      ...document.querySelectorAll(
+        '[role="menu"][aria-label="Showing access for"] [role^="menuitem"]',
+      ),
+    ].find((option) => option.textContent === name)!,
+  );
+
 test("making a device read-only asks first, says it's for good, and a failure says why", async () => {
   const session = { id: "s1", name: "phone", createdAt: "2026-11-04T00:00:00Z" };
   const makeDeviceReadOnly = vi.fn(async (): Promise<RemoteSessionsResult | string> => ({
@@ -209,20 +244,7 @@ test("making a device read-only asks first, says it's for good, and a failure sa
     capabilities: { readOnlyDevices: {} },
   });
   sessions = [session];
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root.render(
-      <>
-        <ConnectionSettings />
-        <Notifications />
-      </>,
-    ),
-  );
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
+  await show(SharingSettings);
 
   // The devices' card, since other cards have a Cancel and a Remove of their own.
   const button = (name: string) =>
@@ -265,13 +287,7 @@ test("Check connection names the part that failed and copies the report", async 
     diagnostics: "Result: failed at listener",
   }));
   window.parallax.checkRelay = checkRelay;
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<ConnectionSettings />));
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
+  await show(SharingSettings);
   expect(button("Copy diagnostics")).toBeUndefined();
 
   await click(button("Check connection"));
@@ -292,20 +308,7 @@ test("Check connection names the part that failed and copies the report", async 
 
 test("Reach from anywhere registers this computer with the relay before turning it on", async () => {
   remote = true;
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root.render(
-      <>
-        <ConnectionSettings />
-        <Notifications />
-      </>,
-    ),
-  );
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
+  await show(SharingSettings);
   const toggle = document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("false");
 
@@ -325,12 +328,17 @@ test("Reach from anywhere registers this computer with the relay before turning 
 
   // How many of the account's computers are on the relay.
   expect(document.body.textContent).toContain("2 of 10 computers on your account.");
-  // One this app has no device for is listed once, and its menu's Remove frees its place.
-  const row = document.querySelector('li[data-device="relay:b"]')!;
-  expect(row.textContent).toContain("On your account");
-  await click(row.querySelector('[role="menuitem"]')!);
+});
+
+test("an account computer this app has no device for has a card, and its Remove asks first", async () => {
+  relay = true;
+  await show(ConnectionSettings);
+  // It's listed once, and its menu's Remove frees its place on the account.
+  const card = cardOf("relay:b")!;
+  expect(card.textContent).toContain("On your account");
+  await click(card.querySelector('[role="menuitem"]')!);
   // It asks first, and Cancel keeps the computer.
-  const dialog = row.querySelector("dialog")!;
+  const dialog = card.querySelector("dialog")!;
   expect(dialog.textContent).toContain("none of your computers or devices reach it anymore");
   expect(removeRelayHost).not.toHaveBeenCalled();
   const inDialog = (name: string) =>
@@ -346,13 +354,7 @@ test("Reach from anywhere registers this computer with the relay before turning 
 
 test("signed out, Reach from anywhere offers Sign in where its switch can't turn on", async () => {
   profile = null;
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<ConnectionSettings />));
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
+  await show(SharingSettings);
   expect(document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')).toBeNull();
   await click(button("Sign in"));
   expect(signIn).toHaveBeenCalledWith(false);
@@ -367,75 +369,65 @@ test("a computer that can't take agent work says why, with its switch off", asyn
   ];
   window.parallax.connectionState = async (id) =>
     id === "account:old" ? connected : { ...connected, capabilities: { agentWork: {} } };
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<ConnectionSettings />));
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
-  const row = (id: string) => document.querySelector(`li[data-device="account:${id}"]`)!;
-  // Each computer's own settings open under its row.
-  for (const name of ["old-box", "allow-box", "fine-box"])
-    await click(document.querySelector(`[aria-label="${name} settings"]`)!);
-  const toggle = (id: string, name: string) =>
-    row(id).querySelector<HTMLButtonElement>(
+  await show(SharingSettings);
+  // Showing access for picks whose settings the page shows: this computer's at first.
+  expect(document.querySelector('[data-setting="pair-computers-on-this-network"]')).not.toBeNull();
+  const toggle = (name: string) =>
+    document.querySelector<HTMLButtonElement>(
       `[role="switch"][aria-label="Let agents on my other computers work on ${name}"]`,
     )!;
-  expect(row("old").textContent).toContain("Needs updating");
-  expect(toggle("old", "old-box").disabled).toBe(true);
-  expect(row("allow").textContent).toContain("Added with Allow");
-  expect(toggle("allow", "allow-box").disabled).toBe(true);
-  expect(toggle("fine", "fine-box").disabled).toBe(false);
+  const row = () => document.querySelector('[data-setting="agents-can-work-here"]')!;
+  await showAccessFor("old-box");
+  expect(row().textContent).toContain("Needs updating");
+  expect(toggle("old-box").disabled).toBe(true);
+  await showAccessFor("allow-box");
+  expect(row().textContent).toContain("Added with Allow");
+  expect(toggle("allow-box").disabled).toBe(true);
+  await showAccessFor("fine-box");
+  expect(toggle("fine-box").disabled).toBe(false);
   // One that can says what turning it on allows, at the switch.
-  expect(row("fine").textContent).toContain(
-    "Agents on your other computers can run commands there as you. Also turns on pairing there.",
+  expect(row().textContent).toContain(
+    "Agents on your other computers can run commands on fine-box as you. Turning this on also turns on pairing there.",
   );
+  // Another computer's page has none of this computer's own switches.
+  expect(document.querySelector('[data-setting="pair-computers-on-this-network"]')).toBeNull();
 });
 
-test("every Connections setting a search finds is on the page to scroll to", async () => {
-  // With everything on, and with pairing off and nothing paired.
+test("every setting a search finds on Computers or Sharing & access is on that page", async () => {
+  // With everything on and signed in, and with pairing off, nothing paired and signed out.
   for (const on of [true, false]) {
     remote = on;
     relay = on;
     agentWork = false;
+    profile = on ? signedIn : null;
     window.parallax.connectionState = async () => ({
       ...connected,
       capabilities: { agentWork: {} },
     });
-    await show();
-    const found = searchSettings("").filter((r) => r.section === "connections" && r.anchor);
-    expect(found.map((r) => r.title)).toEqual(
-      expect.arrayContaining(["SSH hosts", "Same network", "Devices with access", "Pair a device"]),
-    );
-    for (const { title, anchor } of found)
-      expect(document.querySelector(`[data-setting="${anchor}"]`), title).not.toBeNull();
-    act(() => unmount());
+    for (const [section, Page] of [
+      ["connections", ConnectionSettings],
+      ["sharing", SharingSettings],
+    ] as const) {
+      await show(Page);
+      const found = searchSettings("").filter((r) => r.section === section && r.anchor);
+      expect(found.map((r) => r.title)).toEqual(
+        expect.arrayContaining(
+          section === "connections"
+            ? ["SSH hosts", "Add computer", "Load Balancer"]
+            : ["Same network", "Devices with access", "Pair a device", "Setup code", "Tailscale"],
+        ),
+      );
+      for (const { title, anchor } of found)
+        expect(document.querySelector(`[data-setting="${anchor}"]`), title).not.toBeNull();
+      act(() => unmount());
+    }
   }
+  // Nothing still points at the one page there was.
+  expect(searchSettings("reach from anywhere")[0]).toMatchObject({ section: "sharing" });
+  expect(searchSettings("ssh hosts")[0]).toMatchObject({ section: "connections" });
 });
 
-/** Renders the page, with the app's notifications, and waits for it to settle. */
-async function show() {
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root.render(
-      <>
-        <ConnectionSettings />
-        <Notifications />
-      </>,
-    ),
-  );
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
-}
-const rowOf = (id: string) => document.querySelector(`li[data-device="${id}"]`);
-const inRow = (id: string, name: string) =>
-  [...rowOf(id)!.querySelectorAll("button")].find((b) => b.textContent === name)!;
-
-test("a computer removed from its row doesn't come back as one the app has no device for", async () => {
+test("a computer removed from its card doesn't come back as one the app has no device for", async () => {
   relay = true;
   devices = [device("account:b", "macbook-b")];
   // Main takes it off the relay, then tells the windows it's gone.
@@ -445,27 +437,25 @@ test("a computer removed from its row doesn't come back as one the app has no de
     return undefined;
   });
   window.parallax.removeDevice = removeDevice;
-  await show();
-  expect(document.body.textContent).toContain("2 of 10 computers on your account.");
-  expect(rowOf("relay:b")).toBeNull();
+  await show(ConnectionSettings);
+  expect(cardOf("relay:b")).toBeNull();
 
-  await click(inRow("account:b", "Remove…"));
-  await click(inRow("account:b", "Remove"));
+  await click(inCard("account:b", "Remove…"));
+  await click(inCard("account:b", "Remove"));
   expect(removeDevice).toHaveBeenCalledWith("account:b");
-  expect(rowOf("account:b")).toBeNull();
-  expect(rowOf("relay:b")).toBeNull();
-  expect(document.body.textContent).toContain("1 of 10 computers on your account.");
+  expect(cardOf("account:b")).toBeNull();
+  expect(cardOf("relay:b")).toBeNull();
 });
 
-test("the code dialog a row opens follows the computer to its next step", async () => {
+test("the code dialog a card opens follows the computer to its next step", async () => {
   window.parallax.connectionState = async (id) =>
     id === "local" ? connected : { status: "connecting" };
   window.parallax.answerCompare = () => new Promise(() => {});
   const newbox = (step: "compare" | "confirm") =>
     device("account:new", "newbox", { access: { step, code: "482913" } });
   devices = [newbox("compare")];
-  await show();
-  await click(inRow("account:new", "Compare code"));
+  await show(ConnectionSettings);
+  await click(inCard("account:new", "Compare code"));
   const dialog = () =>
     [...document.querySelectorAll("dialog[open]")].find((d) => d.textContent?.includes("482 913"))!;
   expect(dialog().textContent).toContain("Allow it only if newbox shows this code");
@@ -490,7 +480,7 @@ test("signing in from Reach from anywhere shows it on once plxd turns it on", as
     for (const listener of profileListeners) listener(profile);
     return undefined;
   });
-  await show();
+  await show(SharingSettings);
   await click(button("Sign in"));
   const toggle = document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -519,7 +509,7 @@ const pass = async (ms: number) => {
 test("after a sign-in, the page reads the settings until Reach from anywhere is on, then stops", async () => {
   vi.useFakeTimers();
   profile = null;
-  await show();
+  await show(SharingSettings);
   await signInSlowly(2000);
   const toggle = () => document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
   // The read at the sign-in and the one 1.5 s later are both too early.
@@ -535,7 +525,7 @@ test("after a sign-in, the page reads the settings until Reach from anywhere is 
 test("the reads after a sign-in stop after half a minute, and at a sign-out", async () => {
   vi.useFakeTimers();
   profile = null;
-  await show();
+  await show(SharingSettings);
   await signInSlowly();
   await pass(30_000);
   const reads = settingsReads();
@@ -563,16 +553,16 @@ test("the reads after a sign-in stop after half a minute, and at a sign-out", as
 test("removing an SSH host or a paired computer asks first", async () => {
   const studio = hosts[0]!.id;
   hosts = [...hosts, { id: "ssh-1", name: "devbox", destination: "ryan@devbox" }];
-  await show();
+  await show(ConnectionSettings);
   for (const id of [studio, "ssh-1"]) {
-    await click(inRow(id, "Remove…"));
-    expect(rowOf(id)!.querySelector("dialog[open]")!.textContent).toContain(
+    await click(inCard(id, "Remove…"));
+    expect(cardOf(id)!.querySelector("dialog[open]")!.textContent).toContain(
       "Parallax here stops connecting to it",
     );
-    await click(inRow(id, "Cancel"));
+    await click(inCard(id, "Cancel"));
     expect(removeHost).not.toHaveBeenCalledWith(id);
-    await click(inRow(id, "Remove…"));
-    await click(inRow(id, "Remove"));
+    await click(inCard(id, "Remove…"));
+    await click(inCard(id, "Remove"));
     expect(removeHost).toHaveBeenCalledWith(id);
   }
 });
@@ -581,39 +571,108 @@ test("Update plxd asks first, says what it stops, and stops asking once it isn't
   hosts = [{ id: "ssh-1", name: "devbox", destination: "ryan@devbox" }];
   const older = { ...connected, plxd: "0.3.0" };
   window.parallax.connectionState = async (id) => (id === "ssh-1" ? older : connected);
-  await show();
-  const warning = () => rowOf("ssh-1")!.querySelector('[role="alert"]');
-  await click(inRow("ssh-1", "Update plxd"));
+  await show(ConnectionSettings);
+  const warning = () => cardOf("ssh-1")!.querySelector('[role="alert"]');
+  await click(inCard("ssh-1", "Update plxd"));
   expect(installPlxd).not.toHaveBeenCalled();
   expect(warning()!.textContent).toBe(
     "Updating restarts plxd there, which stops its running agents.",
   );
-  await click(inRow("ssh-1", "Cancel"));
+  await click(inCard("ssh-1", "Cancel"));
   expect(warning()).toBeNull();
   expect(installPlxd).not.toHaveBeenCalled();
 
   // It updates by itself while the question is up: nothing is left to confirm.
-  await click(inRow("ssh-1", "Update plxd"));
+  await click(inCard("ssh-1", "Update plxd"));
   await act(async () => {
     for (const listener of stateListeners) listener("ssh-1", connected);
   });
   expect(warning()).toBeNull();
-  expect(inRow("ssh-1", "Update plxd")).toBeUndefined();
+  expect(inCard("ssh-1", "Update plxd")).toBeUndefined();
 
   await act(async () => {
     for (const listener of stateListeners) listener("ssh-1", older);
   });
-  await click(inRow("ssh-1", "Update plxd"));
-  await click(inRow("ssh-1", "Update plxd"));
+  await click(inCard("ssh-1", "Update plxd"));
+  await click(inCard("ssh-1", "Update plxd"));
   expect(installPlxd).toHaveBeenCalledWith("ssh-1");
 });
 
-test("this computer's failure is printed under its name, not left to a tooltip", async () => {
+test("this computer's failure is printed in its Version row, not left to a tooltip", async () => {
   window.parallax.connectionState = async () => ({
     status: "failed",
     retrying: false,
     error: { reason: "exited", message: "plxd exited: its database is locked." },
   });
-  await show();
-  expect(rowOf("local")!.textContent).toContain("plxd exited: its database is locked.");
+  await show(SharingSettings);
+  expect(document.querySelector('[data-setting="version"]')!.textContent).toContain(
+    "plxd exited: its database is locked.",
+  );
+});
+
+test("Sharing & access opened just after a sign-in on Computers still waits for Reach from anywhere", async () => {
+  vi.useFakeTimers();
+  profile = null;
+  await show(ConnectionSettings);
+  // Add computer's Sign in. plxd turns the relay on two seconds later.
+  signIn.mockImplementation(async () => {
+    setTimeout(() => (relay = true), 2000);
+    profile = signedIn;
+    for (const listener of profileListeners) listener(profile);
+    return undefined;
+  });
+  await click(
+    [...document.querySelectorAll('[role="menuitem"]')].find((item) =>
+      item.textContent?.startsWith("Sign in to Parallax"),
+    )!,
+  );
+  act(() => unmount());
+  await show(SharingSettings);
+  const toggle = () => document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
+  await pass(3000);
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
+});
+
+test("a card opens to its routes, and an account computer's can be moved, added and removed", async () => {
+  devices = [
+    device("account:b", "build-box", {
+      routes: ["192.168.1.20:7341", "box.example.com:7400", "relay:b"],
+      addedRoutes: ["box.example.com:7400"],
+      route: "192.168.1.20:7341",
+    }),
+  ];
+  await show(ConnectionSettings);
+  // Each card's summary counts its routes, and that count opens them.
+  const routes = (id: string) =>
+    [...cardOf(id)!.querySelectorAll("li[data-route]")].map((li) => li.textContent);
+  expect(routes("account:b")).toEqual([]);
+  await click(cardOf("account:b")!.querySelector('[aria-label="3 routes to build-box"]')!);
+  expect(routes("account:b")).toEqual([
+    "Same network192.168.1.20:7341 · Connected",
+    "Directbox.example.com:7400 · Added",
+    "Parallax Relay",
+  ]);
+  const labelled = (label: string) =>
+    cardOf("account:b")!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  await click(labelled("Move Parallax Relay up")!);
+  expect(editRoutes).toHaveBeenCalledWith("account:b", { move: "relay:b", by: -1 });
+  // Only a route the user added can be removed.
+  expect(labelled("Remove Parallax Relay")).toBeNull();
+  await click(labelled("Remove box.example.com:7400")!);
+  expect(editRoutes).toHaveBeenCalledWith("account:b", { remove: "box.example.com:7400" });
+  // Add route asks for an address, and says why one won't do.
+  editRoutes.mockResolvedValueOnce("Enter an address, with a port if it isn't 7341.");
+  await click(inCard("account:b", "Add route"));
+  await click(inCard("account:b", "Add"));
+  expect(editRoutes).toHaveBeenCalledWith("account:b", { add: "" });
+  expect(cardOf("account:b")!.querySelector('[role="alert"]')!.textContent).toContain(
+    "Enter an address",
+  );
+
+  // A paired computer's routes are only listed.
+  const studio = hosts[0]!.id;
+  await click(cardOf(studio)!.querySelector('[aria-label="1 route to studio"]')!);
+  expect(routes(studio)).toEqual(["Same network192.168.1.20 · Connected"]);
+  expect(cardOf(studio)!.querySelector('button[aria-label^="Move"]')).toBeNull();
 });

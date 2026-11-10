@@ -216,6 +216,7 @@ export type SettingsSection =
   | "schedules"
   | "storage"
   | "connections"
+  | "sharing"
   | "beta"
   | "about";
 

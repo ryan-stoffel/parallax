@@ -1,8 +1,12 @@
-import type { ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+import { useId, useState, type ReactNode, type Ref } from "react";
 
 import { anchorOf } from "./search";
 
-// What Settings > Connections' cards share (PLX-1492).
+// What Settings' two Connections pages, Computers and Sharing & access, share (PLX-1492).
+
+/** A card as Settings draws one. */
+export const card = "rounded-xl border border-border/50 bg-(--pane-card)";
 
 /** A small label after a computer's name, as Settings draws one. */
 export const badge = "shrink-0 rounded-sm bg-hover px-1.5 py-px text-caption font-normal";
@@ -48,27 +52,69 @@ export function AccessRow({
   );
 }
 
-/** One of a computer's own settings, in its opened row: its name, a note, and its controls. */
-export function ComputerSetting({
+/**
+ * A card that opens and closes under its own heading: a chevron and `title`, then `summary`, what it
+ * holds in a few words, and `action`, its controls, at the end of the line. Open at first. `open`
+ * holds it open while something inside needs to be seen. `title` is its `data-setting`.
+ */
+export function CollapsibleCard({
+  ref,
   title,
-  note,
+  summary,
+  action,
+  open: held,
   children,
 }: {
+  ref?: Ref<HTMLElement>;
   title: string;
-  /** Why it's as it is, or what it's doing now. */
-  note?: ReactNode;
+  summary?: ReactNode;
+  action?: ReactNode;
+  open?: boolean;
   children: ReactNode;
 }) {
+  const [chosen, setChosen] = useState(true);
+  const open = held || chosen;
+  const bodyId = useId();
   return (
-    <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1">
-      <div className="min-w-[min(10rem,100%)] flex-1">
-        <span className="block text-body">{title}</span>
-        {note && <span className="block text-meta text-muted-foreground">{note}</span>}
+    <section
+      ref={ref}
+      aria-label={title}
+      data-setting={anchorOf(title)}
+      className={`mb-10 scroll-mt-6 ${card}`}
+    >
+      <div className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <h2 className="shrink-0 text-reading font-semibold">
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={open ? bodyId : undefined}
+            onClick={() => setChosen(!open)}
+            className="-ml-1 flex items-center gap-2 rounded-md py-0.5 pr-1.5 pl-1 hover:bg-hover"
+          >
+            <ChevronDown
+              aria-hidden
+              className={`size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
+            />
+            {title}
+          </button>
+        </h2>
+        {summary && (
+          <span className="min-w-[min(8rem,100%)] flex-1 text-meta text-muted-foreground">
+            {summary}
+          </span>
+        )}
+        {action && (
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+            {action}
+          </div>
+        )}
       </div>
-      <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
-        {children}
-      </div>
-    </div>
+      {open && (
+        <div id={bodyId} className="border-t border-border/40">
+          {children}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -85,7 +131,7 @@ export function NoticeRow({
   return (
     <div
       role="status"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/40 px-4 py-3"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-border/40 px-4 py-3 not-last:border-b"
     >
       <div className="min-w-[min(14rem,100%)] flex-1">
         <p className="text-body font-medium">{title}</p>

@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { KeyRound, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { ConnectState } from "../../preload/bridge";
@@ -13,9 +13,17 @@ import { useCopy } from "../AgentChat";
 import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { dismiss, notify } from "../notifications";
+import { useProfile } from "../profile";
 import { Dialog } from "../ui";
-import { AccessRow, badge } from "./connectionParts";
-import { ConfirmRemove, primaryButton, quietButton, rowField, Section, Switch } from "./parts";
+import { AccessRow, badge, CollapsibleCard } from "./connectionParts";
+import {
+  ConfirmRemove,
+  outlineButton,
+  primaryButton,
+  quietButton,
+  rowField,
+  Switch,
+} from "./parts";
 
 /** A SHA-256 fingerprint in hex as browsers show it: `AB CD …`. */
 const fingerprint = (hex: string) => hex.toUpperCase().match(/../g)!.join(" ");
@@ -26,7 +34,7 @@ const GRANTS =
 
 /** Why read-only is for good: it belongs to the device's key, and only a new key has full access (0091). */
 const READ_ONLY_FOR_GOOD =
-  "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.";
+  "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.";
 
 /** How the connection check names a part. */
 const CHECK_PARTS: Record<RelayCheckPart, string> = {
@@ -39,6 +47,29 @@ const CHECK_PARTS: Record<RelayCheckPart, string> = {
 /** How many computers an account's relay holds. */
 const ACCOUNT_COMPUTERS = 10;
 
+/** How long after a sign-in plxd may still be turning `relay` on. */
+const SETTLE_MS = 30_000;
+/** When a sign-in was last seen, by either Connections page, so one opened just after it waits too. */
+let signedInAt = -SETTLE_MS;
+
+/** The account as Settings' Connections pages use it: whether it's signed out, and Sign in. */
+export function useAccountSignIn() {
+  const profile = useProfile();
+  const [signingIn, setSigningIn] = useState(false);
+  const signIn = async () => {
+    setSigningIn(true);
+    const failed = await window.parallax.signIn(false);
+    setSigningIn(false);
+    if (failed) notify({ tone: "error", title: "Couldn't sign in", body: failed });
+  };
+  return {
+    signedIn: !!profile,
+    signedOut: profile === null,
+    signingIn,
+    onSignIn: () => void signIn(),
+  };
+}
+
 /**
  * How computers reach this one, read from the local plxd, with what changes it: Reach from
  * anywhere, its `relay`, which registers it with Parallax Relay (PLX-652); pairing on the same
@@ -46,8 +77,13 @@ const ACCOUNT_COMPUTERS = 10;
  * `agentWork` (0101), which it and pairing change in each other. With them, the devices paired with
  * or signed in to this computer, which can be revoked or made read-only (PLX-1364), a pairing code
  * while one is on show, and the account's computers on the relay while Reach from anywhere is on.
+ *
+ * Signing in registers this computer, and plxd then turns `relay` on, which nothing tells the app
+ * (PLX-1146). So after a sign-in, seen here or by the page open just before, it reads the settings
+ * again until that shows, half a minute passes, or the user signs out.
  */
 export function useLocalAccess() {
+  const profile = useProfile();
   const local = useShownConnection(localId);
   const connected = local?.status === "connected";
   const connectedNow = useConnectedNow(localId);
@@ -65,7 +101,19 @@ export function useLocalAccess() {
   // Bumped to read the account's computers again, after one joined or left.
   const [listRead, setListRead] = useState(0);
   // A sign-in is turning `relay` on, some seconds after it's done: read until it shows.
-  const [settling, setSettling] = useState(false);
+  const [settling, setSettling] = useState(() => performance.now() - signedInAt < SETTLE_MS);
+  const signedOut = useRef(false);
+  useEffect(() => {
+    if (profile === null) {
+      signedOut.current = true;
+      setSettling(false);
+    } else if (profile && signedOut.current) {
+      signedOut.current = false;
+      signedInAt = performance.now();
+      setRead((n) => n + 1);
+      setSettling(true);
+    }
+  }, [profile]);
   // What a switch or button here couldn't do. One replaces the last, and trying again closes it.
   const failed = (title: string, body: string) =>
     notify({ key: "same-network", tone: "error", title, body });
@@ -98,7 +146,7 @@ export function useLocalAccess() {
     if (!settling) return;
     if (relay) return setSettling(false);
     const timer = setInterval(() => setRead((n) => n + 1), 1500);
-    const giveUp = setTimeout(() => setSettling(false), 30_000);
+    const giveUp = setTimeout(() => setSettling(false), SETTLE_MS);
     return () => {
       clearInterval(timer);
       clearTimeout(giveUp);
@@ -128,16 +176,6 @@ export function useLocalAccess() {
     relayHosts,
     showing,
     reload: () => setRead((n) => n + 1),
-    /**
-     * Signing in registers this computer, and plxd then turns `relay` on, which nothing tells the
-     * app (PLX-1146). Reads the settings now, and again until it shows or half a minute passes.
-     */
-    expectRelay: () => {
-      setRead((n) => n + 1);
-      setSettling(true);
-    },
-    /** Signed out: nothing is turning `relay` on, and the next sign-in waits its own half minute. */
-    stopExpectingRelay: () => setSettling(false),
     /** Reads the account's computers again. */
     refreshRelayHosts: () => setListRead((n) => n + 1),
     /** Drops a computer being removed from the list held here, ahead of the next read. */
@@ -320,39 +358,107 @@ function ReachRow({
 }
 
 /**
- * This computer's switches for who can reach it, under its name in Settings > Connections: Reach
- * from anywhere, pairing on the same network, and whether agents on the user's other computers can
- * work here.
+ * This computer's rows on Sharing & access, under its version: pairing on the same network;
+ * Tailscale, which also finds the tailnet's devices (0056) until Tailscale is only a route; Reach
+ * from anywhere; Open in a browser, which serves the app from this computer's listener for a browser
+ * to pair with (PLX-651) and so needs pairing on; whether agents on the user's other computers can
+ * work here; and, signed in, the setup code another computer adds this one with (0091).
  */
-export function ThisComputerAccess(props: {
+export function SharingRows({
+  access,
+  connect,
+  onShowCode,
+  ...account
+}: {
   access: LocalAccess;
+  connect: ConnectState | undefined;
   signedOut: boolean;
   signingIn: boolean;
   onSignIn: () => void;
+  /** Opens Show setup code. Absent while signed out, when there's no account to add it to. */
+  onShowCode?: () => void;
 }) {
-  const { access } = props;
+  const { web, on, status, showing } = access;
+  const addresses = (showing?.addresses ?? ["this computer's address"])
+    .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
+    .join(", ");
   return (
     <>
-      {access.relay !== undefined && <ReachRow {...props} />}
       <AccessRow
         title="Pair computers on this network"
         description="Computers and browsers on your network pair with this one using a one-time code."
         status={
-          access.on &&
-          access.status?.problem && (
+          on &&
+          status?.problem && (
             <span role="alert" className="mt-1 block text-meta text-danger">
-              {access.status.problem}
+              {status.problem}
             </span>
           )
         }
       >
         <Switch
           label="Pair computers on this network"
-          checked={!!access.on}
-          disabled={access.on === undefined}
+          checked={!!on}
+          disabled={on === undefined}
           onChange={(next) => void access.toggle(next)}
         />
       </AccessRow>
+      <AccessRow
+        title="Tailscale"
+        description="Also find the computers on your Tailscale network that run Parallax Connect."
+      >
+        {connect ? (
+          <Switch
+            label="Tailscale"
+            checked={!!connect.on}
+            disabled={connect.on === undefined}
+            onChange={(next) => void access.toggleTailscale(next)}
+          />
+        ) : (
+          <span className="text-body text-muted-foreground">Checking…</span>
+        )}
+      </AccessRow>
+      {access.relay !== undefined && <ReachRow access={access} {...account} />}
+      {web !== undefined && (
+        <AccessRow
+          title="Open in a browser"
+          description={
+            !on ? (
+              "Use Parallax from a browser on this network. Needs pairing on."
+            ) : !web ? (
+              "Use Parallax from a browser on this network."
+            ) : (
+              <>
+                Open <span className="font-mono text-foreground">{addresses}</span> and pair with a
+                code from Pair a device. Use the Tailscale address where you can. On this network
+                the browser warns about this computer's certificate: continue only if it shows this
+                SHA-256 fingerprint, or trust the certificate in your OS first. Otherwise someone on
+                the network could pose as this computer. Turning this off disconnects paired
+                browsers.
+              </>
+            )
+          }
+          status={
+            on &&
+            web &&
+            status?.fingerprint && (
+              <span
+                aria-label="Certificate fingerprint"
+                className="mt-1 block font-mono text-meta break-all text-foreground"
+              >
+                {fingerprint(status.fingerprint)}
+              </span>
+            )
+          }
+        >
+          <Switch
+            label="Open in a browser"
+            checked={!!on && web}
+            disabled={!on}
+            onChange={(next) => void access.toggleWeb(next)}
+          />
+        </AccessRow>
+      )}
       {access.canAgentWork && (
         <AccessRow
           title="Agents can work here"
@@ -371,16 +477,30 @@ export function ThisComputerAccess(props: {
           />
         </AccessRow>
       )}
+      <AccessRow
+        title="Setup code"
+        description={
+          onShowCode
+            ? "A one-time code to type on another computer that's adding this one to your account."
+            : "A one-time code for another computer that's adding this one to your account. Sign in first."
+        }
+      >
+        <button type="button" disabled={!onShowCode} onClick={onShowCode} className={outlineButton}>
+          <KeyRound aria-hidden />
+          Show setup code
+        </button>
+      </AccessRow>
     </>
   );
 }
 
 /**
- * Settings > Connections' Devices with access: the phones, browsers, and computers paired with or
- * signed in to this computer, each with Revoke and Make read-only (PLX-1364), shown with pairing
- * off too. Pair a device shows a short one-time code while this computer advertises itself by name
- * over mDNS, with what a paired computer can do beside it. With pairing off, the card says how to
- * pair one, and is where a search for Pair a device lands.
+ * Sharing & access' Devices with access, a card that opens and closes: the phones, browsers, and
+ * computers paired with or signed in to this computer, counted in its heading, each with Revoke and
+ * Make read-only (PLX-1364), shown with pairing off too. Pair a device, in its heading, shows a
+ * short one-time code while this computer advertises itself by name over mDNS, with what a paired
+ * computer can do beside it. With pairing off, the card says how to pair one, and is where a search
+ * for Pair a device lands.
  */
 export function DevicesWithAccess({ access }: { access: LocalAccess }) {
   const { sessions, showing } = access;
@@ -388,8 +508,13 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
   const [confirming, setConfirming] = useState<string>();
   const canPair = !!access.on && !!access.status?.listening;
   return (
-    <Section
+    <CollapsibleCard
       title="Devices with access"
+      summary={
+        sessions.length > 0 && (sessions.length === 1 ? "1 device" : `${sessions.length} devices`)
+      }
+      // A code on show is never hidden.
+      open={!!showing}
       action={
         canPair &&
         !showing && (
@@ -397,7 +522,7 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
             type="button"
             data-setting="pair-a-device"
             onClick={() => void access.pair()}
-            className={`${quietButton} flex items-center gap-1 whitespace-nowrap [&_svg]:size-3.5`}
+            className={outlineButton}
           >
             <Plus aria-hidden />
             Pair a device
@@ -492,84 +617,7 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
           </p>
         )}
       </div>
-    </Section>
-  );
-}
-
-/**
- * Settings > Connections' Advanced: Tailscale, which also finds the tailnet's devices (0056) until
- * Tailscale is only a route, and Open in a browser, which serves the app from this computer's
- * listener for a browser to pair with (PLX-651) and so needs pairing on.
- */
-export function AdvancedSettings({
-  access,
-  connect,
-}: {
-  access: LocalAccess;
-  connect: ConnectState | undefined;
-}) {
-  const { web, on, status, showing } = access;
-  const addresses = (showing?.addresses ?? ["this computer's address"])
-    .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
-    .join(", ");
-  return (
-    <Section title="Advanced">
-      <AccessRow
-        title="Tailscale"
-        description="Also find the computers on your Tailscale network that run Parallax Connect."
-      >
-        {connect ? (
-          <Switch
-            label="Tailscale"
-            checked={!!connect.on}
-            disabled={connect.on === undefined}
-            onChange={(next) => void access.toggleTailscale(next)}
-          />
-        ) : (
-          <span className="text-body text-muted-foreground">Checking…</span>
-        )}
-      </AccessRow>
-      {web !== undefined && (
-        <AccessRow
-          title="Open in a browser"
-          description={
-            !on ? (
-              "Use Parallax from a browser on this network. Needs pairing on."
-            ) : !web ? (
-              "Use Parallax from a browser on this network."
-            ) : (
-              <>
-                Open <span className="font-mono text-foreground">{addresses}</span> and pair with a
-                code from Pair a device. Use the Tailscale address where you can. On this network
-                the browser warns about this computer's certificate: continue only if it shows this
-                SHA-256 fingerprint, or trust the certificate in your OS first. Otherwise someone on
-                the network could pose as this computer. Turning this off disconnects paired
-                browsers.
-              </>
-            )
-          }
-          status={
-            on &&
-            web &&
-            status?.fingerprint && (
-              <span
-                aria-label="Certificate fingerprint"
-                className="mt-1 block font-mono text-meta break-all text-foreground"
-              >
-                {fingerprint(status.fingerprint)}
-              </span>
-            )
-          }
-        >
-          <Switch
-            label="Open in a browser"
-            checked={!!on && web}
-            disabled={!on}
-            onChange={(next) => void access.toggleWeb(next)}
-          />
-        </AccessRow>
-      )}
-    </Section>
+    </CollapsibleCard>
   );
 }
 
@@ -622,7 +670,7 @@ export function PairDialog({ onDone }: { onDone: () => void }) {
             Add a computer on this network
           </h2>
           <p className="mt-1.5 text-body text-muted-foreground">
-            On the other computer, turn on pairing in Settings › Connections and choose Pair a
+            On the other computer, turn on pairing in Settings › Sharing & access and choose Pair a
             device. Then enter the code it shows. Pair only your own computers.
           </p>
         </div>

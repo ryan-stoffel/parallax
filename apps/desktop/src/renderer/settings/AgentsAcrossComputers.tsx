@@ -1,10 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ConnectionState, DeviceHost } from "../../preload/bridge";
 import { isRelay } from "../../preload/routeList";
 import type { ProviderInfo } from "../../protocol/generated/protocol";
 import { statusLabel, useRealConnections } from "../ConnectionStatus";
-import type { Host } from "../hosts";
 import {
   askComputer,
   assess,
@@ -17,15 +16,16 @@ import {
   type Health,
   type Preference,
 } from "../loadBalancer";
+import { localId, type Host } from "../hosts";
 import { notify } from "../notifications";
 import { newThreadPrefs } from "../prefs";
+import { hostIcon } from "../RunTargetMenu";
 import { Picker } from "../ui";
-import { AccessRow, badge, ComputerSetting } from "./connectionParts";
-import { Section, Switch } from "./parts";
+import { AccessRow, badge, CollapsibleCard } from "./connectionParts";
+import { Switch } from "./parts";
 
-// Agents across computers (0101) in Settings > Connections: whether agents on the user's other
-// computers can work on one, and the Load Balancer. Each computer's part is one of its own
-// settings, in its row (PLX-1492).
+// Agents across computers (0101) in Settings: whether agents on the user's other computers can
+// work on one, on Sharing & access, and the Load Balancer, on Computers (PLX-1492).
 
 /** How an account computer is reached, in words: over the relay, or directly for another route. */
 export const reachOf = (route: string | undefined) =>
@@ -36,11 +36,11 @@ export const reachOf = (route: string | undefined) =>
       : "Over your network";
 
 /**
- * `agentWork` on account computer `host`, on a plxd that has it, as one of its settings, with why
- * it can't take part as its note: not connected, an older plxd, or added with Allow alone
+ * `agentWork` on account computer `host`, on a plxd that has it, as its row on Sharing & access,
+ * with why it can't take part under it: not connected, an older plxd, or added with Allow alone
  * (PLX-1402).
  */
-export function AgentWorkSetting({
+export function AgentWorkRow({
   host,
   device,
 }: {
@@ -84,15 +84,12 @@ export function AgentWorkSetting({
         : device.addedWithAllow
           ? "Added with Allow, so agents can't work with it yet"
           : undefined;
+  const note = why ?? (read?.on && !read.relay ? "Needs Reach from anywhere" : undefined);
   return (
-    <ComputerSetting
+    <AccessRow
       title="Agents can work here"
-      note={
-        why ??
-        (read?.on && !read.relay
-          ? "Needs Reach from anywhere"
-          : "Agents on your other computers can run commands there as you. Also turns on pairing there.")
-      }
+      description={`Agents on your other computers can run commands on ${host.name} as you. Turning this on also turns on pairing there.`}
+      status={note && <span className="mt-1 block text-meta text-warning">{note}</span>}
     >
       <Switch
         label={`Let agents on my other computers work on ${host.name}`}
@@ -100,7 +97,7 @@ export function AgentWorkSetting({
         disabled={!!why || !read}
         onChange={(next) => void toggle(next)}
       />
-    </ComputerSetting>
+    </AccessRow>
   );
 }
 
@@ -195,7 +192,7 @@ interface Balanced {
   connection?: ConnectionState;
 }
 
-/** The Load Balancer as Settings > Connections shows it: its pick, and each computer's place. */
+/** The Load Balancer as Settings > Computers shows it: its pick, and each computer's place. */
 export interface Balancer {
   /** On, with two or more computers to balance. */
   on: boolean;
@@ -255,9 +252,9 @@ export function useBalancer(hosts: Host[], seen: { current: Element | null }): B
   };
 }
 
-/** What the Load Balancer says of computer `hostId` beside its name, while it's on. */
-export function balancerBadge(balancer: Balancer, hostId: string): ReactNode {
-  const row = balancer.on ? balancer.of(hostId) : undefined;
+/** What the Load Balancer says of computer `hostId` beside its name. */
+function balancerBadge(balancer: Balancer, hostId: string): ReactNode {
+  const row = balancer.of(hostId);
   if (!row) return null;
   if (hostId === balancer.pick)
     return <span className={`${badge} text-muted-foreground`}>Next</span>;
@@ -270,21 +267,12 @@ export function balancerBadge(balancer: Balancer, hostId: string): ReactNode {
 }
 
 /**
- * One computer in the Load Balancer, as one of its settings while the balancer is on: what it's
- * doing now, how often it takes new threads, and whether it takes part.
+ * One computer in the Load Balancer's card: its name and whether it's next, full or left out, what
+ * it's doing now, and at the end how often it takes new threads and whether it takes part.
  */
-export function BalancerSetting({
-  host,
-  balancer,
-  card,
-}: {
-  host: Host;
-  balancer: Balancer;
-  /** Draws it as a row of a card, as this computer's is, not as a setting in an opened row. */
-  card?: boolean;
-}) {
+function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
   const settings = loadBalancer.use();
-  const row = balancer.on ? balancer.of(host.id) : undefined;
+  const row = balancer.of(host.id);
   if (!row) return null;
   const { candidate, read, connection } = row;
   const leftOut = settings.leftOut.includes(host.id);
@@ -299,107 +287,124 @@ export function BalancerSetting({
       : why === "offline" && connection
         ? statusLabel(connection)
         : whyText[why];
-  const note =
-    instead || (leftOut && !read) ? (
-      (instead ?? whyText["left-out"])
-    ) : (
-      <span className="flex flex-wrap items-center gap-x-3">
-        <Meter
-          label="CPU"
-          used={load?.cpu}
-          title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
+  return (
+    <li className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 border-border/40 px-4 py-3 not-last:border-b">
+      <div className="flex min-w-[min(14rem,100%)] flex-1 items-center gap-3">
+        <span className="shrink-0 text-muted-foreground [&_svg]:size-5">{hostIcon(host)}</span>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-body font-medium">
+            <span className="truncate">{host.name}</span>
+            {balancerBadge(balancer, host.id)}
+          </p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-meta text-muted-foreground">
+            {host.id === localId && <span>This computer</span>}
+            {/* Left out, its mark by its name says so. */}
+            {leftOut ? null : instead ? (
+              <span>{instead}</span>
+            ) : (
+              <>
+                <Meter
+                  label="CPU"
+                  used={load?.cpu}
+                  title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
+                />
+                <Meter
+                  label="Memory"
+                  used={load?.memory}
+                  title={load ? `Memory ${load.memory}% in use` : "Memory"}
+                />
+                {agents !== undefined && (
+                  <span>
+                    {agents} {agents === 1 ? "agent" : "agents"}
+                  </span>
+                )}
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+      <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+        <Picker
+          field
+          label={`How often ${host.name} takes new threads`}
+          options={preferences.map((p) => ({ value: p.value, label: p.name }))}
+          value={candidate.preference}
+          disabled={leftOut}
+          align="end"
+          className="w-32"
+          onChange={(value) =>
+            loadBalancer.set({
+              ...settings,
+              preferences: { ...settings.preferences, [host.id]: value as Preference },
+            })
+          }
         />
-        <Meter
-          label="Memory"
-          used={load?.memory}
-          title={load ? `Memory ${load.memory}% in use` : "Memory"}
+        <Switch
+          label={`Balance new threads onto ${host.name}`}
+          checked={!leftOut}
+          onChange={(on) =>
+            loadBalancer.set({
+              ...settings,
+              leftOut: on
+                ? settings.leftOut.filter((id) => id !== host.id)
+                : [...settings.leftOut, host.id],
+            })
+          }
         />
-        {agents !== undefined && (
-          <span>
-            {agents} {agents === 1 ? "agent" : "agents"}
-          </span>
-        )}
-      </span>
-    );
-  const controls = (
-    <>
-      <Picker
-        field
-        label={`How often ${host.name} takes new threads`}
-        options={preferences.map((p) => ({ value: p.value, label: p.name }))}
-        value={candidate.preference}
-        disabled={leftOut}
-        align="end"
-        className="w-32"
-        onChange={(value) =>
-          loadBalancer.set({
-            ...settings,
-            preferences: { ...settings.preferences, [host.id]: value as Preference },
-          })
-        }
-      />
-      <Switch
-        label={`Balance new threads onto ${host.name}`}
-        checked={!leftOut}
-        onChange={(on) =>
-          loadBalancer.set({
-            ...settings,
-            leftOut: on
-              ? settings.leftOut.filter((id) => id !== host.id)
-              : [...settings.leftOut, host.id],
-          })
-        }
-      />
-    </>
-  );
-  return card ? (
-    <AccessRow title="Load Balancer" anchor="this-computer-load-balancer" description={note}>
-      {controls}
-    </AccessRow>
-  ) : (
-    <ComputerSetting title="Load Balancer" note={note}>
-      {controls}
-    </ComputerSetting>
+      </div>
+    </li>
   );
 }
 
 /**
- * Settings > Connections' Load Balancer (0101), with two or more computers: its switch, and where
- * the next thread goes. Each computer's part is in its own row (`BalancerSetting`).
+ * Settings > Computers' Load Balancer (0101), with two or more computers, as a card that opens and
+ * closes: its switch and where the next thread goes in its heading, then what it does, and while
+ * it's on, each computer with its weight. The computers are read only while the card is on screen.
  */
-export function LoadBalancerSettings({ hosts, balancer }: { hosts: Host[]; balancer: Balancer }) {
+export function LoadBalancerCard({ hosts }: { hosts: Host[] }) {
   const settings = loadBalancer.use();
+  const seen = useRef<HTMLElement>(null);
+  const balancer = useBalancer(hosts, seen);
   if (hosts.length < 2) return null;
   const { pick } = balancer;
   return (
-    <Section title="Load Balancer">
-      <AccessRow
-        title="Balance new threads"
-        description={
-          <span aria-live="polite" title={pick && "If it has the thread's repository"}>
-            {!settings.on ? (
-              "Start each new thread on the computer with the most free CPU and memory."
-            ) : pick ? (
-              <>
-                Next thread goes to{" "}
-                <span className="text-foreground">{hosts.find((h) => h.id === pick)?.name}</span>
-              </>
-            ) : balancer.reading ? (
-              "Checking your computers…"
-            ) : balancer.everyOneOut ? (
-              <span className="text-warning">Every computer is left out. Turn one on.</span>
-            ) : (
-              <span className="text-warning">No computer can take a thread right now.</span>
-            )}
-          </span>
-        }
-      >
+    <CollapsibleCard
+      ref={seen}
+      title="Load Balancer"
+      summary={
+        <span aria-live="polite" title={pick && "If it has the thread's repository"}>
+          {!settings.on ? null : pick ? (
+            <>
+              Next thread goes to{" "}
+              <span className="text-foreground">{hosts.find((h) => h.id === pick)?.name}</span>
+            </>
+          ) : balancer.reading ? (
+            "Checking your computers…"
+          ) : balancer.everyOneOut ? (
+            <span className="text-warning">Every computer is left out. Turn one on.</span>
+          ) : (
+            <span className="text-warning">No computer can take a thread right now.</span>
+          )}
+        </span>
+      }
+      action={
         <Switch
           label="Balance new threads across my computers"
           checked={settings.on}
           onChange={(on) => loadBalancer.set({ ...settings, on })}
         />
-      </AccessRow>
-    </Section>
+      }
+    >
+      <p className="border-border/40 px-4 py-3 text-meta text-muted-foreground not-last:border-b">
+        Start each new thread on the computer with the most free CPU and memory.
+      </p>
+      {balancer.on && (
+        <ul aria-label="Computers the Load Balancer uses">
+          {hosts.map((h) => (
+            <BalancerRow key={h.id} host={h} balancer={balancer} />
+          ))}
+        </ul>
+      )}
+    </CollapsibleCard>
   );
 }

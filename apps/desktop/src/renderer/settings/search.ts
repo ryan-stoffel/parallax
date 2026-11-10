@@ -62,7 +62,20 @@ export const settingsSections: {
     keywords: "git github pull request",
   },
   { id: "worktrees", name: "Worktrees", group: "Code", keywords: "branch prefix base cleanup git" },
-  { id: "connections", name: "Connections", group: "System", keywords: "hosts computers ssh" },
+  // Connections: the computers this app uses, then how this one is reached (PLX-1492). Computers
+  // keeps the id the one Connections page had, so what opened that page still opens it.
+  {
+    id: "connections",
+    name: "Computers",
+    group: "Connections",
+    keywords: "hosts connections ssh machines remote devices",
+  },
+  {
+    id: "sharing",
+    name: "Sharing & access",
+    group: "Connections",
+    keywords: "connections reach pair access devices this computer relay",
+  },
   { id: "storage", name: "Storage", group: "System", keywords: "disk space cleanup" },
   {
     id: "beta",
@@ -509,40 +522,18 @@ export const settingsIndex: SettingEntry[] = [
       "intensity contrast legibility",
     ],
   ]),
-  // Connections, by computer (PLX-1492). Titles that aren't on the page any more, such as SSH
-  // hosts, still find the card that holds them.
-  ...entries("connections", "This computer", [
-    ["This computer", "Its name and plxd", "rename computer name local daemon status version plxd"],
-    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote check connection"],
-    ["Pair computers on this network", undefined, "lan pair wifi same network"],
-    [
-      "Agents can work here",
-      "Agents on your other computers can run commands on the ones you turn on",
-      "agent work delegate remote peer",
-    ],
-  ]),
-  ...entries("connections", undefined, [
-    [
-      "Your computers",
-      "Every other computer, with its status",
-      "add computer devices hosts machines remove routes",
-    ],
-    [
-      "Load Balancer",
-      "Start new threads on the computer with the most room",
-      "auto balance load busy cpu memory new thread computers",
-    ],
-    [
-      "Devices with access",
-      "What's paired with or signed in to this computer",
-      "revoke read-only phone browser paired sessions",
-    ],
-  ]),
+  // Computers (PLX-1492). Titles that aren't on the page any more, such as SSH hosts, still find
+  // the card that holds them.
   ...[
+    [
+      "Add computer",
+      "With your Parallax account, on this network, or over SSH",
+      "add computer devices hosts machines new",
+    ],
     [
       "Parallax Connect",
       "Your computers, wherever they are",
-      "add computer relay remote devices account sync setup code",
+      "add computer relay remote devices account sync",
     ],
     [
       "Computers on this network",
@@ -550,32 +541,58 @@ export const settingsIndex: SettingEntry[] = [
       "lan nearby devices pair computer",
     ],
     ["SSH hosts", "Machines you reach over SSH", "ssh remote server add host install plxd"],
+    ["Routes", "How this app reaches a computer", "route address order relay tailscale network"],
   ].map(([title, description, keywords]) => ({
     section: "connections" as const,
-    group: "Your computers",
     title: title!,
     description,
     keywords,
-    anchor: "your-computers",
+    anchor: "computers",
   })),
-  {
-    section: "connections",
-    group: "This computer",
-    title: "Same network",
-    description: "Pair computers on this network",
-    keywords: "lan local network wifi",
-    anchor: "pair-computers-on-this-network",
-  },
-  ...entries("connections", "Devices with access", [
-    ["Pair a device", "With a pairing code", "pairing code phone"],
+  ...entries("connections", undefined, [
+    [
+      "Load Balancer",
+      "Start new threads on the computer with the most room",
+      "auto balance load busy cpu memory new thread computers weight prefer",
+    ],
   ]),
-  ...entries("connections", "Advanced", [
+  // Sharing & access (PLX-1492): this computer's own settings, and the devices that reach it.
+  ...entries("sharing", undefined, [
+    ["This computer", "Its name and icon", "rename computer name local icon"],
+    ["Version", "This computer's plxd", "daemon status version plxd uptime"],
+    ["Pair computers on this network", "With a one-time code", "lan pair wifi same network local"],
     ["Tailscale", "Find computers on your Tailscale network", "tailnet vpn"],
+    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote check connection"],
     [
       "Open in a browser",
       "Use Parallax from a browser on this network",
       "web phone mobile certificate",
     ],
+    [
+      "Agents can work here",
+      "Agents on your other computers can run commands on the ones you turn on",
+      "agent work delegate remote peer",
+    ],
+    [
+      "Setup code",
+      "A code for another computer that's adding this one",
+      "show setup code add this computer account",
+    ],
+    [
+      "Devices with access",
+      "What's paired with or signed in to this computer",
+      "revoke read-only phone browser paired sessions",
+    ],
+  ]),
+  {
+    section: "sharing",
+    title: "Same network",
+    description: "Pair computers on this network",
+    keywords: "lan local network wifi",
+    anchor: "pair-computers-on-this-network",
+  },
+  ...entries("sharing", "Devices with access", [
+    ["Pair a device", "With a pairing code", "pairing code phone"],
   ]),
   // Storage
   ...entries("storage", undefined, [
