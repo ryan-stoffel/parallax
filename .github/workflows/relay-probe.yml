@@ -29,6 +29,10 @@ on:
         options:
           - production
           - staging
+      connects:
+        description: "Connects to time. Empty times 5."
+        required: false
+        type: string
   workflow_call:
     inputs:
       tag:
@@ -115,12 +119,13 @@ jobs:
           TAG: ${{ inputs.tag }}
           RELAY: ${{ inputs.relay }}
           STAGING: ${{ inputs.relay == 'staging' && 'https://parallax-relay-staging.stoffel-thomas-ryan.workers.dev' || '' }}
+          CONNECTS: ${{ inputs.connects }}
           GITHUB_TOKEN: ${{ github.token }}
           PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
           PROBE_CLERK_USER_ID: ${{ vars.PROBE_CLERK_USER_ID }}
           PROBE_ROTATED_FILE: ${{ runner.temp }}/rotated-token
           PROBE_SKIP_SIGNIN: ${{ steps.token.outputs.skip }}
-        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"} ${STAGING:+--relay "$STAGING"} ${RELAY:+--timings}
+        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"} ${STAGING:+--relay "$STAGING"} ${RELAY:+--timings} ${CONNECTS:+--connects "$CONNECTS"}
 
       # Clerk replaces the refresh token on each use, so this keeps the next run signed in. The
       # writer reaches only this step and the check above.
