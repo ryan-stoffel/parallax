@@ -15,6 +15,8 @@
 //! - A paired client opens `/ws`, which carries 0007's JSON-RPC, one message per frame, with the
 //!   token and a `DPoP` proof on the upgrade itself (0091). A host from before 0091 refuses that,
 //!   and the client then gets a 30 s ticket at `/api/auth/websocket-ticket` and opens `/ws` with it.
+//!   When the TLS handshake picks [`EARLY_WS`], the lines already waiting on `plxd dial`'s input
+//!   go as frames behind the upgrade request, a round trip sooner (PLX-1483).
 //!
 //! - An `account:` host (0091) is pinned by its relay id, the JWK thumbprint of its certificate's
 //!   key ([`Pin::HostId`]). This computer signs in to it with a Clerk token ([`sign_in`]) and one
@@ -95,6 +97,25 @@ const PAKE_CLIENT: &[u8] = b"parallax pairing client";
 
 /// How far a `DPoP` proof's `iat` may be from now, as T3's.
 pub const PROOF_WINDOW_SECONDS: i64 = 300;
+
+/// The ALPN protocol of a listener that keeps what a client sends behind a `/ws` upgrade request
+/// and gives it to the WebSocket once it accepted the upgrade (PLX-1483). In everything else it
+/// is the listener's HTTP/1.1. The host lists it and a client offers it, so the handshake a client
+/// makes anyway says what the plxd answering it does: a host from before this picks nothing, and
+/// a client then sends nothing before the 101. Nothing is saved, so a host rolled back is never
+/// sent what it would drop.
+pub const EARLY_WS: &[u8] = b"plxd-early-ws";
+
+/// What the listener lists and `plxd dial` offers, most wanted first. `http/1.1` keeps a
+/// handshake working for a client that offers a list without [`EARLY_WS`], such as a browser.
+fn alpn_protocols() -> Vec<Vec<u8>> {
+    vec![EARLY_WS.to_vec(), b"http/1.1".to_vec()]
+}
+
+/// How many bytes of frames go behind an upgrade request. With the request's head, that stays
+/// under the 16 KiB of one TLS record, so a host that refuses the upgrade has read all of it and
+/// closes cleanly, and the client still reads the refusal.
+const MAX_EARLY_FRAMES: usize = 8 * 1024;
 
 /// The largest JSON-RPC message a WebSocket carries: 0007's frame limit.
 #[must_use]
@@ -443,13 +464,13 @@ impl HostKey {
     }
 
     /// The TLS server's configuration: this certificate, TLS 1.3 (the only version built), no
-    /// client certificates.
+    /// client certificates, and [`EARLY_WS`] for a client that offers it.
     ///
     /// # Errors
     ///
     /// If rustls refuses the key.
     pub fn server_config(&self) -> io::Result<Arc<rustls::ServerConfig>> {
-        let config = rustls::ServerConfig::builder_with_provider(provider())
+        let mut config = rustls::ServerConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
             .and_then(|builder| {
                 builder.with_no_client_auth().with_single_cert(
@@ -458,6 +479,7 @@ impl HostKey {
                 )
             })
             .map_err(io::Error::other)?;
+        config.alpn_protocols = alpn_protocols();
         Ok(Arc::new(config))
     }
 }
@@ -1070,12 +1092,13 @@ async fn tls_over(
         seen: Arc::clone(&seen),
         algorithms: provider.signature_verification_algorithms,
     };
-    let config = rustls::ClientConfig::builder_with_provider(provider)
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(io::Error::other)?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
+    config.alpn_protocols = alpn_protocols();
     let name = ServerName::try_from("parallax").expect("a DNS name");
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
         .connect(name, stream)
@@ -2022,6 +2045,94 @@ impl std::fmt::Debug for Dialed {
     }
 }
 
+/// The lines `plxd dial` sends, each one message, read ahead of the connection: the ones already
+/// waiting when the upgrade goes out can go behind it (PLX-1483).
+#[derive(Debug)]
+pub struct Input<I> {
+    lines: tokio::io::Lines<tokio::io::BufReader<I>>,
+    /// Read and not sent yet, oldest first.
+    ahead: VecDeque<String>,
+    /// A failed read, for [`Input::next`] to answer with after `ahead`.
+    failed: Option<io::Error>,
+}
+
+impl<I: AsyncRead + Unpin> Input<I> {
+    /// Reads `input`'s lines.
+    pub fn new(input: I) -> Self {
+        Input {
+            lines: tokio::io::BufReader::new(input).lines(),
+            ahead: VecDeque::new(),
+            failed: None,
+        }
+    }
+
+    /// Takes the lines that are there now, without waiting, until it holds an upgrade's worth. The
+    /// first call starts the read, so a later one finds what came since.
+    fn fill(&mut self) {
+        use futures_util::FutureExt as _;
+        // A line counts its newline, so empty ones reach the limit too.
+        let held =
+            |ahead: &VecDeque<String>| ahead.iter().map(|line| line.len() + 1).sum::<usize>();
+        while self.failed.is_none() && held(&self.ahead) < MAX_EARLY_FRAMES {
+            // `next_line` is cancellation safe: a line that isn't whole yet stays in `lines`.
+            match self.lines.next_line().now_or_never() {
+                Some(Ok(Some(line))) => self.ahead.push_back(line),
+                Some(Err(error)) => self.failed = Some(error),
+                // Nothing more yet, or the end, which the next read finds again.
+                Some(Ok(None)) | None => break,
+            }
+        }
+    }
+
+    /// The lines waiting now as the text frames a client sends, as many from the first as fit
+    /// [`MAX_EARLY_FRAMES`], and how many lines that is. They stay here until [`Input::sent`].
+    fn early(&mut self) -> (Vec<u8>, usize) {
+        self.fill();
+        let mut frames = Vec::new();
+        let mut lines = 0;
+        for line in &self.ahead {
+            let mut frame = Vec::new();
+            // As `bridge` does, an empty line is no message.
+            if !line.trim().is_empty() {
+                text_frame(line, &mut frame);
+            }
+            if frames.len() + frame.len() > MAX_EARLY_FRAMES {
+                break;
+            }
+            frames.append(&mut frame);
+            lines += 1;
+        }
+        (frames, lines)
+    }
+
+    /// Forgets the first `lines` lines: they went behind an upgrade the host accepted.
+    fn sent(&mut self, lines: usize) {
+        self.ahead.drain(..lines);
+    }
+
+    /// The next line, or `None` at the end of the input.
+    async fn next(&mut self) -> io::Result<Option<String>> {
+        if let Some(line) = self.ahead.pop_front() {
+            return Ok(Some(line));
+        }
+        match self.failed.take() {
+            Some(error) => Err(error),
+            None => self.lines.next_line().await,
+        }
+    }
+}
+
+/// Appends `line` to `out` as the masked text frame a WebSocket client sends.
+fn text_frame(line: &str, out: &mut Vec<u8>) {
+    use tokio_tungstenite::tungstenite::protocol::frame::Frame;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
+    let mut frame = Frame::message(line.to_owned(), OpCode::Data(Data::Text), true);
+    let mut mask = [0; 4];
+    getrandom::fill(&mut mask).expect("the OS's random numbers");
+    frame.header_mut().mask = Some(mask);
+    frame.format(out).expect("a write to memory");
+}
+
 /// Opens the host with `fingerprint`'s `/ws` over the first of `routes` to present its
 /// certificate ([`race`]).
 ///
@@ -2029,8 +2140,24 @@ impl std::fmt::Debug for Dialed {
 ///
 /// [`Error::Refused`] without a credential or with a revoked one, or the last route's error.
 pub async fn dial(routes: &[String], fingerprint: &str, data_dir: &Path) -> Result<Dialed, Error> {
+    let mut none = Input::new(tokio::io::empty());
+    dial_with_input(routes, fingerprint, data_dir, &mut none).await
+}
+
+/// [`dial`], and the lines already waiting on `input` go behind the upgrade when the host keeps
+/// them ([`EARLY_WS`]), so they wait for no answer. [`bridge`] sends the rest.
+///
+/// # Errors
+///
+/// As [`dial`]'s.
+pub async fn dial_with_input<I: AsyncRead + Unpin>(
+    routes: &[String],
+    fingerprint: &str,
+    data_dir: &Path,
+    input: &mut Input<I>,
+) -> Result<Dialed, Error> {
     let pin = Pin::Fingerprint(fingerprint.to_owned());
-    dial_pinned(routes, false, &pin, fingerprint, data_dir).await
+    dial_pinned(routes, false, &pin, fingerprint, data_dir, input).await
 }
 
 /// Opens the `account:` host `host_id`'s `/ws` as [`dial`] does, accepting only a certificate
@@ -2046,20 +2173,39 @@ pub async fn dial_account(
     host_id: &str,
     data_dir: &Path,
 ) -> Result<Dialed, Error> {
+    let mut none = Input::new(tokio::io::empty());
+    dial_account_with_input(routes, in_order, host_id, data_dir, &mut none).await
+}
+
+/// [`dial_account`], with `input` as [`dial_with_input`] takes it.
+///
+/// # Errors
+///
+/// As [`dial`]'s.
+pub async fn dial_account_with_input<I: AsyncRead + Unpin>(
+    routes: &[String],
+    in_order: bool,
+    host_id: &str,
+    data_dir: &Path,
+    input: &mut Input<I>,
+) -> Result<Dialed, Error> {
     if !is_host_id(host_id) {
         return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
     }
     let pin = Pin::HostId(host_id.to_owned());
-    dial_pinned(routes, in_order, &pin, host_id, data_dir).await
+    dial_pinned(routes, in_order, &pin, host_id, data_dir, input).await
 }
 
-async fn dial_pinned(
+async fn dial_pinned<I: AsyncRead + Unpin>(
     routes: &[String],
     in_order: bool,
     pin: &Pin,
     saved_as: &str,
     data_dir: &Path,
+    input: &mut Input<I>,
 ) -> Result<Dialed, Error> {
+    // Starts the read, so what the app wrote as it started `plxd dial` is there by the upgrade.
+    input.fill();
     let credential: Credential = match fs::read(credential_path(data_dir, saved_as)) {
         Ok(bytes) => json(&bytes)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Error::Refused),
@@ -2072,28 +2218,47 @@ async fn dial_pinned(
         .ok_or_else(|| Error::Protocol("the saved DPoP key is damaged".to_owned()))?;
     let (route, tls, _) = race(routes, in_order, pin).await?;
     let token = &credential.token;
+    // Only this handshake's answer says the host keeps them. Any other host drops what it read of
+    // them with the request, so it gets none.
+    let (early, lines) = if tls.get_ref().1.alpn_protocol() == Some(EARLY_WS) {
+        input.early()
+    } else {
+        (Vec::new(), 0)
+    };
     crate::connect_timing::mark("ws_upgrade_start");
-    let upgraded = tokio::time::timeout(REQUEST_TIMEOUT, upgrade(&route, tls, token, &key));
+    let upgraded = tokio::time::timeout(REQUEST_TIMEOUT, upgrade(&route, tls, token, &key, &early));
     let socket = match upgraded.await.map_err(|_| timed_out(&route))? {
         // A host from before 0091 takes only a ticket, and says whether the session still works.
+        // A refused upgrade's frames were dropped unread, so their lines stay in `input`.
         Err(Error::Refused) => {
             let ticketed = tokio::time::timeout(REQUEST_TIMEOUT, dial_at(&route, pin, token, &key));
             ticketed.await.map_err(|_| timed_out(&route))??
         }
-        other => other?,
+        other => {
+            let socket = other?;
+            input.sent(lines);
+            socket
+        }
     };
     crate::connect_timing::mark("ws_upgrade_ready");
     Ok(Dialed { socket, route })
 }
 
 /// Opens `/ws` over `tls` with the session `token` and a `DPoP` proof on the upgrade (0091).
+/// `early` is frames to send behind the request, in the same TLS record, to a host that keeps
+/// them ([`EARLY_WS`]): its WebSocket reads them once it accepted the upgrade, and a refusal drops
+/// them unread.
 async fn upgrade(
     route: &str,
-    tls: TlsStream<crate::relay::Stream>,
+    mut tls: TlsStream<crate::relay::Stream>,
     token: &str,
     key: &DpopKey,
+    early: &[u8],
 ) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    use tokio_tungstenite::tungstenite::handshake::client::generate_request;
+    use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+    use tokio_tungstenite::tungstenite::protocol::Role;
     let bad = |e: &dyn std::fmt::Display| Error::Protocol(format!("the WebSocket failed: {e}"));
     let mut request = format!("wss://{}/ws", with_port(route))
         .into_client_request()
@@ -2103,16 +2268,42 @@ async fn upgrade(
     for (name, value) in [("authorization", format!("DPoP {token}")), ("dpop", proof)] {
         headers.insert(name, value.parse().map_err(|_| bad(&"a bad header"))?);
     }
-    let config = Some(websocket_config());
-    let (socket, _) = tokio_tungstenite::client_async_with_config(request, tls, config)
-        .await
-        .map_err(|e| match e {
-            tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => {
-                Error::Refused
+    let (mut flight, nonce) = generate_request(request).map_err(|e| bad(&e))?;
+    let accept = derive_accept_key(nonce.as_bytes());
+    flight.extend_from_slice(early);
+    tls.write_all(&flight).await?;
+    tls.flush().await?;
+    let mut answer = Vec::new();
+    let mut chunk = [0; 1024];
+    let length = loop {
+        let read = tls.read(&mut chunk).await?;
+        if read == 0 {
+            return Err(bad(&"the host closed the connection"));
+        }
+        answer.extend_from_slice(&chunk[..read]);
+        let mut headers = [httparse::EMPTY_HEADER; 32];
+        let mut response = httparse::Response::new(&mut headers);
+        match response.parse(&answer) {
+            Ok(httparse::Status::Complete(length)) => {
+                let accepted = response.headers.iter().any(|header| {
+                    header.name.eq_ignore_ascii_case("sec-websocket-accept")
+                        && header.value == accept.as_bytes()
+                });
+                match response.code {
+                    Some(101) if accepted => break length,
+                    Some(401) => return Err(Error::Refused),
+                    Some(101) => return Err(bad(&"a wrong Sec-WebSocket-Accept")),
+                    status => return Err(bad(&format!("HTTP error: {}", status.unwrap_or(0)))),
+                }
             }
-            other => bad(&other),
-        })?;
-    Ok(socket)
+            Ok(httparse::Status::Partial) if answer.len() < 16 * 1024 => {}
+            _ => return Err(bad(&"an answer that isn't HTTP")),
+        }
+    };
+    // What came behind the answer is the socket's first frames.
+    let rest = answer.split_off(length);
+    let config = Some(websocket_config());
+    Ok(WebSocketStream::from_partially_read(tls, rest, Role::Client, config).await)
 }
 
 async fn dial_at(
@@ -2215,7 +2406,7 @@ pub async fn peer_socket(
 ) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
     let route = format!("{RELAY_ROUTE}{host_id}");
     let (tls, _) = tls_over(stream, &Pin::HostId(host_id.to_owned())).await?;
-    upgrade(&route, tls, token, key).await
+    upgrade(&route, tls, token, key, &[]).await
 }
 
 /// Joins `socket` to `plxd dial`'s stdio: each line of `input` goes as a text frame, and each
@@ -2225,7 +2416,11 @@ pub async fn peer_socket(
 /// # Errors
 ///
 /// The streams' errors.
-pub async fn bridge<S, I, O>(socket: WebSocketStream<S>, input: I, mut output: O) -> io::Result<()>
+pub async fn bridge<S, I, O>(
+    socket: WebSocketStream<S>,
+    mut input: Input<I>,
+    mut output: O,
+) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     I: AsyncRead + Unpin,
@@ -2233,8 +2428,7 @@ where
 {
     let (mut sink, mut frames) = socket.split();
     let outgoing = async {
-        let mut lines = tokio::io::BufReader::new(input).lines();
-        while let Some(line) = lines.next_line().await? {
+        while let Some(line) = input.next().await? {
             if line.trim().is_empty() {
                 continue;
             }
@@ -2323,6 +2517,225 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    /// How a stand-in host answers a connection's request.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        /// 401, as a host refusing a `/ws` upgrade.
+        Refuse,
+        /// A WebSocket ticket.
+        Ticket,
+        /// 101, then it reads this many text frames.
+        Accept(usize),
+    }
+
+    /// What a stand-in host had read behind the request before it answered, and the frames it
+    /// then read.
+    type Seen = (Vec<u8>, Vec<String>);
+
+    /// A stand-in host with `key` on a loopback port, answering one connection per `answers`. One
+    /// that doesn't keep `early` bytes has no ALPN list and drops what it read behind a request,
+    /// as every plxd before PLX-1483 does.
+    async fn stand_in(
+        key: &HostKey,
+        early: bool,
+        answers: &[Answer],
+    ) -> (String, tokio::task::JoinHandle<Vec<Seen>>) {
+        use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+        use tokio_tungstenite::tungstenite::protocol::Role;
+        let mut config = (*key.server_config().unwrap()).clone();
+        if !early {
+            config.alpn_protocols.clear();
+        }
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let route = listener.local_addr().unwrap().to_string();
+        let answers = answers.to_vec();
+        let served = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for answer in answers {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut tls = acceptor.accept(tcp).await.unwrap();
+                let (mut read, mut chunk) = (Vec::new(), [0; 16 * 1024]);
+                let head = loop {
+                    let n = tls.read(&mut chunk).await.unwrap();
+                    assert!(n > 0, "the client closed before its request");
+                    read.extend_from_slice(&chunk[..n]);
+                    if let Some(at) = read.windows(4).position(|four| four == b"\r\n\r\n") {
+                        break at + 4;
+                    }
+                };
+                let behind = read.split_off(head);
+                let head = String::from_utf8(read).unwrap();
+                let json = |status: &str, body: &str| {
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let mut frames = Vec::new();
+                match answer {
+                    Answer::Refuse => {
+                        let refusal = json("401 Unauthorized", "{}");
+                        tls.write_all(refusal.as_bytes()).await.unwrap();
+                        tls.shutdown().await.unwrap();
+                    }
+                    Answer::Ticket => {
+                        let ticket = json("200 OK", r#"{"ticket":"t","expiresIn":30}"#);
+                        tls.write_all(ticket.as_bytes()).await.unwrap();
+                        tls.shutdown().await.unwrap();
+                    }
+                    Answer::Accept(count) => {
+                        let nonce = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("Sec-WebSocket-Key: "))
+                            .unwrap();
+                        let accept = derive_accept_key(nonce.as_bytes());
+                        let switching = format!(
+                            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+                        );
+                        tls.write_all(switching.as_bytes()).await.unwrap();
+                        let kept = if early { behind.clone() } else { Vec::new() };
+                        let mut socket =
+                            WebSocketStream::from_partially_read(tls, kept, Role::Server, None)
+                                .await;
+                        while frames.len() < count {
+                            match socket.next().await {
+                                Some(Ok(Message::Text(text))) => frames.push(text.to_string()),
+                                Some(Ok(_)) => {}
+                                other => panic!("the client's frames ended: {other:?}"),
+                            }
+                        }
+                    }
+                }
+                seen.push((behind, frames));
+            }
+            seen
+        });
+        (route, served)
+    }
+
+    /// What the stand-in host saw, failing when it doesn't get its frames.
+    async fn within(served: tokio::task::JoinHandle<Vec<Seen>>) -> Vec<Seen> {
+        tokio::time::timeout(Duration::from_secs(10), served)
+            .await
+            .expect("the host got every line")
+            .unwrap()
+    }
+
+    /// Two lines with an empty one between them.
+    const WAITING: &[u8] = b"one\n\ntwo\n";
+
+    /// Dials the stand-in host at `route` as `plxd dial` does, with `waiting` already on its input
+    /// and the line `three` written once it's connected.
+    async fn dial_with_lines(key: &HostKey, route: String, waiting: &[u8]) {
+        let dir = tempfile::tempdir().unwrap();
+        let pin = fingerprint(&key.certificate);
+        save_credential(dir.path(), &pin, "token", &DpopKey::generate()).unwrap();
+        let (mut app, stdin) = tokio::io::duplex(64 * 1024);
+        app.write_all(waiting).await.unwrap();
+        let mut input = Input::new(stdin);
+        let dialed = dial_with_input(&[route], &pin, dir.path(), &mut input)
+            .await
+            .unwrap();
+        app.write_all(b"three\n").await.unwrap();
+        tokio::spawn(async move {
+            let _app = app;
+            bridge(dialed.socket, input, tokio::io::sink()).await
+        });
+    }
+
+    #[tokio::test]
+    async fn waiting_lines_go_behind_the_upgrade_only_to_a_host_that_keeps_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        let lines = ["one", "two", "three"].map(str::to_owned);
+
+        // A host from before this, or rolled back to one: nothing goes before its 101, and every
+        // line arrives after it.
+        let (route, served) = stand_in(&key, false, &[Answer::Accept(3)]).await;
+        dial_with_lines(&key, route, WAITING).await;
+        let seen = within(served).await;
+        assert!(seen[0].0.is_empty(), "sent behind the request: {seen:?}");
+        assert_eq!(seen[0].1, lines);
+
+        // A host that keeps them had the waiting lines before it answered, once and in order.
+        let (route, served) = stand_in(&key, true, &[Answer::Accept(3)]).await;
+        dial_with_lines(&key, route, WAITING).await;
+        let seen = within(served).await;
+        assert!(!seen[0].0.is_empty(), "nothing went behind the request");
+        assert_eq!(seen[0].1, lines);
+    }
+
+    #[tokio::test]
+    async fn lines_sent_behind_a_refused_upgrade_go_again_on_the_ticket_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        let answers = [Answer::Refuse, Answer::Ticket, Answer::Accept(3)];
+        let (route, served) = stand_in(&key, true, &answers).await;
+        dial_with_lines(&key, route, WAITING).await;
+        let seen = within(served).await;
+        assert!(!seen[0].0.is_empty(), "nothing went behind the request");
+        assert!(seen[2].0.is_empty(), "a ticket's socket has no early lines");
+        assert_eq!(seen[2].1, ["one", "two", "three"]);
+    }
+
+    #[tokio::test]
+    async fn lines_past_the_early_limit_wait_for_the_101_and_arrive_once_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        let long = "x".repeat(MAX_EARLY_FRAMES + 1024);
+        let waiting = format!("a\n{long}\nb\n");
+        let (route, served) = stand_in(&key, true, &[Answer::Accept(4)]).await;
+        dial_with_lines(&key, route, waiting.as_bytes()).await;
+        let seen = within(served).await;
+        // Only `a` went behind the request: a masked one-byte text frame is 7 bytes.
+        assert_eq!(seen[0].0.len(), 7);
+        assert_eq!(seen[0].1, ["a", long.as_str(), "b", "three"]);
+    }
+
+    /// What ALPN protocol the listener's TLS picks for a client that offers `offered`.
+    async fn picked(key: &HostKey, offered: &[&[u8]]) -> Option<Vec<u8>> {
+        let (near, far) = tokio::io::duplex(64 * 1024);
+        let acceptor = tokio_rustls::TlsAcceptor::from(key.server_config().unwrap());
+        let served = tokio::spawn(async move { acceptor.accept(far).await.map(drop) });
+        let provider = provider();
+        let verifier = Pinned {
+            pin: Pin::Any,
+            seen: Arc::default(),
+            algorithms: provider.signature_verification_algorithms,
+        };
+        let mut config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth();
+        config.alpn_protocols = offered.iter().map(|name| name.to_vec()).collect();
+        let name = ServerName::try_from("parallax").unwrap();
+        let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(name, near)
+            .await
+            .unwrap();
+        served.await.unwrap().unwrap();
+        tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec)
+    }
+
+    #[tokio::test]
+    async fn the_listener_picks_early_ws_only_for_a_client_that_offers_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        assert_eq!(picked(&key, &[]).await, None, "a client from before this");
+        assert_eq!(
+            picked(&key, &[b"h2", b"http/1.1"]).await.as_deref(),
+            Some(&b"http/1.1"[..]),
+            "a browser, URLSession, or OkHttp"
+        );
+        assert_eq!(
+            picked(&key, &[EARLY_WS, b"http/1.1"]).await.as_deref(),
+            Some(EARLY_WS)
+        );
     }
 
     /// Races `routes` with each answering `(after ms, ok)` from `answers`, by route, and records

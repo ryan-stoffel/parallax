@@ -876,6 +876,7 @@ async fn open_relay(
                 let (ours, theirs) = tokio::io::duplex(64 * 1024);
                 let (input, output) = tokio::io::split(theirs);
                 tokio::spawn(async move {
+                    let input = remote::Input::new(input);
                     if let Err(error) = remote::bridge(socket, input, output).await {
                         debug!(%error, "a connection to another computer ended");
                     }

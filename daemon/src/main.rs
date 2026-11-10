@@ -641,11 +641,14 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
     if args.probe {
         return dial_probe(args, report).await;
     }
+    // Read from the start, so the lines the app wrote as it started this can go behind the upgrade.
+    let mut input = remote::Input::new(tokio::io::stdin());
+    let (routes, dir) = (&args.addresses, data_dir.root());
     let dialed = if let Some(host_id) = &args.account {
-        remote::dial_account(&args.addresses, args.in_order, host_id, data_dir.root()).await
+        remote::dial_account_with_input(routes, args.in_order, host_id, dir, &mut input).await
     } else {
         let fingerprint = args.remote.as_deref().unwrap_or_default();
-        remote::dial(&args.addresses, fingerprint, data_dir.root()).await
+        remote::dial_with_input(routes, fingerprint, dir, &mut input).await
     };
     let dialed = match dialed {
         Ok(dialed) => dialed,
@@ -654,15 +657,19 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             return exit(&error);
         }
     };
-    bridge_dialed(dialed, report).await
+    bridge_dialed(dialed, input, report).await
 }
 
 /// Bridges stdio to a dialed connection until it ends, and reports its route and how it ended.
-async fn bridge_dialed(dialed: remote::Dialed, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+async fn bridge_dialed(
+    dialed: remote::Dialed,
+    input: remote::Input<tokio::io::Stdin>,
+    report: &dyn Fn(&dyn std::fmt::Display),
+) -> i32 {
     // The app reads this line to know when it's on the relay, and so re-checks direct routes.
     plxd::connect_timing::mark("connected");
     report(&format!("connected over {}", dialed.route));
-    let bridged = remote::bridge(dialed.socket, tokio::io::stdin(), tokio::io::stdout()).await;
+    let bridged = remote::bridge(dialed.socket, input, tokio::io::stdout()).await;
     // The app logs this with the disconnect (connection.ts).
     if dialed.route.starts_with(remote::RELAY_ROUTE)
         && let Some(end) = plxd::relay::client_stream_end()

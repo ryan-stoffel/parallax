@@ -21,7 +21,9 @@
 //! - `POST /api/auth/websocket-ticket`: a ticket valid once for 30 s, for a `DPoP`-bound token.
 //! - `GET /ws`: a WebSocket carrying 0007's JSON-RPC, one message per frame, opened with the
 //!   session's token and a `DPoP` proof for the upgrade itself (0091), or with `?wsTicket=…`, for
-//!   a browser, which can't set the upgrade's headers.
+//!   a browser, which can't set the upgrade's headers. What a client sent behind the request is
+//!   the WebSocket's first frames, once every check passed, and a refusal drops it unread
+//!   (PLX-1483). A client sends that only when TLS picked [`remote::EARLY_WS`].
 //! - `/api/hooks/<id>/<token>`, by any method: a scheduled task's webhook ([`crate::schedules`]),
 //!   with a body of up to [`MAX_HOOK_BYTES`].
 //!
@@ -111,6 +113,11 @@ const BIND_RETRY: Duration = Duration::from_secs(10);
 
 /// The most a request's head and body may hold.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
+
+/// How much of a request plxd reads at a time. A request ends inside one read, so plxd holds
+/// under this many of the bytes behind it ([`Request::early`]). The rest waits unread in the
+/// connection, under its flow control.
+const READ_CHUNK: usize = 1024;
 
 /// The most a webhook request's head and body may hold, as T3's.
 const MAX_HOOK_BYTES: usize = 1024 * 1024;
@@ -624,6 +631,10 @@ struct Request {
     body: Vec<u8>,
     /// A webhook whose body is over [`MAX_HOOK_BYTES`]: it was not read, and gets a 413.
     too_large: bool,
+    /// What was read behind the request, under [`READ_CHUNK`] bytes: a client's first WebSocket
+    /// frames, sent without waiting for the upgrade's answer (PLX-1483). Nothing reads it but the
+    /// WebSocket of a `/ws` upgrade that passed every check ([`serve_socket`]).
+    early: Vec<u8>,
 }
 
 impl Request {
@@ -673,8 +684,8 @@ impl Request {
 /// in chunks. A webhook's body may be up to [`MAX_HOOK_BYTES`]; a longer one is left unread and
 /// marked `too_large`. Any other request too long for its cap is `None`.
 async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option<Request>> {
-    let mut buffer = Vec::with_capacity(1024);
-    let mut chunk = [0; 1024];
+    let mut buffer = Vec::with_capacity(READ_CHUNK);
+    let mut chunk = [0; READ_CHUNK];
     loop {
         let read = stream.read(&mut chunk).await?;
         if read == 0 {
@@ -708,8 +719,9 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option
                     headers,
                     body: Vec::new(),
                     too_large: false,
+                    early: Vec::new(),
                 };
-                let rest = buffer.split_off(length);
+                let mut rest = buffer.split_off(length);
                 let chunked = request
                     .header("transfer-encoding")
                     .is_some_and(|coding| coding.to_ascii_lowercase().contains("chunked"));
@@ -720,6 +732,7 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Option
                         .header("content-length")
                         .and_then(|n| n.parse().ok())
                         .unwrap_or(0);
+                    request.early = rest.split_off(wanted.min(rest.len()));
                     read_sized(stream, rest, wanted, max).await?
                 };
                 match body {
@@ -1340,7 +1353,9 @@ async fn authorize(
 }
 
 /// `GET /ws`: opens the WebSocket a session's token and proof, or a ticket, allows, and serves it
-/// as a socket connection.
+/// as a socket connection. What the client sent behind the request ([`Request::early`]) goes to
+/// the WebSocket only after every check passed and the 101 went out, so it's handled as frames
+/// sent later are, read-only level included. Every refusal returns first, which drops it unread.
 async fn serve_socket(
     mut stream: tokio_rustls::server::TlsStream<TcpStream>,
     request: &Request,
@@ -1387,9 +1402,8 @@ async fn serve_socket(
         return;
     }
     info!(%peer, "accepted a remote WebSocket");
-    let socket =
-        WebSocketStream::from_raw_socket(stream, Role::Server, Some(remote::websocket_config()))
-            .await;
+    let (early, config) = (request.early.clone(), Some(remote::websocket_config()));
+    let socket = WebSocketStream::from_partially_read(stream, early, Role::Server, config).await;
     let relay_stream = daemon.relay.joined(peer);
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
@@ -1919,8 +1933,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        Closed, MAX_HOOK_BYTES, Message, Ordering, Reason, RelayStream, Role, Route, SocketEnd,
-        StreamEnd, WebSocketStream, explain, read_request, route_of, time,
+        Closed, MAX_HOOK_BYTES, Message, Ordering, READ_CHUNK, Reason, RelayStream, Role, Route,
+        SocketEnd, StreamEnd, WebSocketStream, explain, read_request, route_of, time,
     };
 
     #[test]
@@ -2061,6 +2075,32 @@ mod tests {
         assert!(
             read(other.as_bytes().to_vec()).await.is_none(),
             "other routes keep 16 KiB"
+        );
+    }
+
+    #[tokio::test]
+    async fn what_comes_behind_a_request_is_kept_under_one_read_and_the_rest_left_unread() {
+        // A client that sends far more behind its upgrade than plxd holds.
+        let behind: Vec<u8> = (0..100 * 1024).map(|n: u32| n.to_le_bytes()[0]).collect();
+        let mut raw = b"GET /ws HTTP/1.1\r\nhost: h\r\n\r\n".to_vec();
+        raw.extend_from_slice(&behind);
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move { client.write_all(&raw).await });
+        let request = read_request(&mut server).await.unwrap().unwrap();
+        assert!(request.body.is_empty());
+        assert!(!request.early.is_empty() && request.early.len() < READ_CHUNK);
+        // The rest is still in the connection, in order, for the WebSocket to read.
+        let mut all = request.early;
+        server.read_to_end(&mut all).await.unwrap();
+        assert_eq!(all, behind);
+
+        let sized =
+            read(b"POST /api/pair/start HTTP/1.1\r\ncontent-length: 2\r\n\r\n{}next".to_vec())
+                .await
+                .unwrap();
+        assert_eq!(
+            (sized.body.as_slice(), sized.early.as_slice()),
+            (&b"{}"[..], &b"next"[..])
         );
     }
 
