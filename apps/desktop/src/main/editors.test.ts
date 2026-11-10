@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { expect, test } from "vite-plus/test";
 
-import { detectEditors, editorCommand, isDirectory, isFolderPath } from "./editors";
+import { detectEditors, editorCommand, isDirectory, isFile, isFolderPath } from "./editors";
 
 test("takes only an absolute folder path", () => {
   expect(isFolderPath("/home/me/repo")).toBe(true);
@@ -15,13 +15,15 @@ test("takes only an absolute folder path", () => {
   expect(isFolderPath(42)).toBe(false);
 });
 
-test("opens only a directory on this computer, never a file it would run", () => {
+test("tells a directory from a file, so only an editor opens a file, which it never runs", () => {
   const folder = mkdtempSync(path.join(tmpdir(), "parallax-editors-"));
   const file = path.join(folder, "run.sh");
   writeFileSync(file, "#!/bin/sh\n", { mode: 0o755 });
   expect(isDirectory(folder)).toBe(true);
   expect(isDirectory(file)).toBe(false);
   expect(isDirectory(path.join(folder, "gone"))).toBe(false);
+  expect(isFile(file)).toBe(true);
+  expect(isFile(folder)).toBe(false);
 });
 
 test("finds editors' app bundles on macOS, with Remote SSH only where the bundle has its CLI", () => {

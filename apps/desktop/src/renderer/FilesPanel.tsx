@@ -95,10 +95,12 @@ async function listFolder(hostId: string, runId: string, folder: string): Promis
  * renames the focused entry and Delete deletes it, after asking.
  *
  * Each new `reveal` opens its file in the view, as the command menu's file picks do (PLX-993).
+ * `folder` is the run's folder on the host, which the open file's path starts from.
  */
 export function FilesPanel({
   hostId,
   runId,
+  folder,
   unavailable,
   editable,
   writable,
@@ -107,6 +109,7 @@ export function FilesPanel({
 }: {
   hostId: string;
   runId: string;
+  folder?: string;
   unavailable?: string;
   editable?: boolean;
   writable?: boolean;
@@ -610,6 +613,7 @@ export function FilesPanel({
         <FileEditor
           store={store}
           file={file}
+          folder={folder}
           wide={beside}
           treeOpen={treeOnScreen}
           onToggleTree={() => setTreeBeside(!treeBeside)}
@@ -787,7 +791,7 @@ function FileSearch({
   return (
     <>
       {/* As tall as the file's path row beside it, so their lines meet. */}
-      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border/60 px-1.5">
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/60 px-1.5">
         <label className={`${searchField} h-7! min-w-0 flex-1`}>
           <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <input

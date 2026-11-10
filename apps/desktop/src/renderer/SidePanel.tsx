@@ -211,13 +211,45 @@ function firstPanel(scope: string, orchestrated: boolean): Scoped {
  * it. Each new `showOrchestrator` shows an open orchestrator's Orchestrator tab, and each new
  * `showFiles` opens the Files view. `filesTabs` draws the Files view's tab with its open files.
  */
-/** A tab in the panel's row, as the Files view's file tabs draw theirs too. */
+/**
+ * A tab in the panel's row, as T3 Code draws its panel's: a small rounded tab, filled in front.
+ * The Files view's file tabs draw theirs with it too. `PanelTabIcon` goes first, then the name in
+ * a `panelTabButton`.
+ */
 export const panelTab = (shown: boolean) =>
-  `group flex items-center rounded-lg ${shown ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`;
-export const panelTabButton =
-  "flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left text-body";
-export const panelTabClose =
-  "mx-0.5 grid size-5 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5";
+  `group/tab flex h-6 max-w-40 shrink-0 items-center rounded-md pl-1 text-meta ${shown ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`;
+export const panelTabButton = "flex h-full min-w-0 flex-1 items-center pr-2 pl-1 text-left";
+
+/**
+ * A tab's icon, which is its close button too, as in T3 Code: hovering the tab shows its ×.
+ * Without `onClose`, the tab can't close and the icon stays.
+ */
+export function PanelTabIcon({
+  label,
+  onClose,
+  children,
+}: {
+  label: string;
+  onClose?: () => void;
+  children: ReactNode;
+}) {
+  const icon = "relative grid size-4 shrink-0 place-items-center [&_img]:size-3.5 [&_svg]:size-3.5";
+  if (!onClose) return <span className={icon}>{children}</span>;
+  return (
+    <button
+      type="button"
+      aria-label={`Close ${label}`}
+      title={`Close ${label}`}
+      onClick={onClose}
+      className={`${icon} group/close rounded-sm hover:bg-hover`}
+    >
+      <span className="contents group-focus-visible/close:hidden group-hover/tab:hidden">
+        {children}
+      </span>
+      <X aria-hidden className="hidden group-focus-visible/close:block group-hover/tab:block" />
+    </button>
+  );
+}
 
 /**
  * What draws the Files view's tab, with its open files after it in the same row, as T3 Code's
@@ -227,8 +259,6 @@ export const panelTabClose =
 export type FilesTabs = (tab: {
   /** The Files tab's id, which the panel moves focus to. */
   id: string;
-  /** Whether the row has room for every tab's name: the panel is full screen or wide. */
-  roomy: boolean;
   current: boolean;
   show: () => void;
   close: () => void;
@@ -567,7 +597,7 @@ export function SidePanel({
         className={`window-controls-inset px-2 ${browsing && browserStyle ? "bg-pane" : ""} ${topBarClassName}`}
       >
         {leading}
-        <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
+        <ul aria-label="Open views" className="flex min-w-0 gap-1 overflow-x-auto">
           {shown.map((s) => {
             const agentTab = agentTabOf(s);
             const page = pages.find((p) => p.id === s.page);
@@ -575,15 +605,13 @@ export function SidePanel({
             const look = s.url ? lookOf(pullRequests?.get(s.url)?.pr) : undefined;
             const Icon = look?.Icon ?? s.icon;
             const name = face?.title ?? nameOf(s);
-            // A browser tab shrinks with the others as more open, and shows its close button only
-            // in front and on hover, so its title keeps the room.
+            // A browser tab shrinks with the others as more open.
             const browserTab = !!face;
             if (s.name === "Files" && filesTabs)
               return (
                 <Fragment key={s.key}>
                   {filesTabs({
                     id: `side-panel-tab-${s.key}`,
-                    roomy: expanded || width >= 720,
                     current: s === current,
                     show: () => reveal(s),
                     close: () => closeView(s),
@@ -594,8 +622,18 @@ export function SidePanel({
             return (
               <li
                 key={s.key}
-                className={`${panelTab(s === current)} ${browserTab ? "w-40 min-w-9 shrink" : "shrink-0"}`}
+                className={`${panelTab(s === current)} ${browserTab ? "w-40 min-w-16 shrink!" : ""}`}
               >
+                <PanelTabIcon
+                  label={name}
+                  onClose={pinned.includes(s) ? undefined : () => closeView(s)}
+                >
+                  {face?.icon ? (
+                    <img src={face.icon} alt="" />
+                  ) : (
+                    <Icon aria-hidden className={look?.color ?? ""} />
+                  )}
+                </PanelTabIcon>
                 <button
                   type="button"
                   id={`side-panel-tab-${s.key}`}
@@ -604,13 +642,8 @@ export function SidePanel({
                   onClick={() => reveal(s)}
                   // A middle click closes a browser tab, as in Chrome.
                   onAuxClick={(e) => browserTab && e.button === 1 && closeView(s)}
-                  className={`${panelTabButton} ${pinned.includes(s) ? "pr-2" : ""}`}
+                  className={`${panelTabButton} gap-1.5`}
                 >
-                  {face?.icon ? (
-                    <img src={face.icon} alt="" className="size-3.5 shrink-0" />
-                  ) : (
-                    <Icon aria-hidden className={`size-3.5 shrink-0 ${look?.color ?? ""}`} />
-                  )}
                   <span className="truncate">{name}</span>
                   {s === overview && !!orchestrator?.waiting && (
                     <span className="font-mono text-caption text-warning tabular-nums">
@@ -618,17 +651,6 @@ export function SidePanel({
                     </span>
                   )}
                 </button>
-                {!pinned.includes(s) && (
-                  <button
-                    type="button"
-                    aria-label={`Close ${name}`}
-                    title={`Close ${name}`}
-                    onClick={() => closeView(s)}
-                    className={`${panelTabClose} ${browserTab && s !== current ? "hidden! group-focus-within:grid! group-hover:grid!" : ""}`}
-                  >
-                    <X />
-                  </button>
-                )}
               </li>
             );
           })}

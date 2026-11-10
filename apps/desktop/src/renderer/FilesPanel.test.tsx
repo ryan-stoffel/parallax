@@ -154,7 +154,6 @@ const withTabs = (panel: ReactNode) => (
       <FileTabs
         store={openFilesOf("local", "run-1")}
         id="side-panel-tab-F"
-        roomy={false}
         current
         show={() => {}}
         close={() => {}}
@@ -263,7 +262,6 @@ test("closing a tab whose edits can't land brings the Files view to the front to
       <FileTabs
         store={store}
         id="side-panel-tab-F"
-        roomy={false}
         current={false}
         show={show}
         close={() => {}}

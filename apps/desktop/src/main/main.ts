@@ -55,6 +55,7 @@ import {
   editorCommand,
   editorName,
   isDirectory,
+  isFile,
   isFolderPath,
   launch,
   type Editor,
@@ -752,8 +753,11 @@ ipcMain.handle(
       installedTerminals().find((app) => chosen !== undefined && app.path === chosen)?.path ??
       terminal!;
     let error: string | undefined;
-    // A local folder must be one: `shell.openPath` would run an executable file.
-    if (local && !isDirectory(folder)) error = "That folder isn't there anymore.";
+    // A local folder must be one: `shell.openPath` would run an executable file. An editor also
+    // opens a file, which the Files view's Open in asks for.
+    const editor = target !== "files" && target !== "terminal";
+    if (local && !isDirectory(folder) && !(editor && isFile(folder)))
+      error = "That folder isn't there anymore.";
     else if (target === "files") error = (await shell.openPath(folder)) || undefined;
     // `open -a` starts without complaint when the app is gone, so check it's still there.
     else if (target === "terminal" && !existsSync(shellApp))

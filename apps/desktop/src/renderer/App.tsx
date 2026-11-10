@@ -2350,6 +2350,9 @@ export function App() {
                 key={`${host.id}/${filesRunId}`}
                 hostId={host.id}
                 runId={filesRunId}
+                folder={
+                  selection.kind === "thread" && folder?.path !== "~" ? folder?.path : undefined
+                }
                 unavailable={
                   offline ??
                   (connected && "files" in connection.capabilities

@@ -1,21 +1,18 @@
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   ChevronRight,
+  Code2,
   Columns2,
-  Copy,
-  Ellipsis,
   Eye,
   File,
-  FileCode,
   Folder,
   FolderTree,
   LoaderCircle,
   Lock,
-  PanelLeft,
   TriangleAlert,
   WrapText,
-  X,
 } from "lucide-react";
 import {
   lazy,
@@ -35,9 +32,11 @@ import { describeError } from "./errors";
 import { DownloadButton } from "./FileCards";
 import type { MarkdownView, OpenFile, OpenFiles } from "./openFiles";
 import { GithubMarkdown } from "./pr/GithubMarkdown";
-import { type FilesTabs, panelTab, panelTabButton, panelTabClose } from "./SidePanel";
+import type { OpenApp, OpenTarget } from "../preload/bridge";
+import { appIcon, OPEN_TARGET_KEY } from "./OpenMenu";
+import { type FilesTabs, PanelTabIcon, panelTab, panelTabButton } from "./SidePanel";
 import { FileIcon } from "./TurnChanges";
-import { Button, IconButton, Menu, menuItem, Segmented } from "./ui";
+import { Button, IconButton, Menu, menuItem } from "./ui";
 
 // The editor and its languages load when a file first opens.
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -50,13 +49,15 @@ const isMarkdown = (path: string) => /\.(md|mdx|markdown)$/i.test(path);
 const PREVIEW_AFTER_MS = 150;
 
 /**
- * The open file and everything around it: its path as a breadcrumb with its actions, the text, and
- * a status line. Its tab is in the side panel's row (FileTabs). `wide` has room for the tree beside
- * it, which `onToggleTree` shows or hides, a split Markdown view, and the status line's details.
+ * The open file and everything around it: its path from `folder`, the run's folder, as a
+ * breadcrumb with its actions, the text, and a status line. Its tab is in the side panel's row
+ * (FileTabs). `wide` has room for the tree beside it, which `onToggleTree` shows or hides, a split
+ * Markdown view, and the status line's details.
  */
 export function FileEditor({
   store,
   file,
+  folder,
   wide,
   treeOpen,
   onToggleTree,
@@ -67,10 +68,11 @@ export function FileEditor({
 }: {
   store: OpenFiles;
   file: OpenFile;
+  folder?: string;
   wide: boolean;
   treeOpen: boolean;
   onToggleTree: () => void;
-  /** Shows `path` in the tree. */
+  /** Shows `path`, a file or folder, in the tree. */
   onReveal: (path: string) => void;
   onClose: (tab: OpenFile) => void;
   hostId: string;
@@ -109,46 +111,55 @@ export function FileEditor({
   );
   return (
     <section aria-label={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 pr-1.5 pl-1.5">
-        {wide && (
-          <IconButton
-            size="sm"
-            label={treeOpen ? "Hide files" : "Show files"}
-            aria-expanded={treeOpen}
-            onClick={onToggleTree}
-          >
-            <PanelLeft aria-hidden />
-          </IconButton>
-        )}
+      {/* T3 Code's file header: the path from the project's folder, then quiet icon toggles. */}
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/60 pr-2 pl-3">
         <Breadcrumb
+          root={folder ? nameOf(folder.replace(/[\\/]+$/, "").replaceAll("\\", "/")) : undefined}
           path={file.path}
           hostId={hostId}
           runId={runId}
           onOpen={(path, link) => store.open(path, { link, transient: true })}
+          onFolder={onReveal}
         />
-        {markdown && (
-          <div className="[&_fieldset]:border-transparent [&_fieldset]:bg-hover/60 [&_label]:py-0.5 [&_label]:text-meta">
-            <Segmented<MarkdownView>
-              label="Show Markdown as"
-              value={view}
-              onChange={(next) => store.setView(file.id, next)}
-              options={[
-                { value: "code", name: viewName(FileCode, "Code") },
-                ...(wide ? [{ value: "split" as const, name: viewName(Columns2, "Split") }] : []),
-                { value: "preview", name: viewName(Eye, "Preview") },
-              ]}
-            />
-          </div>
+        {folder && <OpenFileIn hostId={hostId} folder={folder} path={file.path} />}
+        {markdown && wide && (
+          <IconButton
+            size="sm"
+            label="Split preview"
+            aria-pressed={view === "split"}
+            onClick={() => store.setView(file.id, view === "split" ? "code" : "split")}
+          >
+            <Columns2 aria-hidden />
+          </IconButton>
         )}
-        <FileMenu
-          file={file}
-          hasText={!!text && view !== "preview"}
-          wordWrap={wordWrap}
-          onReveal={onReveal}
-          onClose={onClose}
-          onFind={() => editor.current?.find()}
-          onGoToLine={() => editor.current?.goToLine()}
-        />
+        {markdown && (
+          <IconButton
+            size="sm"
+            label="Preview"
+            aria-pressed={view === "preview"}
+            onClick={() => store.setView(file.id, view === "preview" ? "code" : "preview")}
+          >
+            {view === "preview" ? <Code2 aria-hidden /> : <Eye aria-hidden />}
+          </IconButton>
+        )}
+        {text && view !== "preview" && (
+          <IconButton
+            size="sm"
+            label="Word wrap"
+            aria-pressed={wordWrap}
+            onClick={() => setAppearance({ wordWrap: !wordWrap })}
+          >
+            <WrapText aria-hidden />
+          </IconButton>
+        )}
+        <IconButton
+          size="sm"
+          label={treeOpen ? "Hide files" : "Show files"}
+          aria-pressed={treeOpen}
+          onClick={wide ? onToggleTree : () => store.showHome(true)}
+        >
+          <FolderTree aria-hidden />
+        </IconButton>
       </div>
       {/* Room under the text for the notice, so it never covers the last lines. */}
       <div
@@ -186,20 +197,19 @@ export function FileEditor({
   );
 }
 
-const viewName = (Icon: typeof Eye, name: string) => (
-  <>
-    <Icon aria-hidden />
-    {name}
-  </>
-);
-
-/** The mark on a tab: a dot for edits on their way, a warning for edits that are stuck. */
+/**
+ * The mark on a tab's icon, as T3 Code's: a dot for edits on their way, a warning-colored one for
+ * edits that are stuck.
+ */
 function TabMark({ tab }: { tab: OpenFile }) {
-  if (tab.conflict || tab.save === "failed")
-    return <span aria-label="Not saved" className="block size-2 rounded-full bg-warning" />;
-  if (tab.save !== "saved")
-    return <span aria-label="Saving" className="block size-2 rounded-full bg-foreground/60" />;
-  return null;
+  const stuck = !!tab.conflict || tab.save === "failed";
+  if (!stuck && tab.save === "saved") return null;
+  return (
+    <span
+      aria-label={stuck ? "Not saved" : "Saving"}
+      className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-pane ${stuck ? "bg-warning" : "bg-foreground"}`}
+    />
+  );
 }
 
 /**
@@ -210,7 +220,6 @@ function TabMark({ tab }: { tab: OpenFile }) {
 export function FileTabs({
   store,
   id,
-  roomy,
   current,
   show,
   close,
@@ -238,7 +247,10 @@ export function FileTabs({
   }, [active, fileShown]);
   return (
     <>
-      <li className={`${panelTab(current && !fileShown)} shrink-0`}>
+      <li className={panelTab(current && !fileShown)}>
+        <PanelTabIcon label="Files" onClose={close}>
+          <Icon aria-hidden />
+        </PanelTabIcon>
         <button
           type="button"
           id={id}
@@ -249,29 +261,29 @@ export function FileTabs({
           }}
           className={panelTabButton}
         >
-          <Icon aria-hidden className="size-3.5 shrink-0" />
           <span className="truncate">Files</span>
-        </button>
-        <button
-          type="button"
-          aria-label="Close Files"
-          title="Close Files"
-          onClick={close}
-          className={panelTabClose}
-        >
-          <X />
         </button>
       </li>
       {tabs.map((tab) => {
         const shown = fileShown && tab.id === active;
-        const mark = !!tab.conflict || tab.save !== "saved";
         return (
           <li
             key={tab.id}
             ref={shown ? shownTab : undefined}
-            // The shown tab keeps its name. Narrow, the others are their icon, named on hover.
-            className={`${panelTab(shown)} shrink-0 ${shown || roomy ? "max-w-48" : ""}`}
+            onAuxClick={(e) => {
+              if (e.button === 1) void store.askClose(tab.id);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setTarget(tab);
+              menu.current?.showPopover({ source: e.currentTarget });
+            }}
+            className={panelTab(shown)}
           >
+            <PanelTabIcon label={nameOf(tab.path)} onClose={() => void store.askClose(tab.id)}>
+              <FileIcon path={tab.path} />
+              <TabMark tab={tab} />
+            </PanelTabIcon>
             <button
               type="button"
               aria-current={shown ? "true" : undefined}
@@ -281,36 +293,11 @@ export function FileTabs({
                 store.activate(tab.id);
               }}
               onDoubleClick={() => store.pin(tab.id)}
-              onAuxClick={(e) => {
-                if (e.button === 1) void store.askClose(tab.id);
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setTarget(tab);
-                menu.current?.showPopover({ source: e.currentTarget });
-              }}
-              className={shown || roomy ? panelTabButton : "grid size-7 place-items-center"}
+              className={panelTabButton}
             >
-              <FileIcon path={tab.path} />
-              <span
-                className={`truncate ${tab.transient ? "italic" : ""} ${shown || roomy ? "" : "sr-only"}`}
-              >
+              <span className={`truncate ${tab.transient ? "italic" : ""}`}>
                 {nameOf(tab.path)}
               </span>
-            </button>
-            <button
-              type="button"
-              aria-label={`Close ${nameOf(tab.path)}`}
-              title="Close"
-              onClick={() => void store.askClose(tab.id)}
-              className={`${panelTabClose} ${!mark && !shown ? "invisible group-focus-within:visible group-hover:visible" : ""} ${shown || roomy ? "" : "hidden!"}`}
-            >
-              {mark && (
-                <span className="group-hover:hidden">
-                  <TabMark tab={tab} />
-                </span>
-              )}
-              <X aria-hidden className={mark ? "hidden group-hover:block" : ""} />
             </button>
           </li>
         );
@@ -360,29 +347,33 @@ export function FileTabs({
 }
 
 /**
- * The file's path as a breadcrumb, as in VS Code and T3 Code: each folder opens its entries, to go
- * to a sibling without the tree. A long path scrolls, with its end in view.
+ * The file's path as a breadcrumb from the run's folder, `root`, as T3 Code draws it: a folder's
+ * name shows it in the tree (`onFolder`), and the chevron after it lists what's in it, to open a
+ * sibling without the tree. A long path scrolls, with its end in view.
  */
 function Breadcrumb({
+  root,
   path,
   hostId,
   runId,
   onOpen,
+  onFolder,
 }: {
+  root?: string;
   path: string;
   hostId: string;
   runId: string;
   onOpen: (path: string, link: boolean) => void;
+  onFolder: (path: string) => void;
 }) {
   const row = useRef<HTMLElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [folder, setFolder] = useState<string>();
   const [listed, setListed] = useState<{ entries: AgentEntry[] } | { error: string }>();
-  const parts = path.split("/");
   useEffect(() => {
     if (row.current) row.current.scrollLeft = row.current.scrollWidth;
   }, [path]);
-  const show = (next: string) => {
+  const list = (next: string) => {
     setFolder(next);
     setListed(undefined);
     void window.parallax
@@ -391,8 +382,12 @@ function Breadcrumb({
         setListed("error" in answer ? { error: describeError(answer.error) } : answer.result),
       );
   };
-  const segment =
-    "flex h-6 shrink-0 items-center gap-1 rounded-md px-1 text-meta text-muted-foreground transition-colors hover:bg-hover hover:text-foreground aria-expanded:bg-hover";
+  // Each folder by its path, the run's folder as "", then the file.
+  const parts = path.split("/");
+  const crumbs = [
+    ...(root === undefined ? [] : [{ at: "", name: root }]),
+    ...parts.map((name, i) => ({ at: parts.slice(0, i + 1).join("/"), name })),
+  ];
   const entries =
     listed && "entries" in listed
       ? listed.entries.toSorted(
@@ -406,26 +401,39 @@ function Breadcrumb({
         ref={row}
         aria-label="File path"
         title={path}
-        className="flex min-w-0 flex-1 items-center overflow-x-auto pl-2"
+        className="flex h-full min-w-0 flex-1 items-center overflow-x-auto text-meta [scrollbar-width:none]"
       >
-        {parts.map((part, i) => {
-          const last = i === parts.length - 1;
-          const parent = parts.slice(0, i).join("/");
+        {crumbs.map(({ at, name }) => {
+          if (at === path)
+            return (
+              <span
+                key={at}
+                aria-current="page"
+                className="shrink-0 truncate px-0.5 font-medium text-foreground"
+              >
+                {name}
+              </span>
+            );
           return (
-            <span key={`${i}/${part}`} className="flex shrink-0 items-center">
-              {i > 0 && (
-                <ChevronRight aria-hidden className="size-3 shrink-0 text-faint-foreground" />
-              )}
+            <span key={at || "/"} className="flex shrink-0 items-center">
               <button
                 type="button"
+                onClick={() => onFolder(at)}
+                className="max-w-40 truncate rounded-sm px-0.5 text-muted-foreground hover:bg-hover hover:text-foreground"
+              >
+                {name}
+              </button>
+              <button
+                type="button"
+                aria-label={`Browse ${name}`}
+                aria-haspopup="menu"
                 onClick={(e) => {
-                  show(parent);
+                  list(at);
                   menu.current?.showPopover({ source: e.currentTarget });
                 }}
-                className={`${segment} ${last ? "text-foreground" : ""}`}
+                className={`mx-0.5 grid h-5 w-4 shrink-0 place-items-center rounded-sm text-faint-foreground hover:bg-hover hover:text-foreground`}
               >
-                {last && <FileIcon path={path} />}
-                {part}
+                <ChevronRight aria-hidden className="size-3.5" />
               </button>
             </span>
           );
@@ -443,10 +451,12 @@ function Breadcrumb({
               type="button"
               role="menuitem"
               className={menuItem}
-              onClick={() => show(parentOf(folder))}
+              onClick={() => list(parentOf(folder))}
             >
               <ArrowLeft aria-hidden />
-              <span className="truncate">{nameOf(parentOf(folder)) || "Top folder"}</span>
+              <span className="truncate">
+                Back to {nameOf(parentOf(folder)) || root || "top folder"}
+              </span>
             </button>
             <div className="my-1 h-px bg-border" />
           </>
@@ -467,7 +477,7 @@ function Breadcrumb({
               aria-current={at === path ? "true" : undefined}
               className={`${menuItem} aria-[current]:bg-selected`}
               onClick={() => {
-                if (dir) return show(at);
+                if (dir) return list(at);
                 menu.current?.hidePopover();
                 onOpen(at, entry.kind === "symlink");
               }}
@@ -487,92 +497,74 @@ function Breadcrumb({
   );
 }
 
-/** The file's less common actions, out of the way. */
-function FileMenu({
-  file,
-  hasText,
-  wordWrap,
-  onReveal,
-  onClose,
-  onFind,
-  onGoToLine,
-}: {
-  file: OpenFile;
-  hasText: boolean;
-  wordWrap: boolean;
-  onReveal: (path: string) => void;
-  onClose: (tab: OpenFile) => void;
-  onFind: () => void;
-  onGoToLine: () => void;
-}) {
+/**
+ * Opens the file in the editor last chosen, as T3 Code's file header does, with a chevron listing
+ * the others; choosing one keeps it, as Thread details' Open in does (OpenMenu). On another
+ * computer, it's there once Open in knows where to reach that computer.
+ */
+function OpenFileIn({ hostId, folder, path }: { hostId: string; folder: string; path: string }) {
   const menu = useRef<HTMLDivElement>(null);
-  const choose = (action: () => void) => () => {
-    menu.current?.hidePopover();
-    action();
-  };
+  const [editors, setEditors] = useState<OpenApp[]>([]);
+  const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
+  useEffect(() => {
+    let live = true;
+    void Promise.all([
+      window.parallax.openTargets(hostId),
+      hostId === "local" || window.parallax.sshDestination(hostId, folder),
+    ]).then(([apps, reached]) => {
+      if (live && reached)
+        setEditors(apps.filter((app) => app.target !== "files" && app.target !== "terminal"));
+    });
+    return () => {
+      live = false;
+    };
+  }, [hostId, folder]);
+  const current = editors.find((app) => app.target === chosen) ?? editors[0];
+  if (!current) return null;
+  const sep = folder.includes("\\") && !folder.includes("/") ? "\\" : "/";
+  const file = `${folder.replace(/[\\/]+$/, "")}${sep}${path.replaceAll("/", sep)}`;
+  const open = (target: OpenTarget) => void window.parallax.openFolder(hostId, target, file);
   return (
-    <>
-      <IconButton
-        size="sm"
-        label="File actions"
+    <div className="flex shrink-0 items-center rounded-md border border-border/60">
+      <button
+        type="button"
+        aria-label={`Open in ${current.name}`}
+        title={`Open in ${current.name}`}
+        onClick={() => open(current.target)}
+        className="grid h-6 w-7 place-items-center rounded-l-md hover:bg-hover [&_img]:size-3.5 [&_svg]:size-3.5"
+      >
+        {appIcon(current)}
+      </button>
+      <button
+        type="button"
+        aria-label="Choose editor"
         aria-haspopup="menu"
         onClick={(e) => menu.current?.togglePopover({ source: e.currentTarget })}
+        className="grid h-6 w-5 place-items-center rounded-r-md border-l border-border/60 text-muted-foreground hover:bg-hover hover:text-foreground"
       >
-        <Ellipsis aria-hidden />
-      </IconButton>
-      <Menu ref={menu} label="File actions" align="end" className="min-w-52 p-1">
-        {hasText && (
-          <>
-            <button type="button" role="menuitem" className={menuItem} onClick={choose(onFind)}>
-              Find in file
-            </button>
-            <button type="button" role="menuitem" className={menuItem} onClick={choose(onGoToLine)}>
-              Go to line
-            </button>
-            <button
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={wordWrap}
-              className={menuItem}
-              onClick={choose(() => setAppearance({ wordWrap: !wordWrap }))}
-            >
-              <WrapText aria-hidden />
-              <span className="flex-1 text-left">Word wrap</span>
-              {wordWrap && <Check aria-hidden />}
-            </button>
-            <div className="my-1 h-px bg-border" />
-          </>
-        )}
-        <button
-          type="button"
-          role="menuitem"
-          className={menuItem}
-          onClick={choose(() => void navigator.clipboard.writeText(file.path))}
-        >
-          <Copy aria-hidden />
-          Copy path
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          className={menuItem}
-          onClick={choose(() => onReveal(file.path))}
-        >
-          <FolderTree aria-hidden />
-          Show in files
-        </button>
-        <div className="my-1 h-px bg-border" />
-        <button
-          type="button"
-          role="menuitem"
-          className={menuItem}
-          onClick={choose(() => onClose(file))}
-        >
-          <X aria-hidden />
-          Close
-        </button>
+        <ChevronDown aria-hidden className="size-3" />
+      </button>
+      <Menu ref={menu} label="Open in" align="end" className="min-w-48 p-1">
+        {editors.map((app) => (
+          <button
+            key={app.target}
+            type="button"
+            role="menuitem"
+            className={`${menuItem} [&_img]:size-4 [&_svg]:size-4`}
+            onClick={() => {
+              menu.current?.hidePopover();
+              localStorage.setItem(OPEN_TARGET_KEY, app.target);
+              setChosen(app.target);
+              open(app.target);
+            }}
+          >
+            {appIcon(app)}
+            <span className="flex-1">{app.name}</span>
+            {app === current && <Check aria-hidden className="text-muted-foreground" />}
+          </button>
+        ))}
       </Menu>
-    </>
+    </div>
   );
 }
 

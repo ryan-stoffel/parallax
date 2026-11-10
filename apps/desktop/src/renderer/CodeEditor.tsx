@@ -68,7 +68,7 @@ export type Cursor = {
 };
 
 /** What the view around the editor can ask of it. */
-export type EditorHandle = { find: () => void; goToLine: () => void };
+export type EditorHandle = { goToLine: () => void };
 
 type Indent = { unit: string; size: number; name: string };
 
@@ -502,9 +502,6 @@ export default function CodeEditor({
     if (update.docChanged || update.selectionSet) report(update.state);
   };
   useImperativeHandle(handle, () => ({
-    find: () => {
-      if (view.current) openSearchPanel(view.current);
-    },
     goToLine: () => {
       if (view.current) gotoLine(view.current);
     },
