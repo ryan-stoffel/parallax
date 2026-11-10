@@ -3142,7 +3142,7 @@ function DiffLines({ text }: { text: string }) {
 /**
  * Where an orchestrator works, in its composer's tab, as icons: the host's, then the
  * checkout's or worktree's. The hover title and accessible name read `{host} · Local checkout` or
- * `{host} · Worktree`, as New Thread's `RunTargetMenu` does.
+ * `{host} · Worktree`.
  */
 export function CheckoutLabel({ host, checkout }: { host?: Host; checkout: boolean }) {
   const place = checkout ? "Local checkout" : "Worktree";

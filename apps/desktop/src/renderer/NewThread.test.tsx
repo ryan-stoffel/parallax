@@ -253,6 +253,13 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   expect(threadRow("Tidy the README")?.getAttribute("aria-current")).toBe("page");
 });
 
+test("the bar shows the workspace as its icon and label, after the computer's", async () => {
+  await renderApp();
+  const runsOn = control("Runs on: This Mac, New worktree")!;
+  expect(runsOn.textContent).toBe("This MacNew worktree");
+  expect(runsOn.querySelector(".lucide-folder-git-2")).not.toBeNull();
+});
+
 // The transcript's message bubble, and the musing under it until the agent does anything.
 const bubble = () => document.querySelector('[role="log"] .bg-selected')?.textContent;
 const musing = () =>
