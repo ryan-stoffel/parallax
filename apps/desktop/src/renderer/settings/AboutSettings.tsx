@@ -6,17 +6,20 @@ import {
   ChevronRight,
   Copy,
   Lightbulb,
+  LoaderCircle,
   Search,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
+import type { UpdateState } from "../../preload/bridge";
 import { useCopy } from "../AgentChat";
 import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { GitHubStarIcon, KoFiLogo, ParallaxMark } from "../logos";
 import { IconButton, searchField, Segmented } from "../ui";
+import { useUpdateState } from "../Update";
 import { artwork, notices } from "./licenses";
-import { Row, Section } from "./parts";
+import { outlineButton, Row, Section } from "./parts";
 import { anchorOf } from "./search";
 
 const repository = "https://github.com/ryan-stoffel/parallax";
@@ -35,7 +38,10 @@ type Licenses = { packages: Package[]; texts: string[] };
 
 const groups = ["All", "App", "plxd", "Sidecars"] as const;
 
-/** Settings > About: Parallax's version, where to get involved, and what it's made from. */
+/**
+ * Settings > About: Parallax's version and whether a newer one is out, where to get involved, and
+ * what it's made from.
+ */
 export function AboutSettings() {
   const [credits, setCredits] = useState<"code" | "fonts" | "artwork" | "models">();
   const [version, setVersion] = useState<string>();
@@ -100,8 +106,9 @@ export function AboutSettings() {
           <p className="text-body text-muted-foreground">
             Run coding agents on computers you own, and check on them from anywhere.
           </p>
-          <div data-setting="version" className="mt-1">
+          <div data-setting="version" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
             {version && <CopyVersion version={version} />}
+            <UpdateCheck />
           </div>
         </div>
       </header>
@@ -215,6 +222,75 @@ function CopyVersion({ version }: { version: string }) {
         />
       )}
     </button>
+  );
+}
+
+/**
+ * What About's update button shows for the updater's `state`: its label, whether it's `busy` or
+ * `off`, a failed check's or download's `error`, and a plain `line`, such as why this build can't
+ * update. `checking` is true while a press's `update` runs, and `answer` is that press's line once
+ * it ends.
+ */
+function updateButton(
+  state: UpdateState,
+  checking: boolean,
+  answer?: string,
+): { label: string; busy?: boolean; off?: boolean; error?: string; line?: string } {
+  const check = "Check for updates";
+  if (!window.parallax.updatable)
+    return { label: check, off: true, line: "Updates run only in the packaged app." };
+  const { available, progress, ready, note, unsupported } = state;
+  if (unsupported) return { label: check, off: true, line: note };
+  const busy = checking || progress !== undefined;
+  if (progress !== undefined) return { label: `Downloading… ${progress}%`, busy };
+  if (available) {
+    const action = ready === undefined ? "Download" : "Restart to install";
+    return { label: `${action} ${available.version}`, busy, error: note };
+  }
+  // `update` answers "Up to date" when nothing is newer, and otherwise why it didn't update.
+  const upToDate = answer === "Up to date";
+  const line = note === undefined && !upToDate ? answer : undefined;
+  // Under `pnpm dev`, the commits to take.
+  if (ready !== undefined) return { label: `Update: ${ready}`, busy, error: note, line };
+  if (checking) return { label: "Checking…", busy };
+  return { label: upToDate && !note ? "Up to date" : check, error: note, line };
+}
+
+/**
+ * The button beside the version (PLX-1522). A press runs `update`, as the sidebar's Update button
+ * does: it checks now, reading Checking… until the check ends and Up to date when nothing is
+ * newer. With an update it names it, and a press downloads it, then another restarts to install
+ * it. What it has to say goes on a line under the version.
+ */
+function UpdateCheck() {
+  const state = useUpdateState();
+  const [checking, setChecking] = useState(false);
+  const [answer, setAnswer] = useState<string>();
+  const { label, busy, off, error, line } = updateButton(state, checking, answer);
+  const press = async () => {
+    setChecking(true);
+    setAnswer(await window.parallax.update());
+    setChecking(false);
+  };
+  return (
+    <>
+      <button
+        type="button"
+        data-setting="check-for-updates"
+        disabled={busy || off}
+        onClick={() => void press()}
+        className={outlineButton}
+      >
+        {busy && <LoaderCircle aria-hidden className="animate-spin" />}
+        {label}
+      </button>
+      {error && (
+        <p role="alert" className="basis-full text-meta text-danger">
+          {error}
+        </p>
+      )}
+      {line && <p className="basis-full text-meta text-muted-foreground">{line}</p>}
+    </>
   );
 }
 

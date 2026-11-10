@@ -337,6 +337,79 @@ test("About copies its version, and its bug report link fills the version in", a
   expect(new URL(bug.href).searchParams.get("version")).toBe("0.0.0-local");
 });
 
+describe("About's update button (PLX-1522)", () => {
+  const updateButton = () =>
+    document.querySelector<HTMLButtonElement>('[data-setting="check-for-updates"]')!;
+  const line = () => updateButton().parentElement!.querySelector("p")?.textContent;
+  // Sends the page the updater's state, as main does.
+  let publish: (state: import("../preload/bridge").UpdateState) => Promise<void>;
+  beforeEach(() => {
+    window.parallax.updatable = true;
+    window.parallax.onUpdateState = (listener) => {
+      publish = async (state) => {
+        act(() => listener(state));
+        await settle();
+      };
+      return () => {};
+    };
+  });
+
+  test("checks when pressed, reading Checking… until the check ends", async () => {
+    let answer = (_line: string) => {};
+    const update = vi.fn(() => new Promise<string>((resolve) => (answer = resolve)));
+    window.parallax.update = update;
+    await renderSettings("about");
+    expect(updateButton().textContent).toBe("Check for updates");
+
+    await click(updateButton());
+    expect(updateButton().textContent).toBe("Checking…");
+    expect(updateButton().querySelector(".animate-spin")).not.toBeNull();
+    expect(updateButton().disabled).toBe(true);
+    expect(update).toHaveBeenCalledTimes(1);
+
+    await act(async () => answer("Up to date"));
+    expect(updateButton().textContent).toBe("Up to date");
+    expect(updateButton().disabled).toBe(false);
+    expect(line()).toBeUndefined();
+  });
+
+  test("names an update, its download, and its restart", async () => {
+    const available = { version: "2611.2.3-nightly", notes: "", url: "https://example.com" };
+    await renderSettings("about");
+    await publish({ available });
+    expect(updateButton().textContent).toBe("Download 2611.2.3-nightly");
+    expect(updateButton().disabled).toBe(false);
+    await publish({ available, progress: 40 });
+    expect(updateButton().textContent).toBe("Downloading… 40%");
+    expect(updateButton().disabled).toBe(true);
+    await publish({ available, ready: "Parallax 2611.2.3-nightly to install" });
+    expect(updateButton().textContent).toBe("Restart to install 2611.2.3-nightly");
+    expect(updateButton().disabled).toBe(false);
+  });
+
+  test("shows a failed check's line, and is off with why in a build that can't update", async () => {
+    const failed = "Can't reach GitHub to check for updates.";
+    window.parallax.update = async () => failed;
+    await renderSettings("about");
+    await click(updateButton());
+    await publish({ note: failed });
+    expect(updateButton().textContent).toBe("Check for updates");
+    expect(updateButton().disabled).toBe(false);
+    expect(document.querySelector('[role="alert"]')!.textContent).toBe(failed);
+
+    await publish({ note: "Updates work only in the AppImage.", unsupported: true });
+    expect(updateButton().disabled).toBe(true);
+    expect(line()).toBe("Updates work only in the AppImage.");
+
+    act(() => unmount());
+    window.parallax.updatable = false;
+    await renderSettings("about");
+    expect(updateButton().textContent).toBe("Check for updates");
+    expect(updateButton().disabled).toBe(true);
+    expect(line()).toBe("Updates run only in the packaged app.");
+  });
+});
+
 test("Projects lists each with its icon, and an icon picked there goes to every copy", async () => {
   const repo = { id: "r1", name: "ember", path: "/src/ember", icon: { name: "rocket" } };
   const updates: [string, unknown][] = [];

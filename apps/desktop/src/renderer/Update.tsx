@@ -29,7 +29,7 @@ import {
 } from "./updateEverything";
 
 /** The updater's state from main, kept current, in an `updatable` app. */
-function useUpdateState(): UpdateState {
+export function useUpdateState(): UpdateState {
   const [state, setState] = useState<UpdateState>({});
   useEffect(() => {
     if (window.parallax.updatable) return window.parallax.onUpdateState(setState);
