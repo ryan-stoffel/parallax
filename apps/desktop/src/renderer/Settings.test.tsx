@@ -341,16 +341,19 @@ describe("About's update button (PLX-1522)", () => {
   const updateButton = () =>
     document.querySelector<HTMLButtonElement>('[data-setting="check-for-updates"]')!;
   const line = () => updateButton().parentElement!.querySelector("p")?.textContent;
-  // Sends the page the updater's state, as main does.
-  let publish: (state: import("../preload/bridge").UpdateState) => Promise<void>;
+  type UpdateState = import("../preload/bridge").UpdateState;
+  // Sends everything listening the updater's state, as main does.
+  const listeners = new Set<(state: UpdateState) => void>();
+  const publish = async (state: UpdateState) => {
+    act(() => listeners.forEach((listener) => listener(state)));
+    await settle();
+  };
   beforeEach(() => {
+    listeners.clear();
     window.parallax.updatable = true;
     window.parallax.onUpdateState = (listener) => {
-      publish = async (state) => {
-        act(() => listener(state));
-        await settle();
-      };
-      return () => {};
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     };
   });
 
@@ -385,6 +388,37 @@ describe("About's update button (PLX-1522)", () => {
     await publish({ available, ready: "Parallax 2611.2.3-nightly to install" });
     expect(updateButton().textContent).toBe("Restart to install 2611.2.3-nightly");
     expect(updateButton().disabled).toBe(false);
+  });
+
+  test("never restarts on its own: the sidebar's Update button reviews it", async () => {
+    const { UpdateButton } = await import("./Update");
+    const downloaded = {
+      available: { version: "2611.2.3-nightly", notes: "", url: "https://example.com" },
+      ready: "Parallax 2611.2.3-nightly to install",
+    };
+    const update = vi.fn(async () => "Restarting to install Parallax 2611.2.3-nightly…");
+    window.parallax.update = update;
+
+    // Without the sidebar's button, it says where to restart.
+    await renderSettings("about");
+    await publish(downloaded);
+    await click(updateButton());
+    expect(line()).toBe("Restart from the Update button in the sidebar.");
+
+    // With it, a press opens its review dialog.
+    HTMLElement.prototype.togglePopover = () => false;
+    const sidebar = createRoot(document.body.appendChild(document.createElement("div")));
+    act(() => sidebar.render(<UpdateButton />));
+    await settle();
+    await publish(downloaded);
+    const review = document.querySelector<HTMLDialogElement>("dialog")!;
+    expect(review.open).toBe(false);
+    await click(updateButton());
+    expect(review.open).toBe(true);
+    expect(review.textContent).toContain("Updates available");
+    expect(line()).toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
+    act(() => sidebar.unmount());
   });
 
   test("shows a failed check's line, and is off with why in a build that can't update", async () => {

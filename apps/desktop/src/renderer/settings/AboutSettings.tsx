@@ -17,7 +17,7 @@ import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { GitHubStarIcon, KoFiLogo, ParallaxMark } from "../logos";
 import { IconButton, searchField, Segmented } from "../ui";
-import { useUpdateState } from "../Update";
+import { reviewUpdates, useUpdateState } from "../Update";
 import { artwork, notices } from "./licenses";
 import { outlineButton, Row, Section } from "./parts";
 import { anchorOf } from "./search";
@@ -225,6 +225,9 @@ function CopyVersion({ version }: { version: string }) {
   );
 }
 
+// What About says when the sidebar's Update button can't review a restart for it.
+const inSidebar = "Restart from the Update button in the sidebar.";
+
 /**
  * What About's update button shows for the updater's `state`: its label, whether it's `busy` or
  * `off`, a failed check's or download's `error`, and a plain `line`, such as why this build can't
@@ -244,8 +247,9 @@ function updateButton(
   const busy = checking || progress !== undefined;
   if (progress !== undefined) return { label: `Downloading… ${progress}%`, busy };
   if (available) {
-    const action = ready === undefined ? "Download" : "Restart to install";
-    return { label: `${action} ${available.version}`, busy, error: note };
+    if (ready === undefined) return { label: `Download ${available.version}`, busy, error: note };
+    const line = answer === inSidebar ? inSidebar : undefined;
+    return { label: `Restart to install ${available.version}`, busy, error: note, line };
   }
   // `update` answers "Up to date" when nothing is newer, and otherwise why it didn't update.
   const upToDate = answer === "Up to date";
@@ -259,8 +263,10 @@ function updateButton(
 /**
  * The button beside the version (PLX-1522). A press runs `update`, as the sidebar's Update button
  * does: it checks now, reading Checking… until the check ends and Up to date when nothing is
- * newer. With an update it names it, and a press downloads it, then another restarts to install
- * it. What it has to say goes on a line under the version.
+ * newer. With an update it names it, and a press downloads it. Once it's downloaded, a press
+ * opens the sidebar's review of the restart (`reviewUpdates`), which counts the running threads a
+ * restart cuts off, and never restarts on its own. What it has to say goes on a line under the
+ * version.
  */
 function UpdateCheck() {
   const state = useUpdateState();
@@ -268,6 +274,8 @@ function UpdateCheck() {
   const [answer, setAnswer] = useState<string>();
   const { label, busy, off, error, line } = updateButton(state, checking, answer);
   const press = async () => {
+    if (state.available && state.ready !== undefined)
+      return setAnswer(reviewUpdates() ? undefined : inSidebar);
     setChecking(true);
     setAnswer(await window.parallax.update());
     setChecking(false);
