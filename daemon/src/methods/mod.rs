@@ -207,7 +207,8 @@ async fn answer(mut context: Context, mut request: Request) -> Reply {
             INVALID_REQUEST,
             "Invalid request: the connection is already initialized",
         )),
-        _ => route(&context, &request).await,
+        // Boxed: every method's future sits in `route`'s, which outgrew clippy's limit on Windows.
+        _ => Box::pin(route(&context, &request)).await,
     };
     Reply::Response(Response {
         id: Some(id),
