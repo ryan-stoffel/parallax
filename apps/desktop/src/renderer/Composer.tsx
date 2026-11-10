@@ -318,7 +318,10 @@ const ImageRefNode = chipNode("imageRef", { key: "", src: null }, ({ node }) => 
   <ImageRef imageKey={node.attrs["key"] as string} />
 ));
 
-/** Cited agent text (Cite.tsx): the user's comment, or the text itself, and a pencil to edit it. */
+/**
+ * Cited agent text (Cite.tsx), drawn as the quote it's sent as: a card the box's width, on lines of
+ * its own, with the text cut to two lines over the user's comment in full, and a pencil to edit it.
+ */
 function CiteRef({ node, updateAttributes, editor }: NodeViewProps) {
   const { quote, comment } = node.attrs as Citation;
   const [editing, setEditing] = useState<DOMRect>();
@@ -333,25 +336,31 @@ function CiteRef({ node, updateAttributes, editor }: NodeViewProps) {
   };
   return (
     <>
-      <Chip
-        tone="cite"
+      {/* Inline at the box's full width, so ProseMirror's separator before it at a line's start
+          shares its line and typing after it starts the next. `whitespace-normal`, since
+          ProseMirror's own CSS sets uneditable nodes' white space, and spans, since a paragraph
+          can't hold a div. */}
+      <span
+        contentEditable={false}
         title={quote}
-        icon={<Quote aria-hidden />}
-        end={
-          <button
-            type="button"
-            aria-label="Edit comment"
-            onClick={(e) =>
-              setEditing(e.currentTarget.closest("[data-chip]")!.getBoundingClientRect())
-            }
-            className="inline-flex hover:text-foreground"
-          >
-            <Pencil aria-hidden />
-          </button>
-        }
+        className="my-1 inline-flex w-full items-start gap-2 rounded-md border-l-2 border-accent bg-accent/10 py-1.5 pr-1.5 pl-2.5 align-top whitespace-normal"
       >
-        {comment || quote}
-      </Chip>
+        <Quote aria-hidden className="mt-[0.2em] size-3.5 shrink-0 text-accent" />
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 text-muted-foreground">{quote}</span>
+          {comment && <span className="mt-0.5 block text-foreground">{comment}</span>}
+        </span>
+        <button
+          type="button"
+          aria-label="Edit comment"
+          onClick={(e) =>
+            setEditing(e.currentTarget.closest("[data-chip]")!.getBoundingClientRect())
+          }
+          className="inline-flex shrink-0 rounded-md p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+        >
+          <Pencil aria-hidden className="size-3.5" />
+        </button>
+      </span>
       {editing && (
         <CommentBox
           at={editing}
@@ -540,7 +549,11 @@ const markdown = new MarkdownSerializer(
     taskList: (state, node) =>
       state.renderList(node, "  ", (i) => (node.child(i).attrs["checked"] ? "- [x] " : "- [ ] ")),
     taskItem: nodes["list_item"]!,
-    hardBreak: (state) => state.write("\n"),
+    // Not beside a citation, which already sits a paragraph apart.
+    hardBreak: (state, _node, parent, index) => {
+      const cited = (i: number) => parent.maybeChild(i)?.type.name === "citeRef";
+      if (!cited(index - 1) && !cited(index + 1)) state.write("\n");
+    },
     mention: (state, node) => state.text(node.attrs["token"] as string, false),
     threadRef: (state, node) => state.text(`@"${node.attrs["title"] as string}"`, false),
     computerRef: (state, node) => state.text(`@"${node.attrs["name"] as string}"`, false),
@@ -2211,15 +2224,12 @@ export function Composer({
 
   useEffect(() => {
     if (!cite) return;
-    const project = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
+    // The card takes a line of its own, and a line break after it puts the caret on the next line,
+    // at the text's height, not the card's.
     editor
       .chain()
       .focus("end")
-      .insertContent([
-        ...(project ? [{ type: "text", text: project }] : []),
-        { type: "citeRef", attrs: cite },
-        { type: "text", text: " " },
-      ])
+      .insertContent([{ type: "citeRef", attrs: cite }, { type: "hardBreak" }])
       .run();
   }, [cite, editor]);
 

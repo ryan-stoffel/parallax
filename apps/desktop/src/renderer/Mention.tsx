@@ -12,10 +12,10 @@ export const PullRequestsContext = createContext<Pick<PullRequests, "urls" | "ge
   undefined,
 );
 
-// Each kind of mention's colors: a skill in violet, a file in the accent, a thread, a computer, an
-// image, or a pull request faintly filled and outlined, and cited text outlined in the accent. A
-// thread's, a computer's, and an image's text is the text's own color, with a thread's and a
-// computer's icon muted, and a pull request's number takes its state's.
+// Each kind of mention's colors: a skill in violet, a file in the accent, and a thread, a computer,
+// an image, or a pull request faintly filled and outlined. A thread's, a computer's, and an
+// image's text is the text's own color, with a thread's and a computer's icon muted, and a pull
+// request's number takes its state's.
 const tones = {
   pullRequest: "bg-foreground/[0.06] ring-1 ring-foreground/10 ring-inset",
   skill: "bg-project-violet/12 text-project-violet",
@@ -23,7 +23,6 @@ const tones = {
   thread:
     "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset [&>svg]:text-muted-foreground",
   image: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
-  cite: "bg-accent/10 text-foreground ring-1 ring-accent/40 ring-inset",
 };
 
 /** A mention in a message, as the composer draws one: icons and a name, kept whole, with `end`
