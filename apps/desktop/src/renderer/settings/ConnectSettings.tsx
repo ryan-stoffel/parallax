@@ -372,8 +372,8 @@ function ComputerCard({
           : `${routes} routes`;
   return (
     <li data-device={id} className={card}>
-      <div className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-        <div className="flex min-w-[min(14rem,100%)] flex-1 items-start gap-3">
+      <div className="flex min-h-14 items-center gap-3 px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
           <span
             className={`mt-2 shrink-0 text-muted-foreground [&_svg]:size-5 ${dim ? "opacity-60" : ""}`}
           >
