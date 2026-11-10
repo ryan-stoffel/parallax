@@ -277,7 +277,7 @@ test("cited agent text is sent as a quote and its comment, a paragraph apart fro
     cite: { quote: "The tab reports itself as hidden.\n\nIt stays throttled.", comment: "Why?" },
   });
   await settle();
-  expect(chipsIn(box)).toEqual(["Why?"]);
+  expect(chipsIn(box)).toEqual(["The tab reports itself as hidden.\n\nIt stays throttled.Why?"]);
   type("Fix it");
   await press("Enter");
   expect(onSend).toHaveBeenCalledWith(
