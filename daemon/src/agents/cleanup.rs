@@ -755,6 +755,11 @@ mod tests {
             assert!(shared.is_dir());
             assert_eq!(git(&repo, &["rev-parse", &old_branch]), commit);
 
+            // Git itself refuses a worktree that gained a file after the sweep's own check.
+            let refused = worktrees.remove_keeping_branch(&repo, &dirty).await;
+            assert!(refused.is_err());
+            assert!(dirty.join("untracked.txt").is_file());
+
             // Only a folder under plxd's worktrees folder goes, never the repository's checkout.
             let refused = worktrees.remove_keeping_branch(&repo, &repo).await;
             assert!(refused.is_err());

@@ -831,14 +831,18 @@ impl WorktreeManager {
 
     /// Removes `worktree_path` from `repo_path`'s repository and keeps its branch, whose commits
     /// may exist nowhere else: how the sweep removes an inactive thread's worktree (PLX-1524),
-    /// which [`Self::restore`] makes again. Its files go whatever state they are in, so the caller
-    /// checks it has no uncommitted changes first. Refuses a path outside plxd's worktrees folder.
+    /// which [`Self::restore`] makes again. It runs without `--force`, so git itself refuses a
+    /// worktree with modified or untracked files, ignored ones aside, one with submodules, and a
+    /// locked one: a file changed since the caller's own check stays. Git's check is a `git status`
+    /// it runs in the worktree through its `.git` file, not pinned as this module's own calls are
+    /// (#166), once it has checked that file still names this repository. Refuses a path outside
+    /// plxd's worktrees folder.
     ///
     /// # Errors
     ///
     /// [`WorktreeError::Io`] for a path outside the worktrees folder,
-    /// [`WorktreeError::NotAGitRepo`], or [`WorktreeError::GitFailed`],
-    /// [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] removing the worktree.
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::GitFailed`] for a worktree git refuses, or
+    /// [`WorktreeError::Timeout`] or [`WorktreeError::Spawn`] removing the worktree.
     pub async fn remove_keeping_branch(
         &self,
         repo_path: &Path,
@@ -857,7 +861,7 @@ impl WorktreeManager {
         let _guard = self.lock_repo(&repo_root).await;
 
         let path_arg = worktree_path.to_string_lossy().into_owned();
-        self.run_git_ok(&repo_root, &["worktree", "remove", "--force", &path_arg])
+        self.run_git_ok(&repo_root, &["worktree", "remove", &path_arg])
             .await?;
         let _ = self.run_git(&repo_root, &["worktree", "prune"]).await;
         Ok(())
