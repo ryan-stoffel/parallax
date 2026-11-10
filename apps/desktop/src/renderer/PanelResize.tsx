@@ -1,17 +1,37 @@
 import { useRef, type PointerEvent } from "react";
 
+import { stored } from "./stored";
+
 /** The sidebar header (traffic lights, hide button, brand) needs 240px to avoid clipping. */
 export const SIDEBAR_MIN = 240;
 const PANEL_MIN = 200;
 
+/**
+ * The widest the sidebar and the side panel drag in a window `viewport` wide: a fifth of it and
+ * half of it, so a wide screen's room is theirs to take, and never under 400px and 640px.
+ */
+export const panelMax = (viewport: number) =>
+  [Math.max(400, viewport / 5), Math.max(640, viewport / 2)] as const;
+
+/** The widths the sidebar and the side panel were last dragged to, kept across restarts. */
+export const panelSizes = stored<readonly [number, number]>(
+  "parallax.panelWidths",
+  [288, 416],
+  (raw, fallback) =>
+    Array.isArray(raw) && raw.length === 2 && raw.every((n) => typeof n === "number" && n > 0)
+      ? [raw[0], raw[1]]
+      : fallback,
+);
+
 /** Reserve 400px for the chat, shrinking panel minima only on smaller viewports. */
 export function panelWidths(viewport: number, left: number, right: number) {
+  const [maxL, maxR] = panelMax(viewport);
   const budget = Math.max(0, viewport - Math.min(400, viewport / 2));
   const share = budget / Math.max(1, Number(left > 0) + Number(right > 0));
   const minL = left > 0 ? Math.min(SIDEBAR_MIN, share) : 0;
   const minR = right > 0 ? Math.min(PANEL_MIN, share) : 0;
-  const l = left > 0 ? Math.max(minL, Math.min(400, left)) : 0;
-  const r = right > 0 ? Math.max(minR, Math.min(640, right)) : 0;
+  const l = left > 0 ? Math.max(minL, Math.min(maxL, left)) : 0;
+  const r = right > 0 ? Math.max(minR, Math.min(maxR, right)) : 0;
   if (l + r <= budget) return [l, r] as const;
   const extra = budget - minL - minR;
   const total = l + r - minL - minR;
