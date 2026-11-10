@@ -176,6 +176,8 @@ pub(crate) fn initialize(
 /// would refuse, to browse a run's folder.
 /// `fileEdit` (PLX-590): `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`, to change
 /// a run's folder from the Files view.
+/// `fileWrite` (PLX-1427): `agent/fileWrite`, and `agent/file`'s `hash`, to edit a file's content
+/// from the Files view.
 /// `pullRequests` (PLX-318): `pr/view` and `pr/act`, and `pullRequests` on `AgentRun` and
 /// `agent.updated`, which an older plxd never fills.
 /// `prDiff` (PLX-328): `pr/diff`, and `createdAt`, `closedAt`, `mergedAt`, `mergedBy`, `commits`,
@@ -366,6 +368,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "eventFilters",
     "eventsBefore",
     "fileEdit",
+    "fileWrite",
     "files",
     "git",
     "githubSetup",

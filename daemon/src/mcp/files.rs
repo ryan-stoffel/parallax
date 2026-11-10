@@ -134,6 +134,7 @@ pub async fn call(
                 size_only: Some(true),
                 offset: None,
                 length: None,
+                hash: None,
             })
             .await?;
         if !file.exists {

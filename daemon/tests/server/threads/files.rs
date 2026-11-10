@@ -3,12 +3,13 @@
 //! changing it.
 
 use parallax_protocol::methods::{
-    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles, RepoLogo, RepoUpdate,
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFileWrite, AgentFiles,
+    RepoLogo, RepoUpdate,
 };
 use parallax_protocol::{
     AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams, ChosenIcon,
-    RepoLogoParams, RepoUpdateParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileWriteParams,
+    AgentFileWriteResult, AgentFilesParams, ChosenIcon, RepoLogoParams, RepoUpdateParams,
 };
 
 use super::*;
@@ -87,6 +88,7 @@ async fn read(
             size_only: size_only.then_some(true),
             offset: None,
             length: None,
+            hash: None,
         })
         .await
 }
@@ -280,6 +282,166 @@ async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_fo
         assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
     }
     assert!(worktree.join(".git").exists());
+}
+
+/// Saves `content` to `path`, as edited from the content whose SHA-256 is `expected_sha256`.
+async fn save(
+    client: &mut Conn,
+    run_id: RunId,
+    path: &str,
+    content: &str,
+    expected_sha256: Option<String>,
+) -> Result<AgentFileWriteResult, ErrorObject> {
+    client
+        .call::<AgentFileWrite>(AgentFileWriteParams {
+            run_id,
+            path: path.to_owned(),
+            content: data_encoding::BASE64.encode(content.as_bytes()),
+            expected_sha256,
+        })
+        .await
+}
+
+/// `path`'s SHA-256, read as a client checks a file for changes: with no content.
+async fn hash_of(client: &mut Conn, run_id: RunId, path: &str) -> Option<String> {
+    let file = client
+        .call::<AgentFile>(AgentFileParams {
+            run_id,
+            path: path.to_owned(),
+            side: AgentFileSide::Working,
+            size_only: Some(true),
+            offset: None,
+            length: None,
+            hash: Some(true),
+        })
+        .await
+        .unwrap();
+    assert!(file.content.is_none(), "{file:?}");
+    file.sha256
+}
+
+#[tokio::test]
+async fn a_save_replaces_a_file_only_if_it_has_not_changed_since_it_was_read() {
+    let (_host, mut client, _repo, run_id, worktree) = worktree_thread().await;
+    let file = worktree.join("src/lib.rs");
+    let read = hash_of(&mut client, run_id, "src/lib.rs").await;
+    assert_eq!(read.as_ref().map(String::len), Some(64));
+
+    let saved = save(&mut client, run_id, "src/lib.rs", "one\n", read.clone())
+        .await
+        .unwrap();
+    assert!(!saved.conflict);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "one\n");
+    assert_eq!(
+        saved.sha256,
+        hash_of(&mut client, run_id, "src/lib.rs").await
+    );
+
+    // The agent writes it: a save from the old read changes nothing and says what's there now.
+    std::fs::write(&file, "the agent's\n").unwrap();
+    let conflict = save(&mut client, run_id, "src/lib.rs", "two\n", saved.sha256)
+        .await
+        .unwrap();
+    assert!(conflict.conflict);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "the agent's\n");
+    assert_eq!(
+        conflict.sha256,
+        hash_of(&mut client, run_id, "src/lib.rs").await
+    );
+
+    // Overwrite is the same call with that SHA-256.
+    let replaced = save(&mut client, run_id, "src/lib.rs", "two\n", conflict.sha256)
+        .await
+        .unwrap();
+    assert!(!replaced.conflict);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
+
+    // The agent deletes it: a conflict with no SHA-256, and no SHA-256 expected puts it back.
+    std::fs::remove_file(&file).unwrap();
+    let gone = save(
+        &mut client,
+        run_id,
+        "src/lib.rs",
+        "three\n",
+        replaced.sha256,
+    )
+    .await
+    .unwrap();
+    assert_eq!((gone.conflict, gone.sha256), (true, None));
+    assert!(!file.exists());
+    assert!(
+        !save(&mut client, run_id, "src/lib.rs", "three\n", None)
+            .await
+            .unwrap()
+            .conflict
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
+
+    // A file that exists isn't replaced by a save expecting none.
+    assert!(
+        save(&mut client, run_id, "src/lib.rs", "four\n", None)
+            .await
+            .unwrap()
+            .conflict
+    );
+    // No temp file stays behind.
+    let left: Vec<_> = std::fs::read_dir(worktree.join("src"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["lib.rs"]);
+}
+
+#[tokio::test]
+async fn a_save_keeps_permissions_and_refuses_what_is_not_a_regular_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_host, mut client, _repo, run_id, worktree) = worktree_thread().await;
+    let script = worktree.join("run.sh");
+    std::fs::write(&script, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).unwrap();
+    let read = hash_of(&mut client, run_id, "run.sh").await;
+    save(&mut client, run_id, "run.sh", "#!/bin/sh\necho\n", read)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(&script).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+
+    // A symlink isn't followed, whatever SHA-256 comes with it.
+    let target = std::fs::read("/etc/hosts").unwrap();
+    let error = save(&mut client, run_id, "hosts", "no\n", None)
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("not a regular file"), "{error:?}");
+    assert_eq!(std::fs::read("/etc/hosts").unwrap(), target);
+    assert!(
+        std::fs::symlink_metadata(worktree.join("hosts"))
+            .unwrap()
+            .is_symlink()
+    );
+    let error = save(&mut client, run_id, "src", "no\n", None)
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("not a regular file"), "{error:?}");
+    // Nor does a path leave the folder, or a save reach `.git`.
+    for path in ["../out", ".git/config", "etc/out"] {
+        assert!(
+            save(&mut client, run_id, path, "no\n", None).await.is_err(),
+            "{path}"
+        );
+    }
+    // Content that isn't base64 is refused before anything is touched.
+    let error = client
+        .call::<AgentFileWrite>(AgentFileWriteParams {
+            run_id,
+            path: "run.sh".to_owned(),
+            content: "%%".to_owned(),
+            expected_sha256: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("base64"), "{error:?}");
 }
 
 /// `repo/logo` (PLX-1272): nothing for a repository with no logo, then its own favicon as it is on

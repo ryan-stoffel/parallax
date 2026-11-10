@@ -384,6 +384,11 @@ export type ParallaxRequests = {
 	 */
 	"agent/fileDelete": { params: AgentFileDeleteParams, result: AgentFileEditResult },
 	/**
+	 * `agent/fileWrite`: replaces a file's content unless it changed since it was read
+	 * (PLX-1427). Gated on the `fileWrite` capability, like `agent/file`'s `hash`.
+	 */
+	"agent/fileWrite": { params: AgentFileWriteParams, result: AgentFileWriteResult },
+	/**
 	 * `agent/accept`: merges a run's commit into the project repository's current branch on
 	 * the host, fast-forward when possible, then removes its worktree and branch. Never
 	 * pushes. Idempotent on its client-generated id.
@@ -1214,6 +1219,7 @@ export const REQUEST_METHODS = [
 	"agent/fileCreate",
 	"agent/fileRename",
 	"agent/fileDelete",
+	"agent/fileWrite",
 	"agent/accept",
 	"agent/requestChanges",
 	"agent/openPr",
@@ -6022,6 +6028,12 @@ export type AgentFileParams = {
 	 * default.
 	 */
 	length?: number,
+	/**
+	 * Whether to answer `sha256` too, on the `working` side of a file at most `agent/file`'s size
+	 * cap and not as a slice (`fileWrite`, PLX-1427). With `sizeOnly`, a client sees a file change
+	 * without moving its content. Another side fails with `invalidParams`. Absent means false.
+	 */
+	hash?: boolean,
 };
 
 /**
@@ -6066,6 +6078,10 @@ export type AgentFileResult = {
 	 * Whether it is over `agent/file`'s size cap, so `content` is absent.
 	 */
 	tooLarge: boolean,
+	/**
+	 * Its content's SHA-256 in lowercase hex, when `hash` was asked and the file isn't too large.
+	 */
+	sha256?: string,
 };
 
 /**
@@ -6184,6 +6200,47 @@ export type AgentFileDeleteParams = {
 	 * The entry, relative to the run's folder.
 	 */
 	path: string,
+};
+
+/**
+ * Params of `agent/fileWrite` (PLX-1427): replaces a file's content in a run's folder, by
+ * `agent/file`'s path rules, unless it changed since the client read it. Fails on a symlink or
+ * anything else that isn't a regular file, and on content over `agent/file`'s size cap.
+ */
+export type AgentFileWriteParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The file, relative to the run's folder. Its folder must exist.
+	 */
+	path: string,
+	/**
+	 * The new content, base64-encoded.
+	 */
+	content: string,
+	/**
+	 * The SHA-256 in lowercase hex of the content this was edited from, from `agent/file`'s
+	 * `hash`. Absent means the file isn't expected to exist, so this creates it.
+	 */
+	expectedSha256?: string,
+};
+
+/**
+ * Result of `agent/fileWrite`.
+ */
+export type AgentFileWriteResult = {
+	/**
+	 * Whether the file didn't match `expectedSha256`, so nothing was written. To replace what's
+	 * there anyway, call again with `sha256`.
+	 */
+	conflict: boolean,
+	/**
+	 * The file's SHA-256 now: the new content's, or on a conflict what's there. Absent on a
+	 * conflict means the file is gone.
+	 */
+	sha256?: string,
 };
 
 /**

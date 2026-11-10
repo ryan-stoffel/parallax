@@ -17,8 +17,8 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
     AgentFileCreateParams, AgentFileDeleteParams, AgentFileEditResult, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams,
-    AgentFilesResult, ErrorKind, RunId, ScopeId,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFileWriteParams,
+    AgentFileWriteResult, AgentFilesParams, AgentFilesResult, ErrorKind, RunId, ScopeId,
 };
 use parallax_store::{Run as RunRow, Worktree};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
@@ -137,8 +137,10 @@ pub(crate) async fn file(
         size_only,
         offset,
         length,
+        hash,
     } = params;
     let size_only = size_only.unwrap_or(false);
+    let hash = hash.unwrap_or(false);
     validate_repo_path(&path).map_err(ErrorObject::invalid_params)?;
     if side == AgentFileSide::Unknown {
         return Err(ErrorObject::invalid_params(
@@ -148,7 +150,12 @@ pub(crate) async fn file(
     let slice = crate::methods::host::slice(offset, length)?;
     if side == AgentFileSide::Working {
         let (root, _) = run_folder(daemon, run_id).await?;
-        return read_working(&root, path, size_only, slice).await;
+        return read_working(&root, path, size_only, slice, hash).await;
+    }
+    if hash {
+        return Err(ErrorObject::invalid_params(
+            "only the working side answers a hash",
+        ));
     }
     if slice.is_some() {
         return Err(ErrorObject::invalid_params(
@@ -185,6 +192,7 @@ pub(crate) async fn file(
             size: None,
             content: None,
             too_large: false,
+            sha256: None,
         },
         Some(blob) => AgentFileResult {
             path,
@@ -198,6 +206,7 @@ pub(crate) async fn file(
                 .as_deref()
                 .filter(|_| !size_only)
                 .map(crate::images::encode),
+            sha256: None,
         },
     })
 }
@@ -312,12 +321,13 @@ fn io_failed(path: &Path, error: &std::io::Error) -> ErrorObject {
 
 /// `agent/file`'s `working` side: the file at `path` under `root` as it is now, or the slice of
 /// it at `(offset, length)`. A symlink's content is its target, as git stores it, and is never
-/// followed.
+/// followed. `hash` answers its SHA-256, unless it's a slice or too large.
 async fn read_working(
     root: &Path,
     path: String,
     size_only: bool,
     slice: Option<(u64, u64)>,
+    hash: bool,
 ) -> Result<AgentFileResult, ErrorObject> {
     let missing = |path| AgentFileResult {
         path,
@@ -327,6 +337,7 @@ async fn read_working(
         size: None,
         content: None,
         too_large: false,
+        sha256: None,
     };
     let Some((at, _)) = under(root, &path).await? else {
         return Ok(missing(path));
@@ -371,8 +382,9 @@ async fn read_working(
     };
     // A slice is read from a file of any size.
     let too_large = slice.is_none() && size > MAX_BLOB_BYTES;
+    let hash = hash && slice.is_none();
     let content = match (file, slice) {
-        _ if size_only || too_large => None,
+        _ if (size_only && !hash) || too_large => None,
         (Err(target), None) => Some(target),
         (Err(target), Some((offset, length))) => Some(
             target
@@ -412,7 +424,11 @@ async fn read_working(
         exists: true,
         size: Some(size),
         too_large: too_large || (!size_only && content.is_none()),
-        content: content.as_deref().map(crate::images::encode),
+        sha256: content.as_deref().filter(|_| hash).map(crate::sha256_hex),
+        content: content
+            .as_deref()
+            .filter(|_| !size_only)
+            .map(crate::images::encode),
     })
 }
 
@@ -621,6 +637,97 @@ pub(crate) async fn delete_entry(
     };
     removed.map_err(|error| edit_failed(&path, &error))?;
     Ok(AgentFileEditResult {})
+}
+
+/// `agent/fileWrite`: replaces a file's content, unless it no longer matches `expected_sha256`.
+pub(crate) async fn write_file(
+    daemon: &Arc<Daemon>,
+    params: AgentFileWriteParams,
+) -> Result<AgentFileWriteResult, ErrorObject> {
+    let AgentFileWriteParams {
+        run_id,
+        path,
+        content,
+        expected_sha256,
+    } = params;
+    let bytes = crate::images::decode(&content)
+        .ok_or_else(|| ErrorObject::invalid_params("content isn't base64"))?;
+    if bytes.len() as u64 > MAX_BLOB_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "{path:?} is too large to save"
+        )));
+    }
+    let (root, _) = run_folder(daemon, run_id).await?;
+    let at = editable(&root, &path).await?;
+    let meta = match tokio::fs::symlink_metadata(&at).await {
+        Ok(meta) => Some(meta),
+        Err(error) if error.kind() == IoErrorKind::NotFound => None,
+        Err(error) => return Err(edit_failed(&path, &error)),
+    };
+    if let Some(meta) = &meta
+        && !meta.is_file()
+    {
+        return Err(ErrorObject::invalid_params(format!(
+            "{path:?} is not a regular file"
+        )));
+    }
+    let current = match &meta {
+        Some(_) => Some(crate::sha256_hex(
+            &tokio::fs::read(&at)
+                .await
+                .map_err(|error| edit_failed(&path, &error))?,
+        )),
+        None => None,
+    };
+    if current != expected_sha256 {
+        return Ok(AgentFileWriteResult {
+            conflict: true,
+            sha256: current,
+        });
+    }
+    // ponytail: checked, then renamed, so a write the agent lands in between is replaced; a lock
+    // can't help, since the agent's tools don't take one.
+    replace_file(&at, &bytes, meta.as_ref())
+        .await
+        .map_err(|error| edit_failed(&path, &error))?;
+    Ok(AgentFileWriteResult {
+        conflict: false,
+        sha256: Some(crate::sha256_hex(&bytes)),
+    })
+}
+
+/// Writes `bytes` to a new file beside `at`, with `meta`'s permissions, and renames it over `at`,
+/// so nothing ever reads half of it.
+async fn replace_file(
+    at: &Path,
+    bytes: &[u8],
+    meta: Option<&std::fs::Metadata>,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt as _;
+    let name = at.file_name().unwrap_or_default().to_string_lossy();
+    let temp = at.with_file_name(format!(
+        ".{name}.{}.plx-save",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let written = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .await?;
+        file.write_all(bytes).await?;
+        file.sync_all().await?;
+        drop(file);
+        if let Some(meta) = meta {
+            tokio::fs::set_permissions(&temp, meta.permissions()).await?;
+        }
+        tokio::fs::rename(&temp, at).await
+    }
+    .await;
+    if written.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+    }
+    written
 }
 
 #[cfg(test)]
