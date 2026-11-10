@@ -305,16 +305,16 @@ export function useHostUpdateAlarms(hosts: Host[]) {
 /** What each notice says, for people: what's wrong, and what still works (PLX-1351). */
 export const CONNECT_NOTICE_TEXT: Record<ConnectNotice, { title: string; body: string }> = {
   relay: {
-    title: "Can't reach Parallax Relay",
-    body: "Computers on this network keep working. The rest reconnect when the relay is back.",
+    title: "Can't reach Parallax Connect",
+    body: "Computers on this network keep working. The rest reconnect when Parallax Connect is back.",
   },
   clerk: {
     title: "Can't reach Clerk sign-in",
-    body: "Computers on this network keep working. New relay connections and sign-ins wait until it's back.",
+    body: "Computers on this network keep working. New Parallax Connect connections and sign-ins wait until it's back.",
   },
   notListed: {
     title: "This computer isn't on your account",
-    body: "Parallax Relay doesn't list it. If you didn't remove it, set it up again so your devices can reach it.",
+    body: "Parallax Connect doesn't list it. If you didn't remove it, set it up again so your devices can reach it.",
   },
 };
 

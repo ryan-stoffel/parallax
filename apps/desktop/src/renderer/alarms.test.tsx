@@ -155,12 +155,12 @@ test("a computer's relay cap warns at 80%, says so again past it, and goes when 
   await act(async () => listed([box(limit * 0.5)]));
   expect(text()).not.toContain("relay limit");
   await act(async () => listed([box(limit * 0.82)]));
-  expect(text()).toContain("box is near its daily relay limit");
+  expect(text()).toContain("box is near its daily Parallax Connect limit");
   expect(text()).toContain("used 82%");
   await act(async () => listed([box(limit * 0.9)]));
   expect(text()).toContain("used 90%");
   await act(async () => listed([box(limit + 1)]));
-  expect(text()).toContain("box reached its daily relay limit");
+  expect(text()).toContain("box reached its daily Parallax Connect limit");
   expect(text()).toContain("still works over the LAN");
   expect(text()).not.toContain("is near its");
   await act(async () => listed([box(0)]));

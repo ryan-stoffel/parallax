@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Terminal,
+  RotateCcw,
   Trash2,
   Wifi,
 } from "lucide-react";
@@ -724,6 +725,11 @@ function DeviceCard({
     else setTailnetOnly(false);
   };
   const menu = useRowMenu();
+  // Brings back the routes removed here and the default order (0091).
+  const resetRoutes = async () => {
+    const failed = await window.parallax.editRoutes(device.id, { reset: true });
+    if (failed) notify({ tone: "error", title: "Couldn't reset routes", body: failed });
+  };
   const look = useLook({
     device,
     detected: device.detected,
@@ -794,6 +800,18 @@ function DeviceCard({
         items: (
           <>
             {look.items}
+            {device.routes && (
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                disabled={!device.routesChanged}
+                onClick={menu.choose(() => void resetRoutes())}
+              >
+                <RotateCcw aria-hidden />
+                Reset routes
+              </button>
+            )}
             <RemoveItem onClick={menu.choose(() => removeDialog.current?.showModal())} />
           </>
         ),
@@ -1022,7 +1040,7 @@ function AccountOnlyCard({
       icon={<DeviceIcon icon={iconFor(computer.name)} />}
       status={{
         tone: computer.online ? "on" : "off",
-        text: `On your account · ${computer.online ? "On the relay" : "Not connected"}`,
+        text: `On your account · ${computer.online ? "On Parallax Connect" : "Not connected"}`,
       }}
       menu={{
         state: menu,

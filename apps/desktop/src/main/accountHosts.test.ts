@@ -254,6 +254,31 @@ test("settings.json's added routes and order are checked, and the relay can't be
   expect(() => check({ addedRoutes: [relay] })).toThrow(/bad addedRoutes/);
   expect(() => check({ addedRoutes: ["https://x"] })).toThrow(/bad addedRoutes/);
   expect(() => check({ routeOrder: "x" })).toThrow(/bad routeOrder/);
+  expect(() => check({ hiddenRoutes: [lan] })).not.toThrow();
+  expect(() => check({ hiddenRoutes: [relay] })).toThrow(/bad hiddenRoutes/);
+  expect(() => check({ hiddenRoutes: "x" })).toThrow(/bad hiddenRoutes/);
+  // A file from before hidden routes loads as it is.
+  expect(() =>
+    check({ routes: [lan], addedRoutes: [added], routeOrder: [lan, relay] }),
+  ).not.toThrow();
+});
+
+test("a hidden route is never dialed or re-checked, and an edit that hides the one in use moves off it", async () => {
+  vi.useFakeTimers();
+  const tailnet = "100.74.190.83:7341";
+  const { kept, probe, move, state } = chosen({ routes: [lan, tailnet], hiddenRoutes: [tailnet] });
+  expect(kept.dial()).toEqual([lan, relay]);
+  kept.route = relay;
+  kept.onStatus("connected");
+  await vi.advanceTimersByTimeAsync(RECHECK_MS);
+  expect(probe).toHaveBeenCalledWith([lan], false);
+  // Connected over a route that's then hidden, the connection moves.
+  kept.route = lan;
+  state.choices = { routes: [lan, tailnet], hiddenRoutes: [tailnet, lan] };
+  kept.edited();
+  expect(kept.dial()).toEqual([relay]);
+  expect(move).toHaveBeenCalled();
+  kept.dispose();
 });
 
 test("the account's list adds and drops computers, keeping what this app learned of each", () => {

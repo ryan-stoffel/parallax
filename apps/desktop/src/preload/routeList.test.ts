@@ -103,13 +103,52 @@ test("moving saves the order, and moving back to the default clears it", () => {
   expect(editRoutes(id, choices, { move: "nope:1", by: 1 })).toHaveProperty("error");
 });
 
-test("only an added route can be removed: not the relay, and not one the computer reports", () => {
-  const choices = { routes: [lan], addedRoutes: [name], routeOrder: [name, lan, relay] };
-  const removed = applied(choices, { remove: name });
-  expect(removed.addedRoutes).toEqual([]);
-  expect(removed.routeOrder).toEqual([lan, relay]);
-  expect(editRoutes(id, choices, { remove: relay })).toHaveProperty("error");
-  expect(editRoutes(id, choices, { remove: lan })).toHaveProperty("error");
+test("removing forgets an added route and hides a reported one, but never removes the relay", () => {
+  const choices = {
+    routes: [lan, tailnet],
+    addedRoutes: [name],
+    routeOrder: [name, lan, tailnet, relay],
+  };
+  const forgot = applied(choices, { remove: name });
+  expect(forgot.addedRoutes).toEqual([]);
+  expect(forgot.routeOrder).toEqual([lan, tailnet, relay]);
+  expect(forgot.hiddenRoutes).toBeUndefined();
+  // A reported route is hidden, since the computer reports it again, and is never listed.
+  const hid = applied(choices, { remove: tailnet });
+  expect(hid.hiddenRoutes).toEqual([tailnet]);
+  expect(hid.routeOrder).toEqual([name, lan, relay]);
+  expect(routeList(id, hid)).toEqual([name, lan, relay]);
+  // The computer reporting it again doesn't bring it back.
+  expect(routeList(id, { ...hid, routes: [tailnet, lan] })).toEqual([name, lan, relay]);
+  expect(editRoutes(id, choices, { remove: relay })).toEqual({
+    error: "Parallax Connect can't be removed.",
+  });
+  expect(editRoutes(id, hid, { remove: tailnet })).toHaveProperty("error");
+});
+
+test("adding a hidden route's address brings it back, and reset brings back all and the default order", () => {
+  const hid = applied({ routes: [lan, tailnet] }, { remove: lan }, { move: relay, by: -1 });
+  expect(routeList(id, hid)).toEqual([relay, tailnet]);
+  const back = applied(hid, { add: "192.168.1.20" });
+  expect(back.hiddenRoutes).toBeUndefined();
+  expect(back.addedRoutes).toBeUndefined();
+  expect(routeList(id, back)).toContain(lan);
+  // Reset keeps added routes and drops the rest of what the user chose.
+  const reset = applied({ ...hid, addedRoutes: [name] }, { reset: true });
+  expect(reset.hiddenRoutes).toBeUndefined();
+  expect(reset.routeOrder).toBeUndefined();
+  expect(routeList(id, reset)).toEqual([lan, tailnet, name, relay]);
+});
+
+test("choices saved before hidden routes existed list as they always did", () => {
+  const old = {
+    routes: [lan, tailnet],
+    addedRoutes: [name],
+    routeOrder: [tailnet, lan, name, relay],
+  };
+  expect(routeList(id, old)).toEqual([tailnet, lan, name, relay]);
+  expect(applied(old, { move: name, by: -1 }).routeOrder).toEqual([tailnet, name, lan, relay]);
+  expect(applied(old, { move: lan, by: -1 }).routeOrder).toBeUndefined();
 });
 
 test("re-checks look at the relay's direct routes, or in the user's order at those above", () => {

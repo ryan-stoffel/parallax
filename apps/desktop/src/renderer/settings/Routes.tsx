@@ -149,15 +149,16 @@ const moved = (list: string[], route: string, over: string) => {
 /**
  * An account computer's routes in this app (0091), tried top to bottom. Each is dragged by its
  * handle to a new place, or moved with the arrow keys while its handle has focus; either saves as
- * the one-step moves `editRoutes` takes. Add route takes an address of its own. Only an added
- * route can be removed: the computer reports its own again, and Parallax Connect is the route that
- * works from anywhere.
+ * the one-step moves `editRoutes` takes. Add route takes an address of its own. Any route but
+ * Parallax Connect, which works from anywhere, can be removed: an added one is forgotten, and one
+ * the computer reports is hidden on this device until Reset routes in its card's menu, or Add route
+ * with the same address.
  */
 export function AccountRoutes({
   device,
   connected,
 }: {
-  device: Pick<DeviceHost, "id" | "name" | "routes" | "addedRoutes" | "route">;
+  device: Pick<DeviceHost, "id" | "name" | "routes" | "addedRoutes" | "route" | "routesChanged">;
   connected: boolean;
 }) {
   const [adding, setAdding] = useState(false);
@@ -268,15 +269,15 @@ export function AccountRoutes({
                 </button>
               }
             >
-              {added ? (
+              {isRelay(route) ? (
+                // Keeps the marks in one column with the rows that have Remove.
+                <span aria-hidden className="size-7 shrink-0" />
+              ) : (
                 <RouteButton
                   icon={X}
                   label={`Remove ${name}`}
                   onClick={() => void edit({ remove: route })}
                 />
-              ) : (
-                // Keeps the marks in one column while another row has Remove.
-                !!device.addedRoutes?.length && <span aria-hidden className="size-7 shrink-0" />
               )}
             </RouteRow>
           );
@@ -332,7 +333,9 @@ export function AccountRoutes({
       <p className="mt-2 text-meta text-faint-foreground">
         {adding
           ? "A DNS name or address of this computer, with a port if it isn't 7341. It must present this computer's key before anything is sent. plxd only accepts connections from private networks, so a port forward from the internet won't connect."
-          : "Tried top to bottom. Saved on this device."}
+          : device.routesChanged
+            ? "Tried top to bottom. Saved on this device. Reset routes, in this computer's menu, undoes your changes."
+            : "Tried top to bottom. Saved on this device."}
       </p>
     </>
   );

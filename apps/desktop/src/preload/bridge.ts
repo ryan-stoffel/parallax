@@ -811,6 +811,8 @@ export type DeviceHost = {
   routes?: string[];
   /** Which of `routes` the user added in this app. */
   addedRoutes?: string[];
+  /** Its routes were reordered or some removed in this app, which Reset routes undoes. */
+  routesChanged?: true;
   /** The route its connection last went over. */
   route?: string;
   /** Added with Allow alone, so agent work doesn't trust it (PLX-1402). */

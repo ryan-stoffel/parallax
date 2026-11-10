@@ -21,14 +21,14 @@ export function relayCapNotice(
   if (usage.bytes > usage.limit)
     return {
       reached: true,
-      title: `${name} reached its daily relay limit`,
-      body: `Parallax Relay won't connect to it until the limit resets at ${resets}. It still works over the LAN.`,
+      title: `${name} reached its daily Parallax Connect limit`,
+      body: `Parallax Connect won't reach it until the limit resets at ${resets}. It still works over the LAN.`,
     };
   const percent = Math.floor((usage.bytes / usage.limit) * 100);
   const gib = usage.limit / 1024 ** 3;
   return {
     reached: false,
-    title: `${name} is near its daily relay limit`,
+    title: `${name} is near its daily Parallax Connect limit`,
     body: `It has used ${percent}% of today's ${gib} GiB. The limit resets at ${resets}. It still works over the LAN, which doesn't count.`,
   };
 }

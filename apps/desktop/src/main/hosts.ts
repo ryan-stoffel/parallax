@@ -1457,6 +1457,7 @@ function deviceHosts(): DeviceHost[] {
         enabled: !a.off,
         routes: routeList(a.hostId, a),
         addedRoutes: a.addedRoutes ?? [],
+        ...((a.routeOrder?.length || a.hiddenRoutes?.length) && { routesChanged: true }),
         route: accountRoutes.get(accountId(a.hostId))?.route,
         ...(allowedAlone.has(a.hostId) && { addedWithAllow: true }),
         ...(access && { access }),
@@ -1926,8 +1927,9 @@ function editAccountRoutes(hostId: unknown, edit: unknown): string | undefined {
 
 /** Whether what a window sent is a `RouteEdit`. */
 function isRouteEdit(edit: unknown): edit is RouteEdit {
-  const { add, remove, move, by } = (edit ?? {}) as Record<string, unknown>;
+  const { add, remove, move, by, reset } = (edit ?? {}) as Record<string, unknown>;
   return (
+    reset === true ||
     typeof add === "string" ||
     typeof remove === "string" ||
     (typeof move === "string" && (by === -1 || by === 1))

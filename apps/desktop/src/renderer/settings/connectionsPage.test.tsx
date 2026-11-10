@@ -651,10 +651,12 @@ test("a card opens to its routes, and an account computer's can be moved, added 
   ]);
   const labelled = (label: string) =>
     cardOf("account:b")!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  // Only a route the user added can be removed.
+  // Any route but Parallax Connect can be removed: an added one, and one the computer reports.
   expect(labelled("Remove Parallax Connect")).toBeNull();
   await click(labelled("Remove box.example.com:7400")!);
   expect(editRoutes).toHaveBeenCalledWith("account:b", { remove: "box.example.com:7400" });
+  await click(labelled("Remove 192.168.1.20:7341")!);
+  expect(editRoutes).toHaveBeenCalledWith("account:b", { remove: "192.168.1.20:7341" });
   // Add route asks for an address, and says why one won't do.
   editRoutes.mockResolvedValueOnce("Enter an address, with a port if it isn't 7341.");
   await click(inCard("account:b", "Add route"));
@@ -743,4 +745,22 @@ test("a route moves by dragging its handle, or with the arrow keys while the han
   editRoutes.mockClear();
   await key("ArrowUp");
   expect(editRoutes).not.toHaveBeenCalled();
+});
+
+test("Reset routes in a card's menu undoes removed routes and the order, once there's something to undo", async () => {
+  devices = [device("account:b", "build-box", { routes: ["192.168.1.20:7341", "relay:b"] })];
+  await show(ConnectionSettings);
+  const reset = () =>
+    [...cardOf("account:b")!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (item) => item.textContent === "Reset routes",
+    )!;
+  expect(reset().disabled).toBe(true);
+  act(() => showDevices([{ ...devices[0]!, routesChanged: true }]));
+  await settle();
+  expect(reset().disabled).toBe(false);
+  await click(reset());
+  expect(editRoutes).toHaveBeenCalledWith("account:b", { reset: true });
+  // The footnote says where to undo it.
+  await click(cardOf("account:b")!.querySelector('[aria-label="2 routes to build-box"]')!);
+  expect(cardOf("account:b")!.textContent).toContain("Reset routes, in this computer's menu");
 });
