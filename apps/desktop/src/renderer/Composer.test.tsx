@@ -11,7 +11,14 @@ import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 import { PullRequestsContext } from "./Mention";
 import { Notifications } from "./notifications";
-import { behaviorDefaults, newThreadDefaults, newThreadPrefs, setBehaviorPrefs } from "./prefs";
+import {
+  behaviorDefaults,
+  chatDefaults,
+  newThreadDefaults,
+  newThreadPrefs,
+  setBehaviorPrefs,
+  setChatPrefs,
+} from "./prefs";
 import type { PullRequests } from "./PullRequests";
 import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
@@ -55,6 +62,7 @@ afterEach(() => {
   localStorage.removeItem("parallax.promptsBeforeSupportAsk");
   newThreadPrefs.set(newThreadDefaults);
   setBehaviorPrefs(behaviorDefaults);
+  setChatPrefs(chatDefaults);
   vi.useRealTimers();
 });
 
@@ -163,6 +171,26 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
     [],
   );
   expect(box.textContent).toBe("");
+});
+
+test("with Rich text composer off, Markdown shows as typed and is sent the same (PLX-1519)", async () => {
+  setChatPrefs({ richComposer: false });
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = render(onSend);
+  type("- first, **all** of it");
+  await press("Enter", { shiftKey: true });
+  type("```");
+  await press("Enter", { shiftKey: true });
+  type("# not a heading");
+  expect(box.querySelector("ul, strong, pre, h1")).toBeNull();
+  expect([...box.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+    "- first, **all** of it",
+    "```",
+    "# not a heading",
+  ]);
+
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("- first, **all** of it\n```\n# not a heading", {}, [], []);
 });
 
 test("scrolling up steps back with the caret in an empty box, until the text is pressed", () => {

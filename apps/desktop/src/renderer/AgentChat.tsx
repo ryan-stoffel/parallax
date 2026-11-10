@@ -146,7 +146,6 @@ import type { ForkChoice } from "./threads";
 import {
   backgroundCalls,
   failureText,
-  groupWork,
   isObject,
   isRunning,
   subagentLabels,
@@ -158,6 +157,7 @@ import {
   workedFor,
   plxdTools,
   pursuedGoal,
+  shownRows,
   type Approval,
   type Item,
   type Subagent,
@@ -180,7 +180,7 @@ import type { PullRequests } from "./PullRequests";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 import { presentWaiting } from "./waiting";
 import { WaitingBar } from "./WaitingBar";
-import { behaviorPrefs, clockOptions } from "./prefs";
+import { behaviorPrefs, chatPrefs, clockOptions } from "./prefs";
 import { askSiteIcon, linkSite, siteIcons } from "./siteIcons";
 import { RemoteControlTab } from "./ClaudeRemoteControl";
 import {
@@ -1315,13 +1315,19 @@ export function TranscriptView({
   const streaming = behaviorPrefs.use().responseStreaming;
   // The arriving reply's blocks at the last update, so the next parses only its end again.
   const arriving = useRef<string[]>([]);
+  // Settings > Appearance > Chat's Tool calls: which of the agent's work shows (PLX-1519).
+  const { toolCalls } = chatPrefs.use();
   // While a turn goes, as T3 Code shows one (PLX-584): a working line under its prompt with how
   // long it has gone, its work as steps, and a musing row at the end whenever the agent has
   // nothing in flight, as after a message or a call that finished, or while a reply's text is
   // held back. A message on its way to the agent gets both too, even before the run goes again.
   // The musing goes before any notices after the last row, where the work it stands for will be.
   const view = useMemo(() => {
-    const grouped: ViewRow[] = groupWork(withoutQuestionCalls(withPlanApprovals(withPlans(rows))));
+    const grouped: ViewRow[] = shownRows(
+      withoutQuestionCalls(withPlanApprovals(withPlans(rows))),
+      toolCalls,
+      going,
+    );
     const tail = grouped.findLastIndex((r) => r.kind !== "notice");
     // A compaction under way shows only while it's what the agent is doing.
     const shown = grouped.filter(
@@ -1360,7 +1366,7 @@ export function TranscriptView({
     const since = shown[prompt]?.kind === "user" ? (shown[prompt] as Item).at : undefined;
     if (prompt >= 0) shown.splice(prompt + 1, 0, { kind: "working", key: "working", since });
     return shown;
-  }, [rows, going, stalled, streaming]);
+  }, [rows, going, stalled, streaming, toolCalls]);
   // The work the agent is doing now: the last row's, while a call in it runs.
   const tail = view.findLastIndex((r) => r.kind !== "notice" && r.kind !== "musing");
   const tailRow = view[tail];
@@ -2793,6 +2799,7 @@ function SiteIcon({ site }: { site: string }) {
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
 const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; images: Images }) {
   const openFile = useOpenFile();
+  const { math } = chatPrefs.use();
   const remote = (url: string) => images === "github" && isHttps(url);
   // A thread's own file shows, as FileImage reads it, where it's a paragraph of its own, which
   // the renderer hands to `renderers.image`; any other image is a link.
@@ -2808,7 +2815,7 @@ const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; 
     <EnrichedMarkdownText
       markdown={markdown}
       markdownStyle={markdownStyle}
-      md4cFlags={{ latexMath: true }}
+      md4cFlags={{ latexMath: math }}
       linkRecognition={openFile ? recognition : undefined}
       enableTaskListItemToggle={false}
       onLinkPress={({ url }) => follow(url, openFile)}
@@ -2892,6 +2899,12 @@ function Runs({ text, images = "none" }: { text: string; images?: Images }) {
 }
 
 /**
+ * `text` with its LaTeX readied for the renderer (math.ts), or as it is while Settings >
+ * Appearance > Chat's Render math is off, when math shows as its source (PLX-1519).
+ */
+const useMath = (text: string) => (chatPrefs.use().math ? dollarMath(text) : text);
+
+/**
  * Markdown as GitHub writes it, drawn by Enriched Markdown as the phone draws it (apps/mobile
  * ui.tsx): headings, lists and task lists, tables, quotes and GitHub's alerts, KaTeX math, and
  * links, with code blocks as CodeBlock. With `images` "github", https images load, as a pull
@@ -2907,9 +2920,10 @@ export const MarkdownText = memo(function MarkdownText({
   /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
   streaming?: boolean;
 }) {
+  const read = useMath(text);
   return (
     <div className={streaming ? "enriched streaming" : "enriched"}>
-      <Runs text={dollarMath(text)} images={images} />
+      <Runs text={read} images={images} />
     </div>
   );
 });
@@ -2923,7 +2937,7 @@ export const MarkdownText = memo(function MarkdownText({
 function StreamingMarkdown({ text }: { text: string }) {
   // The last update's blocks, so the split parses only the end of the message again.
   const blocks = useRef<string[]>([]);
-  blocks.current = markdownBlocks(dollarMath(text), blocks.current);
+  blocks.current = markdownBlocks(useMath(text), blocks.current);
   return (
     <div className="enriched streaming">
       {blocks.current.map((block, i) => (

@@ -106,7 +106,7 @@ import { uploadFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { ScrollThumb } from "./ScrollThumb";
 import { dismiss, notify } from "./notifications";
-import { behaviorPrefs, newThreadPrefs, type RepoPrefs } from "./prefs";
+import { behaviorPrefs, chatPrefs, newThreadPrefs, type RepoPrefs } from "./prefs";
 import { accessLevels } from "./catalog";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { RepoIcon } from "./Sidebar";
@@ -993,7 +993,8 @@ const lineWidth = 480;
 
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
- * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
+ * Markdown text; with Settings > Appearance > Chat's Rich text composer off, it shows the text as
+ * typed. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
  * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSteer`, that press steers the active
  * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
  * through it, anywhere in the box. Settings > General's send shortcut can make Cmd/Ctrl+Enter
@@ -1910,6 +1911,13 @@ export function Composer({
         class:
           "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.625rem))] min-h-[calc(1.625em+1.625rem)] overflow-y-auto px-4.5 pt-4 pb-2.5 focus-visible:outline-none",
       },
+      // With Settings > Appearance > Chat's Rich text composer off, typed text goes in as it is,
+      // ahead of the rules that format its Markdown, and is sent the same (PLX-1519).
+      handleTextInput: (view, _from, _to, _text, insert) => {
+        if (chatPrefs.get().richComposer) return false;
+        view.dispatch(insert());
+        return true;
+      },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
         if (menuOpen && plain && !event.isComposing) {
@@ -1968,7 +1976,7 @@ export function Composer({
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
         // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
-        // as ``` and a space does.
+        // as ``` and a space does, while the box formats Markdown.
         return (
           (event.shiftKey || modEnter) &&
           editor.commands.first(({ commands }) => [
@@ -1978,6 +1986,7 @@ export function Composer({
               const fence = /^```([a-z]*)$/.exec($from.parent.textContent);
               return (
                 !!fence &&
+                chatPrefs.get().richComposer &&
                 commands.deleteRange({ from: $from.start(), to: $from.end() }) &&
                 commands.setCodeBlock(fence[1] ? { language: fence[1] } : undefined)
               );

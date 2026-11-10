@@ -25,7 +25,7 @@ import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import "./markdownTest";
 import { Notifications } from "./notifications";
-import { setBehaviorPrefs, type BehaviorPrefs } from "./prefs";
+import { chatDefaults, setBehaviorPrefs, setChatPrefs, type BehaviorPrefs } from "./prefs";
 import { ThreadLinksContext } from "./threadContext";
 import { emptyThreads, type ThreadsState } from "./threads";
 import type { Item } from "./transcript";
@@ -119,6 +119,16 @@ test("an assistant message renders Markdown, but never raw HTML or images", asyn
   expect(document.body.textContent).toContain("<img src=x onerror=alert(1)>");
   const links = [...document.querySelectorAll("a")];
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
+});
+
+test("with Render math off, LaTeX shows as its source (PLX-1519)", () => {
+  row({ kind: "assistant", key: "a", text: "So $x^2$ it is." });
+  expect(document.querySelector('[role="math"]')?.getAttribute("aria-label")).toBe("x^2");
+  // An open thread's messages follow the setting at once.
+  act(() => setChatPrefs({ math: false }));
+  expect(document.querySelector('[role="math"]')).toBeNull();
+  expect(document.body.textContent).toBe("So $x^2$ it is.");
+  act(() => setChatPrefs(chatDefaults));
 });
 
 test("a streaming message renders as the whole text does, at every line", async () => {

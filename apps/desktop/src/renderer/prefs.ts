@@ -6,6 +6,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { localId } from "./hosts";
 import { merged, stored } from "./stored";
+import type { ToolCallVisibility } from "./transcript";
 
 /**
  * What a new thread starts with, kept on this computer (PLX-538). The composer's own pickers set
@@ -121,6 +122,23 @@ export const behaviorPrefs = stored("parallax.behavior", behaviorDefaults, merge
 
 export const setBehaviorPrefs = (change: Partial<BehaviorPrefs>) =>
   behaviorPrefs.set({ ...behaviorPrefs.get(), ...change });
+
+/** How a chat reads and its box writes, kept on this computer (PLX-1519). */
+export type ChatPrefs = {
+  /** Whether the composer formats Markdown as it's typed. Off, it shows the text as typed. */
+  richComposer: boolean;
+  /** Whether LaTeX in messages is typeset. Off, it shows as its source. */
+  math: boolean;
+  /** Which of the agent's tool calls a transcript shows (`shownRows`). */
+  toolCalls: ToolCallVisibility;
+};
+
+export const chatDefaults: ChatPrefs = { richComposer: true, math: true, toolCalls: "showAll" };
+
+export const chatPrefs = stored("parallax.chat", chatDefaults, merged);
+
+export const setChatPrefs = (change: Partial<ChatPrefs>) =>
+  chatPrefs.set({ ...chatPrefs.get(), ...change });
 
 /** What a new orchestrator's form starts with, kept on this computer. */
 export type OrchestratorPrefs = {
