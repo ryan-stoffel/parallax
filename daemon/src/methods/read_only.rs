@@ -25,6 +25,8 @@
 //! - `repo/gitStatus` and `agent/gitStatus` run a repository's configured clean filter, since
 //!   `git status` and its temporary index read changed files through it. `-c` can't turn a filter
 //!   off without its name ([`crate::worktree`]), so no read-only device can ask for them.
+//!   `git/reviewDiff` reads uncommitted changes the same way, and `git/reviewCommits` runs
+//!   `git log`, which isn't among the programs below.
 //!
 //! The programs the reads here do run: `git` as `rev-parse`, `ls-files`, `grep`, `for-each-ref`,
 //! `check-ignore`, `ls-tree`, `cat-file`, and `diff` between two commits, none of which reads a file
@@ -179,6 +181,8 @@ fn is_read(method: RequestName) -> bool {
         | M::AgentOpenPr
         | M::AgentGitStatus
         | M::RepoGitStatus
+        | M::GitReviewCommits
+        | M::GitReviewDiff
         | M::AgentCommit
         | M::AgentPush
         | M::AgentApprove
