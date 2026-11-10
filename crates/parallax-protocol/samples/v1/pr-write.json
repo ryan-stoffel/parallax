@@ -173,5 +173,19 @@
     "jsonrpc": "2.0",
     "id": 15,
     "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 16,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "applySuggestions", "commentIds": ["PRRC_1", "PRRC_2"], "message": "Apply suggestions from code review", "headSha": "abc123" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 16,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
   }
 ]

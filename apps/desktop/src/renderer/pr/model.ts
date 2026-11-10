@@ -47,6 +47,7 @@ export interface PullRequestMore {
   reviewThreads?: ReviewThreadData[];
   nodeId?: string;
   pendingReviewId?: string;
+  canApplySuggestions?: boolean;
 }
 
 /** A check with whether branch protection requires it and its Actions run and job. */
