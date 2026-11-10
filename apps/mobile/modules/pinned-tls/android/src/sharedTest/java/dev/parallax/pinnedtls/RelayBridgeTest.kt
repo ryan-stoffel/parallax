@@ -39,7 +39,11 @@ class RelayBridgeTest {
   private val idleStreams = CopyOnWriteArrayList<WebSocket>()
   private val idleBytes = AtomicInteger()
 
-  /** A stream that says `ready`, counts what it's sent, and closes only when a test closes it. */
+  /**
+   * A stream that says `ready`, counts what it's sent, and closes only when a test or the bridge
+   * closes it. It answers the bridge's close as the relay does: until it does, MockWebServer's task
+   * for the stream waits, and `shutdown` gives up on it.
+   */
   private val idle = object : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
       idleStreams.add(webSocket)
@@ -48,6 +52,10 @@ class RelayBridgeTest {
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
       idleBytes.addAndGet(bytes.size)
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+      webSocket.close(1000, null)
     }
   }
 
