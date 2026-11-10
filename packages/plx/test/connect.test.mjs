@@ -183,6 +183,22 @@ test("attach says why plxd attach stopped", async () => {
   await assert.rejects(attach(child), /^Error: plxd stopped answering: could not connect to the pipe$/);
 });
 
+test("attach sends subscribe behind initialize, before its answer, as the apps do (PLX-1480)", { timeout: 5000 }, async (t) => {
+  // Answers nothing until both arrived, so an attach that waits for initialize's answer hangs.
+  const script = `const got = [];
+require("readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  if (got.push(JSON.parse(line)) < 2) return;
+  for (const { id, method } of got)
+    console.log(JSON.stringify({ jsonrpc: "2.0", id, result: method === "initialize" ? {} : { subscription: "s" } }));
+});`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: "pipe" });
+  // On a failure too, or the fake keeps node --test from exiting.
+  t.after(() => child.kill());
+  const app = await attach(child, { subscribe: { after: 0 } });
+  assert.deepEqual(await app.subscribed, { subscription: "s" });
+  app.close();
+});
+
 test("connect fails with plxd's reason when the relay never answers", async () => {
   const fake = fakes({ connects: false });
   const { code, out } = await printed(() => connect.connect(options, fake.deps));

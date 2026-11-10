@@ -214,6 +214,10 @@ export class WebHost {
   private readonly pending = new Map<number, Pending>();
   private readonly subscriptions = new Set<Subscription>();
   private readonly watches = new Set<Watch>();
+  /** The subscriptions and watches sent behind this socket's `initialize` (PLX-1480). */
+  private readonly early = new Set<Subscription | Watch>();
+  /** `initialize` is sent and unanswered, and what opens now goes right behind it (PLX-1480). */
+  private pipelining = false;
   private readonly updateNotice = new UpdateNotice(() => {
     if (this.state.updating) this.setState(this.state);
   });
@@ -269,6 +273,14 @@ export class WebHost {
           return this.end(`initialize failed: ${response.error.message}`, "protocol_error");
         this.initialized(response.result as InitializeResult);
       });
+      // Behind `initialize`, without waiting for its answer, which saves a round trip (PLX-1480).
+      // plxd reads a connection's requests in order until `initialize` succeeds and refuses any
+      // before it, so these see the session or make nothing. Each answer, after `initialize`'s,
+      // checks the log it assumed. Those opened before `initialize` answers go the same way, so
+      // a cold connect's first watches save it too.
+      this.pipelining = true;
+      for (const subscription of this.subscriptions) this.sendSubscribe(subscription, true);
+      for (const watch of this.watches) this.sendWatch(watch, true);
     };
   }
 
@@ -309,6 +321,7 @@ export class WebHost {
     const subscription: Subscription = { params, logId, listener };
     this.subscriptions.add(subscription);
     if (this.state.status === "connected") this.sendSubscribe(subscription);
+    else if (this.pipelining) this.sendSubscribe(subscription, true);
     return () => {
       if (this.subscriptions.delete(subscription) && subscription.id)
         this.send("events/unsubscribe", { subscription: subscription.id });
@@ -320,6 +333,7 @@ export class WebHost {
     const watch: Watch = { params, listener };
     this.watches.add(watch);
     if (this.state.status === "connected") this.sendWatch(watch);
+    else if (this.pipelining) this.sendWatch(watch, true);
     return () => {
       if (this.watches.delete(watch) && watch.id)
         this.send("events/unsubscribe", { subscription: watch.id });
@@ -425,6 +439,7 @@ export class WebHost {
   }
 
   private initialized(result: InitializeResult): void {
+    this.pipelining = false;
     this.logId = result.logId;
     this.failures = 0;
     clearInterval(this.heartbeatTimer);
@@ -436,8 +451,10 @@ export class WebHost {
       : result.capabilities;
     this.log?.connected(plxd, result.startId);
     this.setState({ status: "connected", plxd, protocol, capabilities });
-    for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
-    for (const watch of this.watches) this.sendWatch(watch);
+    for (const subscription of this.subscriptions)
+      if (!this.early.has(subscription)) this.sendSubscribe(subscription);
+    for (const watch of this.watches) if (!this.early.has(watch)) this.sendWatch(watch);
+    this.early.clear();
     // A shell opened again replays what it printed.
     for (const [id, params] of this.terminals) {
       this.send("terminal/open", params, (response) => {
@@ -446,13 +463,19 @@ export class WebHost {
     }
   }
 
-  private sendSubscribe(subscription: Subscription): void {
-    if (subscription.logId !== this.logId) return this.endSubscription(subscription);
+  /** Sends `events/subscribe`. `early` sends it before `initialize` answered, so before the
+   *  connection's log is known: the answer then checks it. */
+  private sendSubscribe(subscription: Subscription, early = false): void {
+    if (!early && subscription.logId !== this.logId) return this.endSubscription(subscription);
+    if (early) this.early.add(subscription);
     const socket = this.socket;
     this.send("events/subscribe", subscription.params, (response) => {
       if (socket !== this.socket) return;
-      if (!this.subscriptions.has(subscription)) {
+      // Unsubscribed while waiting, or sent early in another log: its events are dropped.
+      const stale = subscription.logId !== this.logId;
+      if (!this.subscriptions.has(subscription) || stale) {
         if ("result" in response) this.send("events/unsubscribe", response.result);
+        if (stale && this.subscriptions.has(subscription)) this.endSubscription(subscription);
         return;
       }
       if ("result" in response)
@@ -470,16 +493,23 @@ export class WebHost {
     subscription.listener(message);
   }
 
-  private sendWatch(watch: Watch): void {
+  /** Sends a watch's subscribe. `early` sends it before `initialize` answered, assuming the
+   *  watch's log, and the answer checks it. */
+  private sendWatch(watch: Watch, early = false): void {
     const socket = this.socket;
     // A `seq` from another log is meaningless, so a new log starts from a snapshot.
-    const afterSeq = watch.logId === this.logId ? watch.seq : undefined;
+    const log = watch.logId;
+    const afterSeq = log !== undefined && (early || log === this.logId) ? watch.seq : undefined;
     const after = afterSeq === undefined ? {} : { afterSeq };
     watch.id = undefined;
+    if (early) this.early.add(watch);
     const answered = (response: RpcResponse<unknown>) => {
       if (socket !== this.socket) return;
-      if (!this.watches.has(watch)) {
+      // Sent early after a `seq` in another log: dropped, and sent again for a snapshot.
+      const stale = afterSeq !== undefined && log !== this.logId;
+      if (!this.watches.has(watch) || stale) {
         if ("result" in response) this.send("events/unsubscribe", response.result);
+        if (stale && this.watches.has(watch)) this.sendWatch(watch);
         return;
       }
       if ("error" in response) {
@@ -568,6 +598,8 @@ export class WebHost {
       done({ error: { code: INTERNAL_ERROR, message } });
     }
     this.pending.clear();
+    this.pipelining = false;
+    this.early.clear();
     for (const subscription of this.subscriptions) subscription.id = undefined;
     for (const watch of this.watches) watch.id = undefined;
     // plxd ends a command with the connection that opened it.

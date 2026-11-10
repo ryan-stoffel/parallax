@@ -99,13 +99,13 @@ const queuedOf = (runs: ThreadRun[]): QueuedMessage[] =>
  * One run's transcript, kept live through `orchestration/subscribeThread` (0059): a snapshot of
  * the run, its queue, and its newest events, then its events as they come. Older events load a
  * page at a time with `loadOlder`, and while the newest show nothing, on their own. It opens once
- * the host connects and stays open across disconnects: a reconnect resumes after the last event,
+ * `opening`, the host connecting or connected, and stays open across disconnects: a reconnect resumes after the last event,
  * and a fresh snapshot rebuilds the transcript only when the gap is too long to replay
  * (`useWatchKey`). A run shown lately is still watched (`watchThread`), so it shows as it is now
  * before the first paint. Key the caller by host and run, so another run starts from an empty
  * transcript.
  */
-export function useAgentRun(hostId: string, runId: string, connected: boolean): AgentRunView {
+export function useAgentRun(hostId: string, runId: string, opening: boolean): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
   const [error, setError] = useState<string>();
   const [sent, setSent] = useState<ReadonlyMap<string, SentMessage>>(new Map());
@@ -116,7 +116,7 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
   const [background, setBackground] = useState<AgentBackgroundTask[]>([]);
   const [watching, setWatching] = useState<string[]>([]);
   const [runs, setRuns] = useState<ThreadRun[]>([]);
-  const [watchKey, failed] = useWatchKey(`${hostId}\n${runId}`, connected, hostId);
+  const [watchKey, failed] = useWatchKey(`${hostId}\n${runId}`, opening, hostId);
 
   // Loads the page before `p`'s oldest event into it, one at a time: `false` while another is
   // on its way, or once a fresh snapshot replaced `p` or the page failed.

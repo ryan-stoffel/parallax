@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * When to open a `window.parallax.watch` (0059) on `id`: once its host first connects. It stays
+ * When to open a `window.parallax.watch` (0059) on `id`: once `open` is first true, as when its
+ * host starts connecting, so main sends it right behind `initialize` (PLX-1480). It stays
  * open across disconnects, so main resumes it after its last event and plxd replays the gap, or
  * sends a snapshot when the gap is too long. One that ended with an error opens again when the
  * host next reconnects, as after updating its plxd, or on `retry`. Returns the key to open it
@@ -10,13 +11,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 export function useWatchKey(
   id: string,
-  connected: boolean,
+  open: boolean,
   hostId: string,
 ): [string | undefined, () => void, () => void] {
   const [opened, setOpened] = useState<{ id: string; key: string }>();
   const [count, setCount] = useState(0);
   const failedKey = useRef<string>(undefined);
-  if (connected && opened?.id !== id) {
+  if (open && opened?.id !== id) {
     setOpened({ id, key: `${id}\n${count}` });
     setCount(count + 1);
   }

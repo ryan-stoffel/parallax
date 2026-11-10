@@ -15,6 +15,9 @@ import { fileURLToPath } from "node:url";
 import { delayDuplex } from "./delay-duplex.mjs";
 
 const proof = process.env.PLX_HOST_PROOF === "1";
+// The proof, or `PLX_E2E_DELAY_MS` alone, puts a TLS front and a fixed per-direction delay before
+// the production Worker.
+const fronted = proof || process.env.PLX_E2E_DELAY_MS !== undefined;
 const relayDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const issuer = "https://clerk.e2e";
 const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -74,7 +77,7 @@ for (;;) {
 let front;
 let delayed;
 let ca;
-if (proof) {
+if (fronted) {
   ca = join(scratch, "ca.pem");
   const caKey = join(scratch, "ca-key.pem");
   const key = join(scratch, "server-key.pem");
@@ -132,7 +135,7 @@ if (proof) {
     socket.on("close", () => upstream.destroy());
   });
   await new Promise(resolve => front.listen(0, "127.0.0.1", resolve));
-  const delay = Number(process.env.PLX_HOST_PROOF_DELAY_MS ?? 0);
+  const delay = Number(process.env.PLX_HOST_PROOF_DELAY_MS ?? process.env.PLX_E2E_DELAY_MS ?? 0);
   delayed = createServer({allowHalfOpen:true}, socket => {
     const upstream = connect({port:front.address().port,host:"127.0.0.1",allowHalfOpen:true});
     delayDuplex(socket, upstream, delay);

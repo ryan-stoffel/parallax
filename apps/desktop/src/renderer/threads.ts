@@ -864,10 +864,11 @@ export type OrchestratorOptions = Pick<
 /**
  * A host's threads and orchestrators, kept live through `orchestration/subscribeShell` (0059): a
  * snapshot of its orchestrators, repo entries, threads, runs, and the permission requests runs wait
- * on, then what a sidebar shows of every scope's events (0033). It opens once the host connects,
- * which is when plxd's `capabilities` are known, and stays open across disconnects: a reconnect
- * resumes after the last event, and a fresh snapshot replaces the state only when the gap is
- * too long to replay (`useWatchKey`). An older plxd has no shell to load.
+ * on, then what a sidebar shows of every scope's events (0033). It opens once the host starts
+ * connecting (`opening`), so its subscribe goes right behind `initialize` (PLX-1480), and stays
+ * open across disconnects: a reconnect resumes after the last event, and a fresh snapshot replaces
+ * the state only when the gap is too long to replay (`useWatchKey`). An older plxd has no shell
+ * to load.
  * With `approvals`, the threads and orchestrators started here forward their permission
  * requests (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once
  * (0041); with `threadNaming`, plxd names new threads and their branches (0058). The view carries
@@ -876,7 +877,10 @@ export type OrchestratorOptions = Pick<
  */
 export function useThreads(
   hostId: string,
+  /** plxd's, once the host is connected. */
   capabilities: Capabilities | undefined,
+  /** The host is connecting or connected. */
+  opening: boolean,
   iconImageBytes: number | undefined,
   /** Called for each new Needs you item in one of the host's orchestrators' inboxes (0043). */
   onNeedsYou: (orchestrator: string, item: InboxItem) => void,
@@ -897,7 +901,7 @@ export function useThreads(
     needsYou.current = onNeedsYou;
     lineageNow.current = lineage;
   });
-  const [watchKey, failed, reopen] = useWatchKey(hostId, connected, hostId);
+  const [watchKey, failed, reopen] = useWatchKey(hostId, opening || connected, hostId);
 
   useEffect(() => {
     if (!watchKey) return;
@@ -1176,13 +1180,25 @@ export function useThreads(
         reopen();
       },
       ...(outdated && { outdated }),
-      loading,
+      // Not while connecting, as before the shell opened that early: a list can't be loading yet.
+      loading: loading && connected,
       hostId,
       capabilities: capabilities ?? noCapabilities,
       iconImageBytes,
       ...actions,
     }),
-    [hostId, state, error, reopen, outdated, loading, capabilities, iconImageBytes, actions],
+    [
+      hostId,
+      state,
+      error,
+      reopen,
+      outdated,
+      loading,
+      connected,
+      capabilities,
+      iconImageBytes,
+      actions,
+    ],
   );
 }
 

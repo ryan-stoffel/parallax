@@ -18,6 +18,8 @@ const bridge: Partial<ParallaxBridge> = {
   setThemeSource: vi.fn(),
   connectionState: async () => ({ status: "connecting" }),
   onConnectionState: () => () => {},
+  // The shell opens while its host connects (PLX-1480), and stays empty here.
+  watch: () => () => {},
   onHostUpdate: () => () => {},
   hosts: async () => [],
   onHosts: () => () => {},
