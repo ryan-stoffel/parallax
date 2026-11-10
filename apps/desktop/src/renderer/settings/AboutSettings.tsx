@@ -4,9 +4,15 @@ import {
   Bug,
   Check,
   ChevronRight,
+  CircleAlert,
+  CircleCheck,
   Copy,
+  Download,
   Lightbulb,
   LoaderCircle,
+  RefreshCw,
+  RefreshCwOff,
+  RotateCw,
   Search,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -16,10 +22,11 @@ import { useCopy } from "../AgentChat";
 import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { GitHubStarIcon, KoFiLogo, ParallaxMark } from "../logos";
+import { age } from "../Sidebar";
 import { IconButton, searchField, Segmented } from "../ui";
-import { reviewUpdates, useUpdateState } from "../Update";
+import { reviewUpdates } from "../Update";
 import { artwork, notices } from "./licenses";
-import { outlineButton, Row, Section } from "./parts";
+import { Row, Section } from "./parts";
 import { anchorOf } from "./search";
 
 const repository = "https://github.com/ryan-stoffel/parallax";
@@ -106,12 +113,13 @@ export function AboutSettings() {
           <p className="text-body text-muted-foreground">
             Run coding agents on computers you own, and check on them from anywhere.
           </p>
-          <div data-setting="version" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div data-setting="version" className="mt-1">
             {version && <CopyVersion version={version} />}
-            <UpdateCheck />
           </div>
         </div>
       </header>
+
+      <UpdateCard version={version} />
 
       <section aria-label="Get involved" data-setting={anchorOf("Get involved")} className="mb-10">
         <h2 className="mb-3 text-reading font-semibold">Get involved</h2>
@@ -229,76 +237,218 @@ function CopyVersion({ version }: { version: string }) {
 const inSidebar = "Restart from the Update button in the sidebar.";
 
 /**
- * What About's update button shows for the updater's `state`: its label, whether it's `busy` or
- * `off`, a failed check's or download's `error`, and a plain `line`, such as why this build can't
- * update. `checking` is true while a press's `update` runs, and `answer` is that press's line once
- * it ends.
+ * The updater as About knows it: its `state` from main, and the last press's `answer` from
+ * `update` with when it came. A newer state drops the answer, which was about the one before.
  */
-function updateButton(
-  state: UpdateState,
-  checking: boolean,
-  answer?: string,
-): { label: string; busy?: boolean; off?: boolean; error?: string; line?: string } {
-  const check = "Check for updates";
-  if (!window.parallax.updatable)
-    return { label: check, off: true, line: "Updates run only in the packaged app." };
-  const { available, progress, ready, note, unsupported } = state;
-  if (unsupported) return { label: check, off: true, line: note };
-  const busy = checking || progress !== undefined;
-  if (progress !== undefined) return { label: `Downloading… ${progress}%`, busy };
-  if (available) {
-    if (ready === undefined) return { label: `Download ${available.version}`, busy, error: note };
-    const line = answer === inSidebar ? inSidebar : undefined;
-    return { label: `Restart to install ${available.version}`, busy, error: note, line };
-  }
-  // `update` answers "Up to date" when nothing is newer, and otherwise why it didn't update.
-  const upToDate = answer === "Up to date";
-  const line = note === undefined && !upToDate ? answer : undefined;
-  // Under `pnpm dev`, the commits to take.
-  if (ready !== undefined) return { label: `Update: ${ready}`, busy, error: note, line };
-  if (checking) return { label: "Checking…", busy };
-  return { label: upToDate && !note ? "Up to date" : check, error: note, line };
-}
+type UpdateSeen = { state: UpdateState; answer?: string; checkedAt?: string };
+
+/** What the updates card shows. */
+type UpdateView = {
+  icon: keyof typeof updateIcons;
+  title: string;
+  detail?: string;
+  /** `detail` is a failure's line. */
+  failed?: boolean;
+  /** The release's page, linked when there is no `detail`. */
+  notes?: string;
+  /** The download's percent, drawn as a bar in place of `detail`. */
+  progress?: number;
+  button?: { label: string; primary?: boolean; busy?: boolean };
+};
+
+const updateIcons = {
+  check: <RefreshCw />,
+  current: <CircleCheck className="text-added" />,
+  release: <Download className="text-accent" />,
+  restart: <RotateCw className="text-accent" />,
+  failed: <CircleAlert className="text-danger" />,
+  off: <RefreshCwOff className="text-faint-foreground" />,
+};
 
 /**
- * The button beside the version (PLX-1522). A press runs `update`, as the sidebar's Update button
- * does: it checks now, reading Checking… until the check ends and Up to date when nothing is
- * newer. With an update it names it, and a press downloads it. Once it's downloaded, a press
- * opens the sidebar's review of the restart (`reviewUpdates`), which counts the running threads a
- * restart cuts off, and never restarts on its own. What it has to say goes on a line under the
- * version.
+ * The updates card for what the updater says: an icon, a title, one line of detail, and a button
+ * that names what a press does. `checking` is true while a press's `update` runs, and `version`
+ * is this copy's.
  */
-function UpdateCheck() {
-  const state = useUpdateState();
+function updateView(
+  { state, answer, checkedAt }: UpdateSeen,
+  checking: boolean,
+  version?: string,
+): UpdateView {
+  const off = { icon: "off", title: "Updates aren't available in this build" } as const;
+  if (!window.parallax.updatable)
+    return { ...off, detail: "Only the packaged app updates itself." };
+  const { available, progress, ready, note, unsupported } = state;
+  if (unsupported) return { ...off, detail: note };
+  // The updater's line about a check or download that failed.
+  const failure =
+    note === undefined ? undefined : ({ icon: "failed", detail: note, failed: true } as const);
+  if (progress !== undefined)
+    return {
+      icon: "release",
+      title: `Downloading ${available?.version ?? "the update"}…`,
+      progress,
+      button: { label: "Downloading…", primary: true, busy: true },
+    };
+  if (available && ready !== undefined) {
+    const view = {
+      title: `Parallax ${available.version} is ready to install`,
+      button: { label: "Restart to install", primary: true },
+    };
+    if (answer === inSidebar) return { icon: "restart", detail: inSidebar, ...view };
+    return { icon: "restart", detail: "Parallax restarts to finish.", ...failure, ...view };
+  }
+  if (available)
+    return {
+      icon: "release",
+      title: `Parallax ${available.version} is available`,
+      notes: available.url,
+      ...failure,
+      button: { label: "Download", primary: true, busy: checking },
+    };
+  // Under `pnpm dev`, the commits to take. `update` answers why it didn't take them.
+  if (ready !== undefined)
+    return {
+      icon: "release",
+      title: ready[0]!.toUpperCase() + ready.slice(1),
+      detail: answer ?? "Update moves this checkout to main and rebuilds it.",
+      button: { label: checking ? "Updating…" : "Update", primary: true, busy: checking },
+    };
+  const idle = "Parallax checks for new releases on its own.";
+  if (checking)
+    return {
+      icon: "check",
+      title: "Checking for updates…",
+      detail: idle,
+      button: { label: "Checking…", busy: true },
+    };
+  if (failure)
+    return { ...failure, title: "Couldn't check for updates", button: { label: "Try again" } };
+  const button = { label: "Check for updates" };
+  // `update` answers "Up to date" when nothing is newer, and otherwise why it didn't update.
+  if (answer !== "Up to date")
+    return { icon: "check", title: "Updates", detail: answer ?? idle, button };
+  const ago = checkedAt && age(checkedAt);
+  const checked = ago && (ago === "now" ? "Checked just now." : `Checked ${ago} ago.`);
+  return {
+    icon: "current",
+    title: "Parallax is up to date",
+    detail: [version && `${version} is the latest.`, checked].filter(Boolean).join(" "),
+    button,
+  };
+}
+
+// The card's button: one width whatever it reads, which its widest labels set from ::before and
+// ::after, so the card holds still while a check runs.
+const updateButton =
+  "col-start-2 inline-flex shrink-0 flex-col items-center justify-self-start rounded-md border px-2.5 py-1 text-body whitespace-nowrap disabled:opacity-50 @md:col-start-3 before:invisible before:h-0 before:font-medium before:content-['Check_for_updates'] after:invisible after:h-0 after:font-medium after:content-['Restart_to_install']";
+
+/**
+ * The updates card under the header (PLX-1522): where Parallax stands with its updates, and one
+ * button. A press runs `update`, as the sidebar's Update button does: it checks now, then
+ * downloads the release it found. Once that's downloaded, a press opens the sidebar's review of
+ * the restart (`reviewUpdates`), which counts the running threads a restart cuts off, and never
+ * restarts on its own. What changes fades in, unless motion is reduced.
+ */
+function UpdateCard({ version }: { version?: string }) {
+  const [seen, setSeen] = useState<UpdateSeen>({ state: {} });
   const [checking, setChecking] = useState(false);
-  const [answer, setAnswer] = useState<string>();
-  const { label, busy, off, error, line } = updateButton(state, checking, answer);
+  // "Checked 3m ago" stays true while the page is open.
+  const [, setMinute] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setMinute((n) => n + 1), 60_000);
+    const stop = window.parallax.updatable
+      ? window.parallax.onUpdateState((state) => setSeen({ state }))
+      : undefined;
+    return () => {
+      clearInterval(timer);
+      stop?.();
+    };
+  }, []);
+  const view = updateView(seen, checking, version);
+  const { button } = view;
   const press = async () => {
-    if (state.available && state.ready !== undefined)
-      return setAnswer(reviewUpdates() ? undefined : inSidebar);
+    if (seen.state.available && seen.state.ready !== undefined) {
+      const answer = reviewUpdates() ? undefined : inSidebar;
+      return setSeen((old) => ({ ...old, answer }));
+    }
     setChecking(true);
-    setAnswer(await window.parallax.update());
+    const answer = await window.parallax.update();
+    setSeen((old) => ({ ...old, answer, checkedAt: new Date().toISOString() }));
     setChecking(false);
   };
   return (
-    <>
-      <button
-        type="button"
-        data-setting="check-for-updates"
-        disabled={busy || off}
-        onClick={() => void press()}
-        className={outlineButton}
-      >
-        {busy && <LoaderCircle aria-hidden className="animate-spin" />}
-        {label}
-      </button>
-      {error && (
-        <p role="alert" className="basis-full text-meta text-danger">
-          {error}
-        </p>
-      )}
-      {line && <p className="basis-full text-meta text-muted-foreground">{line}</p>}
-    </>
+    <section
+      aria-label="Updates"
+      data-setting="check-for-updates"
+      className="@container mb-10 scroll-mt-6 rounded-xl border border-border/50 bg-(--pane-card) p-3"
+    >
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 @md:grid-cols-[auto_minmax(0,1fr)_auto]">
+        <span className="grid size-9 place-items-center rounded-lg bg-hover [&_svg]:size-5">
+          <span key={view.icon} aria-hidden className="animate-fade-in">
+            {updateIcons[view.icon]}
+          </span>
+        </span>
+        <div className="min-w-0" aria-live="polite">
+          <p key={view.title} className="animate-fade-in text-body font-medium text-pretty">
+            {view.title}
+          </p>
+          {view.progress !== undefined ? (
+            <div className="flex items-center gap-2 text-meta text-muted-foreground">
+              <div
+                role="progressbar"
+                aria-label="Download"
+                aria-valuenow={view.progress}
+                className="h-1 max-w-64 flex-1 overflow-hidden rounded-full bg-selected"
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width]"
+                  style={{ width: `${view.progress}%` }}
+                />
+              </div>
+              <span className="tabular-nums">{view.progress}%</span>
+            </div>
+          ) : view.detail ? (
+            <p
+              key={view.detail}
+              role={view.failed ? "alert" : undefined}
+              className="animate-fade-in text-meta text-pretty text-muted-foreground"
+            >
+              {view.detail}
+            </p>
+          ) : (
+            view.notes && (
+              <a
+                href={view.notes}
+                target="_blank"
+                rel="noreferrer"
+                className="flex w-fit animate-fade-in items-center gap-1 text-meta text-muted-foreground hover:text-foreground hover:underline"
+              >
+                What's new
+                <ArrowUpRight aria-hidden className="size-3" />
+              </a>
+            )
+          )}
+        </div>
+        {button && (
+          <button
+            type="button"
+            disabled={button.busy}
+            onClick={() => void press()}
+            className={`${updateButton} ${
+              button.primary
+                ? "border-transparent bg-primary font-medium text-primary-foreground enabled:hover:opacity-90"
+                : "border-border text-foreground enabled:hover:bg-hover"
+            }`}
+          >
+            <span key={button.label} className="flex animate-fade-in items-center gap-1.5">
+              {button.busy && <LoaderCircle aria-hidden className="size-3.5 animate-spin" />}
+              {button.label}
+            </span>
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

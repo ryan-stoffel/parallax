@@ -1960,14 +1960,17 @@ let localName = "macbook";
 const localNameListeners = new Set<(name: string) => void>();
 const connectionListeners = new Set<(hostId: string, state: ConnectionState) => void>();
 
-// `#update` makes the app one that updates, for Settings > About's button (PLX-1522): a check
-// takes a second and finds nothing. `#update=available` finds a release, which the next press
-// downloads; `#update=failed` fails the check; `#update=unsupported` is a build that can't update.
+// `#update` makes the app one that updates, for Settings > About's updates card (PLX-1522): a
+// check takes a second and finds nothing. `#update=available` finds a release, which the next
+// press downloads; `#update=failed` fails the check; `#update=unsupported` is a build that can't
+// update; `#update=dev` is a `pnpm dev` checkout behind main, which Update refuses to move.
 const updateDemo = new URLSearchParams(location.hash.slice(1)).get("update");
 let updateState: UpdateState =
   updateDemo === "unsupported"
     ? { note: "Updates work only in the AppImage.", unsupported: true }
-    : {};
+    : updateDemo === "dev"
+      ? { ready: "3 commits to apply" }
+      : {};
 const updateListeners = new Set<(state: UpdateState) => void>();
 function setUpdateState(state: UpdateState) {
   updateState = state;
@@ -1977,6 +1980,8 @@ function setUpdateState(state: UpdateState) {
 /** `update` as main's updater answers it: installs, else downloads, else checks. */
 async function demoUpdate(): Promise<string> {
   const { available, ready, progress } = updateState;
+  if (updateDemo === "dev")
+    return delay("Update follows main, but this checkout is on feature/PLX-1522.", 1000);
   if (ready) return `Restarting to install Parallax ${available?.version}…`;
   if (available) {
     if (progress === undefined)

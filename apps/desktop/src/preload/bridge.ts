@@ -671,7 +671,7 @@ export type Profile = {
   picture?: string;
 };
 
-/** What the sidebar's Update button and Settings > About's update button show. */
+/** What the sidebar's Update button and Settings > About's updates card show. */
 export type UpdateState = {
   /**
    * A packaged app's newer release: its version, its notes as plain lines, and its GitHub page.
