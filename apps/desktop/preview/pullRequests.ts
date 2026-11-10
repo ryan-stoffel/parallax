@@ -5,6 +5,7 @@ import type {
   PrAction,
   PrCheck,
   PrGuide,
+  PrReviewThread,
   PrStatusResult,
   PrWrite,
   PullRequest,
@@ -102,6 +103,44 @@ const files = [
   { path: "docs/decisions/0028-release-channels.md", additions: 6, deletions: 0 },
 ];
 
+/** #588's review threads, on both sides of the updater's diff. */
+const reviewThreads: PrReviewThread[] = [
+  {
+    id: "PRRT_new",
+    path: "apps/desktop/src/main/updater.ts",
+    line: 83,
+    side: "right",
+    isOutdated: false,
+    isResolved: false,
+    comments: [
+      {
+        id: "PRRC_new",
+        url: "https://github.com/ryan-stoffel/parallax/pull/588#discussion_r1",
+        author: "claude-reviewer",
+        body: "`channelOf` reads the file on every start. Is that worth caching?",
+        createdAt: at(18),
+      },
+    ],
+  },
+  {
+    id: "PRRT_old",
+    path: "apps/desktop/src/main/updater.ts",
+    line: 81,
+    side: "left",
+    isOutdated: false,
+    isResolved: false,
+    comments: [
+      {
+        id: "PRRC_old",
+        url: "https://github.com/ryan-stoffel/parallax/pull/588#discussion_r2",
+        author: "claude-reviewer",
+        body: "Glad this hard-coded channel is going.",
+        createdAt: at(16),
+      },
+    ],
+  },
+];
+
 /** Each pull request as GitHub has it now, changed by the preview's actions and writes. */
 const live = new Map<number, PullRequest>();
 
@@ -126,6 +165,7 @@ function view(url: string): PullRequest {
     deletions: 21,
     files,
     headSha: "a41c09d2e3f4",
+    reviewThreads: number === 588 ? reviewThreads : [],
     body: number === 588 ? body : "Copy-only change. No behavior moves.",
     comments: [
       {

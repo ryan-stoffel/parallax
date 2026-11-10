@@ -461,6 +461,8 @@ export interface ThreadView {
   id?: string;
   path?: string;
   line?: number;
+  /** The diff's side `line` is on. Absent means the new side. */
+  side?: "left" | "right";
   outdated?: boolean;
   resolved: boolean;
   url?: string;
@@ -478,6 +480,7 @@ export function threadsOf(pr: PullRequest, status?: PrStatusResult): ThreadView[
       id: t.id,
       path: t.path,
       line: t.line,
+      side: t.side,
       outdated: t.isOutdated,
       resolved: !!t.isResolved,
       url: t.comments[0]?.url,

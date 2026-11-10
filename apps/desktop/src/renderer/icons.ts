@@ -11,6 +11,7 @@ import {
   CircleCheck,
   CircleMinus,
   CircleX,
+  Columns2,
   Copy,
   Download,
   Ellipsis,
@@ -36,6 +37,7 @@ import {
   PinOff,
   Plus,
   RefreshCw,
+  Rows2,
   ScrollText,
   Search,
   Server,
@@ -104,6 +106,10 @@ export const icons = {
   closedPullRequest: GitPullRequestClosed,
   merged: GitMerge,
   commit: GitCommitHorizontal,
+  /** The unified layout of a diff. */
+  unified: Rows2,
+  /** The split layout of a diff. */
+  split: Columns2,
   /** A comment on a pull request or a review thread. */
   comment: MessageSquare,
   /** A change's lines: a diff, a changed file. */

@@ -227,7 +227,7 @@ pub use provider::{
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommentKind, PrCommit, PrDiffResult,
-    PrFile, PrGuide, PrGuideHunk, PrGuideParams, PrGuideResult, PrGuideStep, PrLabel,
+    PrDiffSide, PrFile, PrGuide, PrGuideHunk, PrGuideParams, PrGuideResult, PrGuideStep, PrLabel,
     PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewDecision, PrReviewEvent,
     PrReviewState, PrReviewThread, PrState, PrThreadComment, PrViewParams, PrWrite, PrWriteParams,
     PrWriteResult, PullRequest,

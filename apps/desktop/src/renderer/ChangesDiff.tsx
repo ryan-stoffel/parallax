@@ -1,15 +1,20 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { diffBand, diffLook } from "./Approval";
 import { icons } from "./icons";
+import { diffRows, sameRow, type DiffLayout, type Row } from "./diffRows";
 import { parseDiff, type DiffFile, type DiffLine } from "./parseDiff";
 import type { ThreadView } from "./pr/model";
 import { DiffStat } from "./pr/parts";
 import { fileTree, FileIcon, type TreeNode } from "./TurnChanges";
-import { Checkbox } from "./ui";
+import { Checkbox, Segmented } from "./ui";
 
-type Row = { file: DiffFile; header?: boolean; line?: DiffLine; threads?: ThreadView[] };
+/** Where the Unified/Split choice is kept, for every diff. */
+const LAYOUT_KEY = "parallax.diffLayout";
+
+/** The diff column's narrowest width for split, about 40 columns of code on each side. */
+const SPLIT_MIN_WIDTH = 760;
 
 /** Where a focus or jump scrolls: a file, and a line of its new side, from `line` to `end`. */
 export type DiffFocus = { path?: string; line?: number; end?: number };
@@ -20,21 +25,23 @@ export type DiffFocus = { path?: string; line?: number; end?: number };
  * in `rows`.
  */
 export function focusRow(
-  rows: readonly Pick<Row, "file" | "header" | "line">[],
+  rows: readonly Pick<Row, "file" | "header" | "line" | "right">[],
   to?: DiffFocus,
 ): number {
   const header = rows.findIndex((r) => r.header && r.file.path === to?.path);
   if (header < 0 || to?.line === undefined) return header;
-  const at = rows.findIndex(
-    (r, i) =>
+  const at = rows.findIndex((r, i) => {
+    const line = r.line ?? r.right;
+    return (
       i > header &&
       r.file.path === to.path &&
-      !!r.line &&
-      r.line.op !== "-" &&
-      r.line.op !== "@" &&
-      r.line.new !== undefined &&
-      r.line.new >= to.line!,
-  );
+      !!line &&
+      line.op !== "-" &&
+      line.op !== "@" &&
+      line.new !== undefined &&
+      line.new >= to.line!
+    );
+  });
   return at < 0 ? header : at;
 }
 
@@ -50,11 +57,12 @@ const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
 
 /**
  * The one diff renderer, for the Changes view (0062) and a pull request's Files tab: every file in
- * one virtualized window, so a huge file and many small ones both stay cheap. A new `focus`
- * scrolls to its file, or to its lines, which it marks (a guide's step, PLX-1188). With `onViewed`, each file has Viewed, and a viewed file folds. `threads`
- * sit under their line, or under their file's header when plxd doesn't say the line, drawn by
- * `renderThread`. With `tree`, a file tree that jumps to a file shows beside the diff once its
- * container (an `@container`) is at least 900px wide.
+ * one virtualized window, so a huge file and many small ones both stay cheap, unified or split as
+ * the reader chose and the width allows. A new `focus` scrolls to its file, or to its lines, which
+ * it marks (a guide's step, PLX-1188). With `onViewed`, each file has Viewed, and a viewed file
+ * folds. `threads` sit under their line on their side, or under their file's header when plxd
+ * doesn't say the line, drawn by `renderThread`. With `tree`, a file tree that jumps to a file
+ * shows beside the diff once its container (an `@container`) is at least 900px wide.
  */
 export function ChangesDiff({
   diff,
@@ -79,30 +87,35 @@ export function ChangesDiff({
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [jump, setJump] = useState<DiffFocus>();
   const scroll = useRef<HTMLDivElement>(null);
+  const [chosen, setChosen] = useState<DiffLayout>(() =>
+    localStorage.getItem(LAYOUT_KEY) === "split" ? "split" : "unified",
+  );
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = scroll.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setNarrow(el.clientWidth < SPLIT_MIN_WIDTH);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const layout = narrow ? "unified" : chosen;
   const shut = (path: string) => folded.has(path) || !!viewed?.has(path);
-  const rows = useMemo(() => {
-    const rows: Row[] = [];
-    for (const file of files) {
-      rows.push({ file, header: true });
-      if (folded.has(file.path) || viewed?.has(file.path)) continue;
-      const mine = renderThread ? threads.filter((t) => t.path === file.path) : [];
-      const lines = new Set(file.lines.map((l) => l.new));
-      const atLine = (n?: number) => mine.filter((t) => t.line !== undefined && t.line === n);
-      const loose = mine.filter((t) => t.line === undefined || !lines.has(t.line));
-      if (loose.length) rows.push({ file, threads: loose });
-      if (file.binary) rows.push({ file });
-      for (const line of file.lines) {
-        rows.push({ file, line });
-        const here = line.op !== "-" && line.op !== "@" ? atLine(line.new) : [];
-        if (here.length) rows.push({ file, threads: here });
-      }
-    }
-    return rows;
-  }, [files, folded, viewed, threads, renderThread]);
+  const rows = useMemo(
+    () =>
+      diffRows(
+        files,
+        layout,
+        (path) => folded.has(path) || !!viewed?.has(path),
+        renderThread ? threads : [],
+      ),
+    [files, layout, folded, viewed, threads, renderThread],
+  );
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroll.current,
-    estimateSize: (i) => (rows[i]!.header ? 38 : rows[i]!.threads ? 140 : 20),
+    estimateSize: (i) => (rows[i]!.header ? 38 : rows[i]!.threads || rows[i]!.sides ? 140 : 20),
     overscan: 8,
   });
   const to = jump ?? focus;
@@ -112,6 +125,18 @@ export function ChangesDiff({
     // Only a new focus or jump scrolls, not folding a file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [to, files]);
+  // The other layout has other rows, so it stays on the line at the top rather than the row number.
+  const top = useRef<Row>(undefined);
+  useLayoutEffect(() => {
+    virtualizer.measure();
+    const at = top.current ? sameRow(rows, top.current) : -1;
+    if (at >= 0) virtualizer.scrollToIndex(at, { align: "start" });
+    // Only the layout changing moves it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
+  useEffect(() => {
+    top.current = rows[virtualizer.range?.startIndex ?? 0];
+  });
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
   const toggle = (path: string) => {
@@ -126,24 +151,48 @@ export function ChangesDiff({
   };
   return (
     <>
-      <p className="flex items-center gap-2 px-3 py-2 text-body text-muted-foreground">
+      <div className="flex min-h-11 flex-wrap items-center gap-2 px-3 py-1.5 text-body text-muted-foreground">
         {files.length === 0 ? (
           "No files changed."
         ) : (
           <>
             {files.length} {files.length === 1 ? "file" : "files"} changed
             <DiffStat added={added} removed={removed} />
-            {onViewed && (
-              <span className="ml-auto text-meta tabular-nums">
-                {files.filter((f) => viewed?.has(f.path)).length} / {files.length} viewed
-              </span>
-            )}
           </>
         )}
         {truncated && (
           <span className="text-warning">· cut short, open it on GitHub for the rest</span>
         )}
-      </p>
+        {files.length > 0 && (
+          <div className="ml-auto flex items-center gap-3">
+            {onViewed && (
+              <span className="text-meta tabular-nums">
+                {files.filter((f) => viewed?.has(f.path)).length} / {files.length} viewed
+              </span>
+            )}
+            {narrow && chosen === "split" && (
+              <span className="text-meta text-faint-foreground">Too narrow for split</span>
+            )}
+            <Segmented
+              label="Diff layout"
+              value={layout}
+              onChange={(next) => {
+                localStorage.setItem(LAYOUT_KEY, next);
+                setChosen(next);
+              }}
+              options={[
+                { value: "unified", name: layoutName(icons.unified, "Unified") },
+                {
+                  value: "split",
+                  name: layoutName(icons.split, "Split"),
+                  disabled: narrow,
+                  title: narrow ? "Too narrow for split" : undefined,
+                },
+              ]}
+            />
+          </div>
+        )}
+      </div>
       <div className="flex min-h-0 flex-1 border-t border-border">
         {tree && files.length > 1 && (
           <FileTree files={files} viewed={viewed} onPick={(path) => setJump({ path })} />
@@ -185,16 +234,22 @@ export function ChangesDiff({
                       )}
                     </DiffFileHeader>
                   ) : row.threads ? (
-                    <div className="flex flex-col gap-2 border-y border-border bg-background px-3 py-2">
-                      {row.threads.map((t, i) => (
-                        <div key={t.id ?? i}>{renderThread!(t)}</div>
-                      ))}
+                    <ThreadColumn threads={row.threads} render={renderThread!} edged />
+                  ) : row.sides ? (
+                    <div className="grid grid-cols-2 border-y border-border bg-background">
+                      <ThreadColumn threads={row.sides.left} render={renderThread!} />
+                      <ThreadColumn threads={row.sides.right} render={renderThread!} divider />
                     </div>
                   ) : (
                     <div
-                      className={`font-mono text-meta leading-5 ${focused(to, path, row.line) ? "bg-accent/10" : ""}`}
+                      className={`font-mono text-meta leading-5 ${focused(to, path, row.line ?? row.right) ? "bg-accent/10" : ""}`}
                     >
-                      {row.line ? (
+                      {row.left || row.right ? (
+                        <div className="grid grid-cols-2">
+                          <DiffSide line={row.left} />
+                          <DiffSide line={row.right} divider />
+                        </div>
+                      ) : row.line ? (
                         <DiffLineView line={row.line} />
                       ) : (
                         <p className="px-3 text-faint-foreground">Binary file not shown</p>
@@ -259,6 +314,77 @@ export function DiffFileHeader({
   );
 }
 
+/** Threads under a line: across the diff when `edged`, else one side of a split row. */
+function ThreadColumn({
+  threads,
+  render,
+  edged,
+  divider,
+}: {
+  threads: readonly ThreadView[];
+  render: (thread: ThreadView) => ReactNode;
+  edged?: boolean;
+  divider?: boolean;
+}) {
+  return (
+    <div
+      className={`flex min-w-0 flex-col gap-2 ${threads.length ? "px-3 py-2" : ""} ${edged ? "border-y border-border bg-background" : ""} ${divider ? "border-l border-border" : ""}`}
+    >
+      {threads.map((t, i) => (
+        <div key={t.id ?? i}>{render(t)}</div>
+      ))}
+    </div>
+  );
+}
+
+/** A layout option's name: its icon and word. */
+const layoutName = (Icon: typeof icons.unified, name: string) => (
+  <>
+    <Icon aria-hidden />
+    {name}
+  </>
+);
+
+/** A line's text, its changed part marked. */
+function LineText({ line }: { line: DiffLine }) {
+  if (!line.mark) return line.text || " ";
+  return (
+    <>
+      {line.text.slice(0, line.mark[0])}
+      <span className={line.op === "+" ? "diff-word-added" : "diff-word-removed"}>
+        {line.text.slice(line.mark[0], line.mark[1])}
+      </span>
+      {line.text.slice(line.mark[1])}
+    </>
+  );
+}
+
+/**
+ * One side of a split row: its line number, sign, and text, or a filler where this side has no line.
+ * Always wrapping, whatever Settings says, so both sides of a row keep one height.
+ */
+function DiffSide({ line, divider }: { line?: DiffLine; divider?: boolean }) {
+  const edge = divider ? "border-l border-border" : "";
+  if (!line) return <div aria-hidden className={`min-w-0 bg-hover/40 ${edge}`} />;
+  const look = diffLook[line.op as keyof typeof diffLook];
+  return (
+    <div className={`flex min-w-0 ${look.row} ${edge}`}>
+      <span aria-hidden className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none">
+        {divider ? line.new : line.old}
+      </span>
+      <span aria-hidden className={`w-5 shrink-0 select-none ${look.sign}`}>
+        {line.op === "-" ? "−" : line.op}
+      </span>
+      {line.op !== " " && (
+        <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
+      )}
+      <span className="min-w-0 flex-1 pr-3 break-all whitespace-pre-wrap">
+        <LineText line={line} />
+      </span>
+    </div>
+  );
+}
+
 /** A diff's line, wrapping, numbered on both sides, its change named for screen readers. */
 export function DiffLineView({ line }: { line: DiffLine }) {
   return line.op === "@" ? (
@@ -278,17 +404,7 @@ export function DiffLineView({ line }: { line: DiffLine }) {
         <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
       )}
       <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
-        {line.mark ? (
-          <>
-            {line.text.slice(0, line.mark[0])}
-            <span className={line.op === "+" ? "diff-word-added" : "diff-word-removed"}>
-              {line.text.slice(line.mark[0], line.mark[1])}
-            </span>
-            {line.text.slice(line.mark[1])}
-          </>
-        ) : (
-          line.text || " "
-        )}
+        <LineText line={line} />
       </span>
     </div>
   );
