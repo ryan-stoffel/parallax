@@ -56,7 +56,8 @@ fn count(dir: &Path, sql: &str) -> i64 {
 }
 
 /// PLX-1524: a deleted thread's worktree and branch go with it, as always, unless the host's
-/// `deletedThreadWorktrees` is off. Its checkpoints go either way.
+/// `deletedThreadWorktrees` is off. Its checkpoints go either way, except in a scratch repository,
+/// which then stays whole.
 #[test]
 fn a_deleted_threads_worktree_stays_when_the_host_keeps_them() {
     let worktree = || parallax_store::Worktree {
@@ -85,6 +86,26 @@ fn a_deleted_threads_worktree_stays_when_the_host_keeps_them() {
     };
     assert_eq!(cleanup(false), removal(Some(Removal::from(worktree()))));
     assert_eq!(cleanup(true), removal(None));
+
+    // A thread with no repo: its scratch repository stays with its worktree, so nothing is left
+    // to clean up.
+    let scratch = |keep_worktree| {
+        let rows = Rows {
+            scratch: true,
+            keep_worktree,
+            ..Rows::default()
+        };
+        decide_delete(Some(worktree()), rows).effects
+    };
+    assert_eq!(
+        scratch(false),
+        vec![Effect::ThreadCleanup {
+            worktree: Some(Removal::from(worktree())),
+            scratch: true,
+            refs: None,
+        }]
+    );
+    assert_eq!(scratch(true), Vec::new());
 }
 
 /// Effects survive a crash (0059): one left running when plxd died runs again at the next start,

@@ -8460,8 +8460,9 @@ export type HostSettings = {
 	cleanWorktrees?: boolean,
 	/**
 	 * Whether deleting a thread deletes its worktree and branch, whatever they hold (PLX-1524).
-	 * On by default. Off, both stay on disk. This and the four settings after it are plxd's
-	 * worktree rules, which an older plxd, without the `worktreeRules` capability, leaves out.
+	 * On by default. Off, both stay on disk, as does the repository plxd made for a thread with
+	 * none. This and the four settings after it are plxd's worktree rules, which an older plxd,
+	 * without the `worktreeRules` capability, leaves out.
 	 */
 	deletedThreadWorktrees?: boolean,
 	/**

@@ -427,8 +427,9 @@ pub struct HostSettings {
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
     /// Whether deleting a thread deletes its worktree and branch, whatever they hold (PLX-1524).
-    /// On by default. Off, both stay on disk. This and the four settings after it are plxd's
-    /// worktree rules, which an older plxd, without the `worktreeRules` capability, leaves out.
+    /// On by default. Off, both stay on disk, as does the repository plxd made for a thread with
+    /// none. This and the four settings after it are plxd's worktree rules, which an older plxd,
+    /// without the `worktreeRules` capability, leaves out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub deleted_thread_worktrees: Option<bool>,

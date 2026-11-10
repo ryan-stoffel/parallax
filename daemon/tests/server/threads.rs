@@ -9,15 +9,15 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
-    AgentEvents, AgentList, AgentSend, EventsSubscribe, HostHealth, RepoAdd, ThreadArchive,
-    ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
+    AgentEvents, AgentList, AgentSend, EventsSubscribe, HostHealth, HostSettingsSet, RepoAdd,
+    ThreadArchive, ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentEventsParams, AgentListParams, AgentPermission,
     AgentSendParams, AgentStatus, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ParallaxEvent, Provider, RepoAddParams, RepoId, RunId, ScopeId,
-    ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
-    ThreadUpdateParams, TurnId,
+    HostHealthParams, HostSettingsSetParams, ParallaxEvent, Provider, RepoAddParams, RepoId, RunId,
+    ScopeId, ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult,
+    ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started};
@@ -439,6 +439,47 @@ async fn deleting_a_running_thread_stops_its_agent_and_removes_everything() {
 
     let missing = client.delete(params.run_id).await.unwrap_err();
     assert_eq!(kind(&missing), ErrorKind::ThreadNotFound);
+}
+
+/// PLX-1524: with `deletedThreadWorktrees` off, deleting a thread with no repository leaves its
+/// worktree, and the scratch repository that is a worktree of, on disk. Turned on again, both
+/// go, as always.
+#[tokio::test]
+async fn a_deleted_scratch_threads_repository_and_worktree_stay_when_the_host_keeps_them() {
+    let host = Host::start(fake(hang()));
+    let mut client = host.client().await;
+    client.subscribe(0, None).await;
+    let mut threads = Vec::new();
+    for prompt in ["Kept", "Removed"] {
+        let params = start_params(None, prompt);
+        let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+        client.subscribe(0, Some(scope(started.thread.repo))).await;
+        let repository = host.data().join("scratch").join(params.run_id.to_string());
+        let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+        assert!(repository.is_dir() && worktree.is_dir());
+        threads.push((params.run_id, repository, worktree));
+    }
+    let [kept, removed] = [&threads[0], &threads[1]];
+    // Deletes one with `deletedThreadWorktrees` off, then the other with it on.
+    for (thread, deletes) in [(kept, false), (removed, true)] {
+        client
+            .call::<HostSettingsSet>(HostSettingsSetParams {
+                deleted_thread_worktrees: Some(deletes),
+                ..HostSettingsSetParams::default()
+            })
+            .await
+            .unwrap();
+        client.delete(thread.0).await.unwrap();
+    }
+    // The first delete committed before the second, so a cleanup for it would have started first.
+    eventually(
+        "the second thread's repository and worktree are removed",
+        || !removed.1.exists() && !removed.2.exists(),
+    )
+    .await;
+    assert!(kept.1.is_dir(), "the scratch repository stays");
+    assert!(kept.2.is_dir(), "the worktree stays");
+    assert!(client.list().await.threads.is_empty());
 }
 
 #[tokio::test]
