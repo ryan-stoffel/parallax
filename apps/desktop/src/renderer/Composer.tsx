@@ -38,10 +38,17 @@ import Paragraph from "@tiptap/extension-paragraph";
 import Strike from "@tiptap/extension-strike";
 import Text from "@tiptap/extension-text";
 import { Dropcursor, Gapcursor, UndoRedo } from "@tiptap/extensions";
-import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
+import {
+  DOMParser as HtmlParser,
+  Fragment,
+  Slice,
+  type Node as ProseMirrorNode,
+  type Schema,
+} from "@tiptap/pm/model";
 import type { EditorState } from "@tiptap/pm/state";
 import {
   EditorContent,
+  isMacOS,
   markInputRule,
   wrappingInputRule,
   type Mark,
@@ -106,7 +113,7 @@ import { uploadFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { ScrollThumb } from "./ScrollThumb";
 import { dismiss, notify } from "./notifications";
-import { behaviorPrefs, newThreadPrefs, type RepoPrefs } from "./prefs";
+import { behaviorPrefs, chatPrefs, newThreadPrefs, type RepoPrefs } from "./prefs";
 import { accessLevels } from "./catalog";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { RepoIcon } from "./Sidebar";
@@ -616,6 +623,33 @@ const toMarkdown = (node: ProseMirrorNode, naming: Naming = {}) =>
 const hasText = (html: string) =>
   !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
 
+// Copied HTML as plain text, a line for each block the editor's parser reads in it.
+const htmlText = (html: string, schema: Schema) => {
+  const body = new DOMParser().parseFromString(html, "text/html").body;
+  const doc = HtmlParser.fromSchema(schema).parse(body);
+  return doc.textBetween(0, doc.content.size, "\n");
+};
+
+/**
+ * Whether a key press is one of the editor's formatting shortcuts, as its extensions bind them:
+ * Mod with B, I, or E (bold, italic, code), with Shift and S, B, I, 7, 8, or 9 (strike, quote,
+ * bold, italic, lists), or with Alt and 1 to 6 or C (headings, code block).
+ */
+function formats(event: KeyboardEvent) {
+  const mac = isMacOS();
+  if (!(mac ? event.metaKey : event.ctrlKey)) return false;
+  const typed = /^[a-z0-9]$/i.test(event.key);
+  // Ctrl+Alt off macOS is how Windows reports AltGr, which types a character, as "@" for
+  // AltGr+2 on a Spanish keyboard: only what it types counts, as in the editor's own keymaps.
+  if (!typed && !mac && event.altKey) return false;
+  // The key by its place where Shift or Alt change what it types, as "*" for 8.
+  const key = typed
+    ? event.key.toLowerCase()
+    : event.code.replace(/^(Key|Digit)/, "").toLowerCase();
+  if (event.altKey) return !event.shiftKey && /^[1-6c]$/.test(key);
+  return (event.shiftKey ? /^[sbi789]$/ : /^[bie]$/).test(key);
+}
+
 // The most base64 one image can be: an even share of the total cap, so any number of them up to
 // the most fits it.
 const imageShare = ({ maxImages, maxImageBytes, maxTotalBytes }: ImageCaps) =>
@@ -993,7 +1027,8 @@ const lineWidth = 480;
 
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
- * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
+ * Markdown text; with Settings > Appearance > Chat's Rich text composer off, it shows the text as
+ * typed. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
  * block Enter adds a line and Cmd/Ctrl+Enter sends. With `onSteer`, that press steers the active
  * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
  * through it, anywhere in the box. Settings > General's send shortcut can make Cmd/Ctrl+Enter
@@ -1910,7 +1945,17 @@ export function Composer({
         class:
           "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.625rem))] min-h-[calc(1.625em+1.625rem)] overflow-y-auto px-4.5 pt-4 pb-2.5 focus-visible:outline-none",
       },
+      // With Settings > Appearance > Chat's Rich text composer off, typed text goes in as it is,
+      // ahead of the rules that format its Markdown, and is sent the same (PLX-1519).
+      handleTextInput: (view, _from, _to, _text, insert) => {
+        if (chatPrefs.get().richComposer) return false;
+        view.dispatch(insert());
+        return true;
+      },
       handleKeyDown: (view, event): boolean => {
+        // With Rich text composer off, the editor's formatting shortcuts do nothing: this runs
+        // ahead of their keymaps.
+        if (!chatPrefs.get().richComposer && formats(event)) return true;
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
         if (menuOpen && plain && !event.isComposing) {
           const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
@@ -1968,7 +2013,7 @@ export function Composer({
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of
         // code, or out of an empty list item. A line of just ``` or ```lang starts a code block,
-        // as ``` and a space does.
+        // as ``` and a space does, while the box formats Markdown.
         return (
           (event.shiftKey || modEnter) &&
           editor.commands.first(({ commands }) => [
@@ -1978,6 +2023,7 @@ export function Composer({
               const fence = /^```([a-z]*)$/.exec($from.parent.textContent);
               return (
                 !!fence &&
+                chatPrefs.get().richComposer &&
                 commands.deleteRange({ from: $from.start(), to: $from.end() }) &&
                 commands.setCodeBlock(fence[1] ? { language: fence[1] } : undefined)
               );
@@ -1993,13 +2039,16 @@ export function Composer({
       // image where it was pasted, so a copied file's name or an image's URL never lands in it.
       // What was copied from the box itself pastes as it was, chips and formatting included. Text copied from an app (Office, Notes, a web page)
       // can carry a picture of itself too: when its HTML has text of its own, it's text. Text is
-      // plain only, so nothing brings in its source's styling. Anything else falls through to the
-      // editor, which drops it.
+      // plain only, so nothing brings in its source's styling. HTML with no text beside it falls
+      // through to the editor, which reads its formatting; with Settings > Appearance > Chat's
+      // Rich text composer off, it goes in as its text instead (PLX-1519).
       handleDOMEvents: {
         paste: (view, event) => {
           const data = event.clipboardData;
-          const text = data?.getData("text/plain");
           const html = data?.getData("text/html");
+          const text =
+            data?.getData("text/plain") ||
+            (html && !chatPrefs.get().richComposer ? htmlText(html, view.state.schema) : "");
           // Chips copied or cut from a box like this one: the editor reads its own HTML back, so
           // they stay chips. Only the box's own chips are marked, so a copy from another editor
           // (Linear's, with its links) still pastes as its plain text.

@@ -25,7 +25,7 @@ import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import "./markdownTest";
 import { Notifications } from "./notifications";
-import { setBehaviorPrefs, type BehaviorPrefs } from "./prefs";
+import { chatDefaults, setBehaviorPrefs, setChatPrefs, type BehaviorPrefs } from "./prefs";
 import { ThreadLinksContext } from "./threadContext";
 import { emptyThreads, type ThreadsState } from "./threads";
 import type { Item } from "./transcript";
@@ -119,6 +119,38 @@ test("an assistant message renders Markdown, but never raw HTML or images", asyn
   expect(document.body.textContent).toContain("<img src=x onerror=alert(1)>");
   const links = [...document.querySelectorAll("a")];
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
+});
+
+test("with Render math off, LaTeX shows as its source (PLX-1519)", () => {
+  const display = "$$\na &= b \\\\\nc &= d_1 * d_2\n$$";
+  row({
+    kind: "assistant",
+    key: "a",
+    text: `As \`$a*b$\` in *code*, so $a*b*c$ in $\\{x\\}$ and \\(y^2\\,z\\), for $5:\n\n${display}\n\n\\[\nz = 1\n\\]`,
+  });
+  const math = () =>
+    [...document.querySelectorAll('[role="math"]')].map((m) =>
+      m.getAttribute("aria-label")?.trim(),
+    );
+  expect(math()).toEqual(["a*b*c", "\\{x\\}", "y^2\\,z", "a &= b \\\\ c &= d_1 * d_2", "z = 1"]);
+  // An open thread's messages follow the setting at once: the math exactly as written, with
+  // \(...\) and \[...\] in dollars, and the text and code around it read as Markdown still.
+  act(() => setChatPrefs({ math: false }));
+  expect(math()).toEqual([]);
+  // Each paragraph's text, a line for each of its line breaks.
+  const lines = [...document.querySelectorAll("p")].map((p) => {
+    const copy = p.cloneNode(true) as HTMLElement;
+    for (const br of copy.querySelectorAll("br")) br.replaceWith("\n");
+    return copy.textContent;
+  });
+  expect(lines).toEqual([
+    "As $a*b$ in code, so $a*b*c$ in $\\{x\\}$ and $y^2\\,z$, for $5:",
+    display,
+    "$$\nz = 1\n$$",
+  ]);
+  expect(document.querySelector("code")?.textContent).toBe("$a*b$");
+  expect(document.querySelector("em")?.textContent).toBe("code");
+  act(() => setChatPrefs(chatDefaults));
 });
 
 test("a streaming message renders as the whole text does, at every line", async () => {

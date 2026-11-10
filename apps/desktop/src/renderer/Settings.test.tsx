@@ -18,6 +18,8 @@ import { Notifications } from "./notifications";
 import {
   behaviorDefaults,
   behaviorPrefs,
+  chatDefaults,
+  chatPrefs,
   newThreadDefaults,
   newThreadPrefs,
   setBehaviorPrefs,
@@ -364,6 +366,26 @@ test("Worktrees starts on All computers, says where they differ, and sets them a
   request.mockImplementation(original);
   states[mini.id] = failed;
   delete answers["host/settings/set"];
+});
+
+test("Appearance's Chat keeps its settings on this computer, and search finds each of its rows (PLX-1519)", async () => {
+  await renderSettings("appearance");
+  const chat = section("Chat");
+  for (const title of ["Rich text composer", "Render math", "Tool calls"]) {
+    const found = searchSettings(title)[0]!;
+    expect(found).toMatchObject({ section: "appearance", title, place: "Appearance › Chat" });
+    expect(chat.querySelector(`[data-setting="${found.anchor}"]`)).not.toBeNull();
+  }
+
+  await click(chat.querySelector<HTMLElement>('[role="switch"][aria-label="Render math"]')!);
+  await click(
+    [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+      (o) => o.textContent === "Zen",
+    )!,
+  );
+  expect(chatPrefs.get()).toEqual({ richComposer: true, math: false, toolCalls: "zen" });
+  expect(JSON.parse(localStorage.getItem("parallax.chat")!)).toEqual(chatPrefs.get());
+  chatPrefs.set(chatDefaults);
 });
 
 test("About copies its version, and its bug report link fills the version in", async () => {

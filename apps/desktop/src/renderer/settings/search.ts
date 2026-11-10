@@ -247,6 +247,19 @@ export const settingsIndex: SettingEntry[] = [
     ],
     ["Word wrap", "Wrap long lines in code by default", "wrap lines long"],
   ]),
+  ...entries("appearance", "Chat", [
+    [
+      "Rich text composer",
+      "Format Markdown as you type",
+      "markdown formatting plain prompt box editor bold lists",
+    ],
+    ["Render math", "Typeset LaTeX in messages", "latex katex tex equations formulas"],
+    [
+      "Tool calls",
+      "The commands, edits, and searches a thread shows",
+      "zen hide successful failed thinking activity work steps focus quiet",
+    ],
+  ]),
   ...entries("appearance", "Sidebar", [
     [
       "Layout",

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { closeHistory } from "@tiptap/pm/history";
-import type { TiptapEditorHTMLElement } from "@tiptap/react";
+import { isMacOS, type TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
@@ -11,7 +11,14 @@ import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 import { PullRequestsContext } from "./Mention";
 import { Notifications } from "./notifications";
-import { behaviorDefaults, newThreadDefaults, newThreadPrefs, setBehaviorPrefs } from "./prefs";
+import {
+  behaviorDefaults,
+  chatDefaults,
+  newThreadDefaults,
+  newThreadPrefs,
+  setBehaviorPrefs,
+  setChatPrefs,
+} from "./prefs";
 import type { PullRequests } from "./PullRequests";
 import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
@@ -55,6 +62,7 @@ afterEach(() => {
   localStorage.removeItem("parallax.promptsBeforeSupportAsk");
   newThreadPrefs.set(newThreadDefaults);
   setBehaviorPrefs(behaviorDefaults);
+  setChatPrefs(chatDefaults);
   vi.useRealTimers();
 });
 
@@ -163,6 +171,80 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
     [],
   );
   expect(box.textContent).toBe("");
+});
+
+test("with Rich text composer off, Markdown shows as typed and is sent the same (PLX-1519)", async () => {
+  setChatPrefs({ richComposer: false });
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = render(onSend);
+  type("- first, **all** of it");
+  await press("Enter", { shiftKey: true });
+  type("```");
+  await press("Enter", { shiftKey: true });
+  type("# not a heading");
+  expect(box.querySelector("ul, strong, pre, h1")).toBeNull();
+  expect([...box.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+    "- first, **all** of it",
+    "```",
+    "# not a heading",
+  ]);
+
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("- first, **all** of it\n```\n# not a heading", {}, [], []);
+});
+
+test("with Rich text composer off, pasted Markdown and copied HTML go in as plain text (PLX-1519)", async () => {
+  setChatPrefs({ richComposer: false });
+  const { box, paste } = render(vi.fn(async () => undefined));
+  const formatted = "<p><strong>bold</strong> text</p><ul><li>item</li></ul>";
+  await paste([], { "text/plain": "**bold**\n- item" });
+  expect(box.innerHTML).toBe("<p>**bold**</p><p>- item</p>");
+
+  // A web page's copy is its text, with or without plain text beside its HTML.
+  act(() => void box.editor!.commands.clearContent());
+  await paste([], { "text/plain": "bold text\nitem", "text/html": formatted });
+  expect(box.innerHTML).toBe("<p>bold text</p><p>item</p>");
+  act(() => void box.editor!.commands.clearContent());
+  await paste([], { "text/html": formatted });
+  expect(box.innerHTML).toBe("<p>bold text</p><p>item</p>");
+});
+
+test("with Rich text composer off, the formatting shortcuts do nothing (PLX-1519)", async () => {
+  const { box, type, press } = render(vi.fn(async () => undefined));
+  const mod = isMacOS() ? { metaKey: true } : { ctrlKey: true };
+  // On, as it starts: Mod+B makes what's typed next bold.
+  await press("b", mod);
+  type("bold");
+  expect(box.innerHTML).toBe("<p><strong>bold</strong></p>");
+
+  act(() => void box.editor!.commands.clearContent());
+  setChatPrefs({ richComposer: false });
+  await press("b", mod);
+  // Shift+8 types "*", so the list's shortcut is read by the key's place.
+  await press("*", { ...mod, shiftKey: true, code: "Digit8" });
+  type("plain");
+  expect(box.innerHTML).toBe("<p>plain</p>");
+
+  // Windows reports AltGr as Ctrl+Alt. AltGr+2 types "@" on a Spanish keyboard, so it isn't the
+  // heading's shortcut, which Ctrl+Alt+1 still is.
+  Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+  onTestFinished(() => void Reflect.deleteProperty(navigator, "platform"));
+  const swallowed = (key: string, code: string) => {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      code,
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => void box.dispatchEvent(event));
+    return event.defaultPrevented;
+  };
+  expect(swallowed("@", "Digit2")).toBe(false);
+  type("@");
+  expect(swallowed("1", "Digit1")).toBe(true);
+  expect(box.innerHTML).toBe("<p>plain@</p>");
 });
 
 test("scrolling up steps back with the caret in an empty box, until the text is pressed", () => {

@@ -1120,6 +1120,51 @@ export function groupWork<R extends { kind: string; at?: string }>(
   return out;
 }
 
+/** Which of the agent's work a transcript shows (Settings > Appearance > Chat, PLX-1519). */
+export type ToolCallVisibility = "showAll" | "hideSuccessful" | "hideAll" | "zen";
+
+// What Zen hides besides the agent's messages before each answer: its steps.
+const zenHidden = new Set(["reasoning", "tool", "todo", "plan"]);
+
+/**
+ * A transcript's rows as `show` has them, folded by `groupWork`, as T3 Code's `toolCallVisibility`
+ * does. `hideSuccessful` drops the tool calls that finished without failing, and `hideAll` every
+ * one; a call that started a subagent stays, since it shows as the subagent's card. `zen` leaves
+ * the user's messages and each turn's answer, its last message, with no folds: calls, thinking,
+ * checklists, and the messages between go, and so does every message of a turn still `going`,
+ * whose answer isn't known yet. Requests, notices, ends, and what the agent presented stay in
+ * every mode.
+ */
+export function shownRows<R extends { kind: string; at?: string }>(
+  rows: readonly (Item | R)[],
+  show: ToolCallVisibility,
+  going: boolean,
+): (Item | R | Work)[] {
+  if (show === "showAll") return groupWork(rows);
+  if (show !== "zen")
+    return groupWork(
+      rows.filter((row) => {
+        if (row.kind !== "tool") return true;
+        const call = row as Extract<Item, { kind: "tool" }>;
+        return isSubagentTool(call.name) || (show === "hideSuccessful" && call.status !== "ok");
+      }),
+    );
+  // A turn's answer is known once a prompt or the process's end follows it.
+  const answers = new Set<Item | R>();
+  let last: Item | R | undefined;
+  for (const row of rows) {
+    if (row.kind === "assistant") last = row;
+    else if (row.kind === "user" || row.kind === "pending" || row.kind === "end") {
+      if (last) answers.add(last);
+      last = undefined;
+    }
+  }
+  if (last && !going) answers.add(last);
+  return rows.filter((row) =>
+    row.kind === "assistant" ? answers.has(row) : !zenHidden.has(row.kind),
+  );
+}
+
 /**
  * A run of steps with each run of subagent calls in it as one `Work` of `subagents` (PLX-843), and
  * the steps between as their own `Work`s, or alone when they're only notices.

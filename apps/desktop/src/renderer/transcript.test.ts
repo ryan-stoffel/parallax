@@ -7,6 +7,7 @@ import {
   applyEvents,
   emptyTranscript,
   rebuild,
+  shownRows,
   subagentRows,
   subagentState,
   trackApprovals,
@@ -14,6 +15,7 @@ import {
   waitingSecrets,
   type Item,
   type Subagent,
+  type ToolCallVisibility,
 } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -757,4 +759,81 @@ test("a tool call announced without its input fills in when it repeats whole (PL
   const tools = of(t.items, "tool");
   expect(tools).toHaveLength(1);
   expect(tools[0]).toMatchObject({ callId: "c1", input: { file_path: "a.txt" }, status: "ok" });
+});
+
+test("each Tool calls mode shows its rows: all, all but the calls that passed, no calls, or only answers (PLX-1519)", () => {
+  // A turn that ended, with a call that passed, one that failed, and a file card, then a turn
+  // with a call running and a subagent.
+  const rows: Item[] = [
+    { kind: "user", key: "ask", text: "Fix it" },
+    { kind: "reasoning", key: "thought", text: "Look first" },
+    { kind: "tool", key: "passed", callId: "1", name: "Read", status: "ok" },
+    { kind: "assistant", key: "found", text: "Found it." },
+    { kind: "tool", key: "failed", callId: "2", name: "Bash", status: "error" },
+    {
+      kind: "approval",
+      key: "approval",
+      request: { approvalId: "a1", toolName: "Bash", input: {}, expiresAt: "" },
+      resolved: { decision: "allowed", by: "user" },
+    },
+    { kind: "files", key: "card", files: [] },
+    { kind: "assistant", key: "fixed", text: "Fixed." },
+    { kind: "end", key: "end", outcome: { status: "completed" } },
+    { kind: "user", key: "follow-up", text: "And the tests" },
+    { kind: "assistant", key: "running", text: "Running them." },
+    { kind: "tool", key: "running-call", callId: "3", name: "Bash" },
+    { kind: "tool", key: "subagent", callId: "4", name: "Agent" },
+  ];
+  // Each row by its key, a fold or run of steps as its items' in brackets.
+  const shown = (show: ToolCallVisibility, going = true) =>
+    shownRows(rows, show, going).map((row) =>
+      row.kind === "work" ? `[${row.items.map((i) => i.key).join(" ")}]` : row.key,
+    );
+
+  expect(shown("showAll")).toEqual([
+    "ask",
+    "[thought passed found failed approval]",
+    "card",
+    "fixed",
+    "end",
+    "follow-up",
+    "running",
+    "[running-call]",
+    "[subagent]",
+  ]);
+  // Failed and running calls stay.
+  expect(shown("hideSuccessful")).toEqual([
+    "ask",
+    "[thought found failed approval]",
+    "card",
+    "fixed",
+    "end",
+    "follow-up",
+    "running",
+    "[running-call]",
+    "[subagent]",
+  ]);
+  // Thinking stays, and a subagent's card.
+  expect(shown("hideAll")).toEqual([
+    "ask",
+    "[thought found approval]",
+    "card",
+    "fixed",
+    "end",
+    "follow-up",
+    "running",
+    "[subagent]",
+  ]);
+  // No folds, and no message of the turn still going, whose working line TranscriptView adds.
+  expect(shown("zen")).toEqual(["ask", "approval", "card", "fixed", "end", "follow-up"]);
+  // Once it's over, its last message is its answer.
+  expect(shown("zen", false)).toEqual([
+    "ask",
+    "approval",
+    "card",
+    "fixed",
+    "end",
+    "follow-up",
+    "running",
+  ]);
 });

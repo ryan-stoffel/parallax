@@ -8,6 +8,7 @@ import {
 } from "../../preload/bridge";
 import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
+import { chatPrefs, setChatPrefs, type ChatPrefs } from "../prefs";
 import { navChoices } from "../SidebarNav";
 import {
   archivePageSize,
@@ -100,7 +101,7 @@ const materials: { value: WindowMaterial; name: string }[] = [
 
 /**
  * Settings > Appearance: the theme for each mode and the colors changed over it, the window's
- * background, text, and the sidebar. Contrast, motion, and diff colors are Accessibility's.
+ * background, text, chat, and the sidebar. Contrast, motion, and diff colors are Accessibility's.
  */
 export function AppearanceSettings({
   theme,
@@ -348,8 +349,63 @@ export function AppearanceSettings({
 
       <TypographySettings />
 
+      <ChatSettings />
+
       <SidebarSettings />
     </>
+  );
+}
+
+const toolCalls: { value: ChatPrefs["toolCalls"]; label: string }[] = [
+  { value: "showAll", label: "Show all" },
+  { value: "hideSuccessful", label: "Hide successful" },
+  { value: "hideAll", label: "Hide all" },
+  { value: "zen", label: "Zen" },
+];
+
+/**
+ * Appearance's Chat (PLX-1519), as T3 Code's chat settings: whether the composer formats Markdown,
+ * whether messages typeset math, and which tool calls a thread shows.
+ */
+function ChatSettings() {
+  const prefs = chatPrefs.use();
+  return (
+    <Section title="Chat">
+      <Row
+        title="Rich text composer"
+        description="Format Markdown as you type. Off, the box shows it as typed."
+      >
+        <Switch
+          label="Rich text composer"
+          checked={prefs.richComposer}
+          onChange={(richComposer) => setChatPrefs({ richComposer })}
+        />
+      </Row>
+      <Row
+        title="Render math"
+        description="Typeset LaTeX, such as $x^2$, in messages. Off, it shows as its source."
+      >
+        <Switch
+          label="Render math"
+          checked={prefs.math}
+          onChange={(math) => setChatPrefs({ math })}
+        />
+      </Row>
+      <Row
+        title="Tool calls"
+        description="The commands, edits, and searches a thread shows. Hide successful keeps the ones that failed. Zen shows only each turn's answer. Approvals, questions, and errors always show."
+      >
+        <Picker
+          field
+          label="Tool calls"
+          value={prefs.toolCalls}
+          onChange={(v) => setChatPrefs({ toolCalls: v as ChatPrefs["toolCalls"] })}
+          options={toolCalls}
+          className="w-48"
+          panelClassName="min-w-48"
+        />
+      </Row>
+    </Section>
   );
 }
 
