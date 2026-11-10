@@ -829,7 +829,41 @@ impl WorktreeManager {
         Ok(())
     }
 
-    /// Puts back a run's worktree at `path` after the merged-worktree sweep removed it (PLX-781),
+    /// Removes `worktree_path` from `repo_path`'s repository and keeps its branch, whose commits
+    /// may exist nowhere else: how the sweep removes an inactive thread's worktree (PLX-1524),
+    /// which [`Self::restore`] makes again. Its files go whatever state they are in, so the caller
+    /// checks it has no uncommitted changes first. Refuses a path outside plxd's worktrees folder.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::Io`] for a path outside the worktrees folder,
+    /// [`WorktreeError::NotAGitRepo`], or [`WorktreeError::GitFailed`],
+    /// [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] removing the worktree.
+    pub async fn remove_keeping_branch(
+        &self,
+        repo_path: &Path,
+        worktree_path: &Path,
+    ) -> Result<(), WorktreeError> {
+        if !worktree_path.starts_with(&self.root) {
+            return Err(WorktreeError::Io {
+                path: worktree_path.to_owned(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "refusing to remove a folder outside plxd's worktrees folder",
+                ),
+            });
+        }
+        let repo_root = self.repo_root(repo_path).await?;
+        let _guard = self.lock_repo(&repo_root).await;
+
+        let path_arg = worktree_path.to_string_lossy().into_owned();
+        self.run_git_ok(&repo_root, &["worktree", "remove", "--force", &path_arg])
+            .await?;
+        let _ = self.run_git(&repo_root, &["worktree", "prune"]).await;
+        Ok(())
+    }
+
+    /// Puts back a run's worktree at `path` after a cleanup sweep removed it (PLX-781, PLX-1524),
     /// so a message to its thread can resume there. `branch` is checked out when it still exists,
     /// and otherwise made again from origin's default branch, fetched first, which holds the
     /// merged work. Returns the new worktree's git folder, to pin as [`CreatedWorktree::git_dir`]

@@ -92,6 +92,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("hostUpdate".to_owned(), serde_json::Map::new()),
             ("hubAccounts".to_owned(), serde_json::Map::new()),
             ("hubs".to_owned(), serde_json::Map::new()),
+            ("inactiveWorktrees".to_owned(), serde_json::Map::new()),
             ("inbox".to_owned(), serde_json::Map::new()),
             ("integrationBranch".to_owned(), serde_json::Map::new()),
             ("landing".to_owned(), serde_json::Map::new()),
@@ -230,6 +231,37 @@ async fn the_branch_prefix_is_saved_and_a_bad_one_is_refused() {
     assert_eq!(refused.code, INVALID_PARAMS);
     let cleared = set("").await.unwrap();
     assert_eq!(cleared.branch_prefix.as_deref(), Some(""));
+}
+
+/// PLX-1524: `inactiveWorktreeDays` starts off, as 0, takes 1 to 3650 days, and refuses more.
+#[tokio::test]
+async fn the_inactive_worktree_days_are_saved_and_too_many_are_refused() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
+    client.initialize().await.unwrap();
+    let settings = client
+        .call::<HostSettingsGet>(HostSettingsGetParams::default())
+        .await
+        .unwrap();
+    assert_eq!(settings.inactive_worktree_days, Some(0));
+
+    let mut set = async |days: u32| {
+        client
+            .call::<HostSettingsSet>(HostSettingsSetParams {
+                inactive_worktree_days: Some(days),
+                ..HostSettingsSetParams::default()
+            })
+            .await
+    };
+    let saved = set(30).await.unwrap();
+    assert_eq!(saved.inactive_worktree_days, Some(30));
+    let refused = set(3651).await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let off = set(0).await.unwrap();
+    assert_eq!(off.inactive_worktree_days, Some(0));
+    // The other settings are as they were.
+    assert_eq!(off.clean_worktrees, Some(true));
 }
 
 /// `host/updating` follows the answer to `initialize`, since `service install`'s probe reads that

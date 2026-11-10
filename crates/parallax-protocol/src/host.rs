@@ -305,6 +305,11 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
+    /// The new `inactiveWorktreeDays`, behind the `inactiveWorktrees` capability: 0 turns it off,
+    /// and 1 to 3650 is the number of days. Absent leaves it. More fails with `invalidParams`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub inactive_worktree_days: Option<u32>,
     /// The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
     /// thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch
     /// name with: letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`, at most 64 bytes.
@@ -365,6 +370,13 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
+    /// The days a thread goes without activity before plxd deletes its worktree, when the worktree
+    /// has no uncommitted changes (PLX-1524). 0, the default, is off. The local branch, the thread,
+    /// and its transcript stay, and a later message makes the worktree again. An older plxd,
+    /// without the `inactiveWorktrees` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub inactive_worktree_days: Option<u32>,
     /// What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
     /// made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]

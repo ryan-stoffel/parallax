@@ -388,6 +388,51 @@ test("Appearance's Chat keeps its settings on this computer, and search finds ea
   chatPrefs.set(chatDefaults);
 });
 
+test("Worktrees deletes inactive worktrees after the days set, where plxd can", async () => {
+  const before = states["local"]!;
+  const older = { ...before, capabilities: { worktreeCleanup: {} } } as ConnectionState;
+  states["local"] = older;
+  answers["host/settings/get"] = () => ({ result: { autoResume: false, cleanWorktrees: true } });
+  await renderSettings("worktrees");
+  const row = () => document.querySelector('[data-setting="delete-inactive-worktrees"]')!;
+  const toggle = () => row().querySelector<HTMLButtonElement>('[role="switch"]')!;
+  const days = () => row().querySelector<HTMLInputElement>("input");
+  // An older plxd ignores the setting.
+  expect(row().textContent).toContain("This plxd can't delete inactive worktrees.");
+  expect(toggle().disabled).toBe(true);
+  act(() => unmount());
+
+  states["local"] = {
+    ...before,
+    capabilities: { worktreeCleanup: {}, inactiveWorktrees: {} },
+  } as ConnectionState;
+  answers["host/settings/get"] = () => ({ result: { autoResume: false, inactiveWorktreeDays: 0 } });
+  answers["host/settings/set"] = (p) => ({ result: { autoResume: false, ...p } });
+  await renderSettings("worktrees");
+  const sent = () => calls("host/settings/set").map((c) => c.params);
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
+  expect(days()).toBeNull();
+
+  await click(toggle());
+  expect(sent()).toEqual([{ inactiveWorktreeDays: 30 }]);
+  expect(days()!.value).toBe("30");
+  // Out of range goes back to what's saved, and a number of days is saved.
+  for (const typed of ["0", "7"]) {
+    await act(async () => {
+      days()!.value = typed;
+      days()!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    await settle();
+  }
+  expect(sent()).toEqual([{ inactiveWorktreeDays: 30 }, { inactiveWorktreeDays: 7 }]);
+  expect(days()!.value).toBe("7");
+
+  await click(toggle());
+  expect(sent().at(-1)).toEqual({ inactiveWorktreeDays: 0 });
+  expect(days()).toBeNull();
+  states["local"] = before;
+});
+
 test("About copies its version, and its bug report link fills the version in", async () => {
   const writeText = vi.fn(async () => {});
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

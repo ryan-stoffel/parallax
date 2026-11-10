@@ -21,6 +21,10 @@ const CONTINUE_AFTER_RESTART: &str = "continue_after_restart";
 /// request merges (PLX-555).
 const CLEAN_WORKTREES: &str = "clean_worktrees";
 
+/// The `host_settings` key for the days without activity after which plxd removes a thread's
+/// worktree (PLX-1524).
+const INACTIVE_WORKTREE_DAYS: &str = "inactive_worktree_days";
+
 /// The `host_settings` key for what a new thread's branch starts with (PLX-1249).
 const BRANCH_PREFIX: &str = "branch_prefix";
 
@@ -187,6 +191,29 @@ impl Store {
     /// A database error.
     pub fn set_clean_worktrees(&self, on: bool) -> Result<(), StoreError> {
         self.set_flag(CLEAN_WORKTREES, on)
+    }
+
+    /// The days a thread goes without activity before plxd removes its worktree (PLX-1524).
+    /// `None`, off, when never set, set to 0, or unreadable.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn inactive_worktree_days(&self) -> Result<Option<u32>, StoreError> {
+        Ok(self
+            .text(INACTIVE_WORKTREE_DAYS)?
+            .and_then(|days| days.parse().ok())
+            .filter(|days| *days > 0))
+    }
+
+    /// Sets the days without activity after which plxd removes a thread's worktree. 0 turns it
+    /// off. The caller checks the range.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_inactive_worktree_days(&self, days: u32) -> Result<(), StoreError> {
+        self.set_text(INACTIVE_WORKTREE_DAYS, Some(&days.to_string()))
     }
 
     /// What a new thread's branch starts with, if it was ever set. An empty one means none.
@@ -616,8 +643,9 @@ impl Store {
 mod tests {
     use crate::Store;
 
-    /// A fresh install has auto-resume (0060), continuing after a restart, remote access, and
-    /// Parallax Connect off, and worktree cleanup on. Each setting changes alone.
+    /// A fresh install has auto-resume (0060), continuing after a restart, remote access,
+    /// Parallax Connect, and deleting inactive worktrees off, and worktree cleanup on. Each setting
+    /// changes alone.
     #[test]
     fn host_settings_start_safe_and_change_independently() {
         let dir = tempfile::tempdir().unwrap();
@@ -627,6 +655,7 @@ mod tests {
         assert!(!store.remote().unwrap());
         assert!(!store.connect().unwrap());
         assert!(store.clean_worktrees().unwrap());
+        assert_eq!(store.inactive_worktree_days().unwrap(), None);
 
         store.set_auto_resume(true).unwrap();
         store.set_remote(true).unwrap();
@@ -639,6 +668,12 @@ mod tests {
 
         store.set_branch_prefix("").unwrap();
         assert_eq!(store.branch_prefix().unwrap().as_deref(), Some(""));
+
+        store.set_inactive_worktree_days(30).unwrap();
+        assert_eq!(store.inactive_worktree_days().unwrap(), Some(30));
+        assert!(store.clean_worktrees().unwrap());
+        store.set_inactive_worktree_days(0).unwrap();
+        assert_eq!(store.inactive_worktree_days().unwrap(), None);
 
         store.set_clean_worktrees(false).unwrap();
         store.set_connect(true).unwrap();

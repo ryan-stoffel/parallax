@@ -8459,6 +8459,13 @@ export type HostSettings = {
 	 */
 	cleanWorktrees?: boolean,
 	/**
+	 * The days a thread goes without activity before plxd deletes its worktree, when the worktree
+	 * has no uncommitted changes (PLX-1524). 0, the default, is off. The local branch, the thread,
+	 * and its transcript stay, and a later message makes the worktree again. An older plxd,
+	 * without the `inactiveWorktrees` capability, leaves it out.
+	 */
+	inactiveWorktreeDays?: number,
+	/**
 	 * What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
 	 * made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
 	 */
@@ -8519,6 +8526,11 @@ export type HostSettingsSetParams = {
 	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
 	 */
 	cleanWorktrees?: boolean,
+	/**
+	 * The new `inactiveWorktreeDays`, behind the `inactiveWorktrees` capability: 0 turns it off,
+	 * and 1 to 3650 is the number of days. Absent leaves it. More fails with `invalidParams`.
+	 */
+	inactiveWorktreeDays?: number,
 	/**
 	 * The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
 	 * thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch

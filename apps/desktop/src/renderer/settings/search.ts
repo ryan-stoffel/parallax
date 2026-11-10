@@ -409,6 +409,11 @@ export const settingsIndex: SettingEntry[] = [
       "Delete a worktree and branch once its pull request merges",
       "remove",
     ],
+    [
+      "Delete inactive worktrees",
+      "Delete a worktree once its thread has had no activity for a number of days",
+      "remove old stale unused idle days retention disk space",
+    ],
   ]),
   ...entries("sourceControl", "Pull requests", [
     [

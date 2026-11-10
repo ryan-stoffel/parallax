@@ -226,6 +226,9 @@ pub(crate) fn initialize(
 /// `worktreeCleanup` (PLX-555): `cleanWorktrees` in `host/settings`, which an older plxd would
 /// silently ignore, and the sweep that removes a settled thread's merged worktree. `branchPrefix`
 /// (PLX-1249): `branchPrefix` in `host/settings`, which an older plxd would silently ignore.
+/// `inactiveWorktrees` (PLX-1524): `inactiveWorktreeDays` in `host/settings`, which an older plxd
+/// would silently ignore, and the sweep that removes a worktree whose thread has had no activity
+/// for that many days.
 /// `connect`
 /// (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which an older
 /// plxd would silently ignore, `connect/devices`, and the tailnet listener. `terminals` (PLX-637):
@@ -374,6 +377,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "hostUpdate",
     "hubAccounts",
     "hubs",
+    "inactiveWorktrees",
     "inbox",
     "integrationBranch",
     "landing",
@@ -843,6 +847,7 @@ pub(crate) async fn set_settings(
         auto_resume,
         continue_after_restart,
         clean_worktrees,
+        inactive_worktree_days,
         branch_prefix,
         connect,
         remote,
@@ -852,6 +857,11 @@ pub(crate) async fn set_settings(
         device_name,
         device_icon,
     } = params;
+    if inactive_worktree_days.is_some_and(|days| days > MAX_INACTIVE_WORKTREE_DAYS) {
+        return Err(ErrorObject::invalid_params(
+            "inactiveWorktreeDays: use 0 for off, or 1 to 3650 days",
+        ));
+    }
     // Other computers arrive at the remote listener, so the two go on and off together, and an
     // explicit `remote: false` wins.
     let remote = remote.or(agent_work.filter(|on| *on));
@@ -893,6 +903,14 @@ pub(crate) async fn set_settings(
                 info!(
                     clean_worktrees = on,
                     "changed the host's worktree cleanup setting"
+                );
+            }
+            if let Some(days) = inactive_worktree_days {
+                db.set_inactive_worktree_days(days)
+                    .map_err(|e| store_error(&e))?;
+                info!(
+                    inactive_worktree_days = days,
+                    "changed when the host deletes inactive worktrees"
                 );
             }
             if let Some(prefix) = &stored_prefix {
@@ -954,6 +972,9 @@ pub(crate) async fn set_settings(
     Ok(settings)
 }
 
+/// The most days `inactiveWorktreeDays` takes: ten years, as T3 Code's.
+const MAX_INACTIVE_WORKTREE_DAYS: u32 = 3650;
+
 /// `deviceName` as stored: without control characters, trimmed, and at most
 /// [`MAX_DEVICE_NAME_CHARS`] characters. `None` clears it, as `""` does.
 fn clean_device_name(name: &str) -> Option<String> {
@@ -981,6 +1002,11 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
         continue_after_restart: Some(db.continue_after_restart().map_err(|e| store_error(&e))?),
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
+        inactive_worktree_days: Some(
+            db.inactive_worktree_days()
+                .map_err(|e| store_error(&e))?
+                .unwrap_or(0),
+        ),
         branch_prefix: Some(
             db.branch_prefix()
                 .map_err(|e| store_error(&e))?

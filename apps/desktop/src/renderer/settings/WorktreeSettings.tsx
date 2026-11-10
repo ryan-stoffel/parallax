@@ -11,6 +11,10 @@ import { allHosts, HostPicker, hostsOf, PageTitle, Row, rowField, Section, Switc
 /** What a branch prefix may hold, as plxd checks it: what a git ref allows, ending in / or -. */
 const prefixShape = /^(?:[A-Za-z0-9._][A-Za-z0-9._/-]*[/-])?$/;
 
+/** The most days plxd takes before it deletes an inactive worktree, and what turning it on sets. */
+const maxInactiveDays = 3650;
+const defaultInactiveDays = 30;
+
 /**
  * Settings > Worktrees: where a new thread works and what it starts from, on this computer, then
  * its branch's prefix and when its worktree is removed, on every computer or the one picked
@@ -80,7 +84,10 @@ export function WorktreeSettings({ onProjects }: { onProjects: () => void }) {
   );
 }
 
-/** The branch prefix and worktree cleanup of every computer, or the one picked. */
+/**
+ * The branch prefix, merged worktree cleanup, and days before an inactive worktree is deleted, of
+ * every computer or the one picked.
+ */
 function HostWorktrees() {
   const hosts = useHosts();
   const [scope, setScope] = useState(allHosts);
@@ -88,6 +95,16 @@ function HostWorktrees() {
   const cleanup = able("worktreeCleanup").length > 0;
   const prefixable = able("branchPrefix").length > 0;
   const clean = shared("worktreeCleanup", (s) => s.cleanWorktrees ?? true);
+  const inactive = able("inactiveWorktrees").length > 0;
+  // 0 is off.
+  const days = shared("inactiveWorktrees", (s) => s.inactiveWorktreeDays ?? 0);
+  const deletes = !days.mixed && (days.value ?? 0) > 0;
+  const setDays = (inactiveWorktreeDays: number) =>
+    void set(
+      "inactiveWorktrees",
+      { inactiveWorktreeDays },
+      "Couldn't save when inactive worktrees are deleted",
+    );
   const prefix = shared("branchPrefix", (s) => s.branchPrefix ?? "parallax/");
   const typed = prefix.mixed ? "" : (prefix.value ?? "parallax/");
   const differs = "Differs across computers, so a change here sets them all. ";
@@ -157,6 +174,44 @@ function HostWorktrees() {
           onChange={(cleanWorktrees) =>
             void set("worktreeCleanup", { cleanWorktrees }, "Couldn't save worktree cleanup")
           }
+        />
+      </Row>
+      <Row
+        title="Delete inactive worktrees"
+        description={
+          connected && !inactive
+            ? "This plxd can't delete inactive worktrees."
+            : `${days.mixed ? differs : ""}When a thread has had no activity for this many days, Parallax deletes its worktree, unless it has uncommitted changes. The branch and the thread stay.`
+        }
+      >
+        {deletes && (
+          <>
+            <input
+              // A saved value is the field's again.
+              key={`${scope}/${days.value}`}
+              type="number"
+              aria-label="Days before an inactive worktree is deleted"
+              min={1}
+              max={maxInactiveDays}
+              defaultValue={days.value}
+              onBlur={(e) => {
+                const next = Math.round(Number(e.target.value));
+                if (next >= 1 && next <= maxInactiveDays && next !== days.value) setDays(next);
+                else e.target.value = String(days.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              className="w-20 rounded-md border border-border bg-background px-2.5 py-1 text-right text-body tabular-nums"
+            />
+            <span className="text-meta text-muted-foreground">days</span>
+          </>
+        )}
+        <Switch
+          label="Delete inactive worktrees"
+          checked={deletes}
+          disabled={!days.loaded}
+          onChange={(on) => setDays(on ? defaultInactiveDays : 0)}
         />
       </Row>
     </Section>
