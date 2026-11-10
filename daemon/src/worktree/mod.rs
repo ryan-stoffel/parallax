@@ -829,7 +829,124 @@ impl WorktreeManager {
         Ok(())
     }
 
-    /// Puts back a run's worktree at `path` after the merged-worktree sweep removed it (PLX-781),
+    /// Removes the worktree `folder` from `repo_path`'s repository and keeps its branch, whose
+    /// commits may exist nowhere else: how the cleanup sweep removes an inactive, settled, or
+    /// unchanged thread's worktree (PLX-1524), which [`Self::restore`] makes again. It never
+    /// forces, so git itself refuses a worktree with modified or untracked files, ignored ones
+    /// aside, one with submodules, and a locked one: a file changed since the caller's own check
+    /// stays. With `untracked_go`, as when the host keeps only edited tracked files, its untracked
+    /// and ignored files are removed first, and git still refuses an edited tracked file. Git's
+    /// check is a `git status` it runs in the worktree through its `.git` file, not pinned as this
+    /// module's own calls are (#166), once it has checked that file still names this repository.
+    /// Refuses a folder outside plxd's worktrees folder.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::Io`] for a folder outside the worktrees folder,
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::GitFailed`] for a worktree git refuses, or
+    /// [`WorktreeError::Timeout`] or [`WorktreeError::Spawn`] removing the worktree.
+    pub async fn remove_keeping_branch(
+        &self,
+        repo_path: &Path,
+        folder: RunFolder<'_>,
+        untracked_go: bool,
+    ) -> Result<(), WorktreeError> {
+        let worktree_path = folder.path();
+        if !matches!(folder, RunFolder::Worktree { .. }) || !worktree_path.starts_with(&self.root) {
+            return Err(WorktreeError::Io {
+                path: worktree_path.to_owned(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "refusing to remove a folder outside plxd's worktrees folder",
+                ),
+            });
+        }
+        let repo_root = self.repo_root(repo_path).await?;
+        if untracked_go {
+            self.folder_git_ok(folder, &["clean", "-ffdx", "--quiet"])
+                .await?;
+        }
+        let _guard = self.lock_repo(&repo_root).await;
+
+        let path_arg = worktree_path.to_string_lossy().into_owned();
+        self.run_git_ok(&repo_root, &["worktree", "remove", &path_arg])
+            .await?;
+        let _ = self.run_git(&repo_root, &["worktree", "prune"]).await;
+        Ok(())
+    }
+
+    /// Whether `folder`'s tracked files have uncommitted changes, staged or unstaged. Untracked
+    /// and ignored files don't count.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn tracked_changes(&self, folder: RunFolder<'_>) -> Result<bool, WorktreeError> {
+        let status = self
+            .folder_git_ok(
+                folder,
+                &[
+                    "--no-optional-locks",
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=no",
+                ],
+            )
+            .await?;
+        Ok(!status.trim().is_empty())
+    }
+
+    /// Whether `folder` holds a file git ignores, outside any `node_modules` folder, which is
+    /// rebuilt from the lockfile.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn ignored_files(&self, folder: RunFolder<'_>) -> Result<bool, WorktreeError> {
+        // A folder git ignores whole is one line, so `node_modules` is never listed file by file.
+        let ignored = self
+            .folder_git_ok(
+                folder,
+                &[
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "--directory",
+                ],
+            )
+            .await?;
+        Ok(ignored.lines().any(|entry| {
+            // Git quotes a path with unusual characters.
+            let entry = entry.trim_matches('"');
+            !(entry.is_empty() || entry == "node_modules/" || entry.ends_with("/node_modules/"))
+        }))
+    }
+
+    /// Whether `folder`'s `HEAD` has no commits beyond `repo_path`'s default branch: origin's, as
+    /// last fetched, or else the local one.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::UnknownRevision`] when the default branch
+    /// doesn't resolve, or [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or
+    /// [`WorktreeError::Spawn`].
+    pub async fn in_default_branch(
+        &self,
+        repo_path: &Path,
+        folder: RunFolder<'_>,
+    ) -> Result<bool, WorktreeError> {
+        let repo_root = self.repo_root(repo_path).await?;
+        let default = self.origin_default(&repo_root).await?;
+        // Resolved in the repository, where a bare `HEAD` is its own checkout's, not the worktree's.
+        let default = self.resolve_commit(&repo_root, &default).await?;
+        let ancestor = self
+            .folder_git(folder, &["merge-base", "--is-ancestor", "HEAD", &default])
+            .await?;
+        Ok(ancestor.success())
+    }
+
+    /// Puts back a run's worktree at `path` after a cleanup sweep removed it (PLX-781, PLX-1524),
     /// so a message to its thread can resume there. `branch` is checked out when it still exists,
     /// and otherwise made again from origin's default branch, fetched first, which holds the
     /// merged work. Returns the new worktree's git folder, to pin as [`CreatedWorktree::git_dir`]

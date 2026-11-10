@@ -468,6 +468,53 @@ fn migration_23_makes_an_orchestrators_runs_its_children() {
     assert!(!thread.settled);
 }
 
+/// PLX-1524: a thread keeps when it was archived for as long as it is, through archiving again,
+/// and one archived before migration 63 counts from that migration.
+#[test]
+fn a_thread_keeps_when_it_was_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallax.sqlite3");
+    let mut store = Store::open(&path).unwrap();
+    let repo = store
+        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let thread = Uuid::now_v7();
+    store
+        .create_thread_run(
+            thread,
+            repo.id,
+            &run_fields(repo.id),
+            &state(),
+            None,
+            &ThreadFields::default(),
+        )
+        .unwrap();
+    let archive = |archived| {
+        store
+            .set_thread_archived(thread, archived)
+            .unwrap()
+            .archived_at
+    };
+    let at = archive(true);
+    assert!(at.is_some());
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    assert_eq!(archive(true), at);
+    assert_eq!(archive(false), None);
+
+    archive(true);
+    drop(store);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE threads DROP COLUMN archived_at;
+         DELETE FROM schema_version WHERE version = 63;",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path).unwrap();
+    let thread = store.get_thread(thread).unwrap().unwrap();
+    assert!(thread.archived && thread.archived_at.is_some());
+}
+
 /// A snippet longer than 120 characters is cut around its match, on character boundaries
 /// (PLX-789).
 #[test]

@@ -401,13 +401,40 @@ export const settingsIndex: SettingEntry[] = [
   ...entries("worktrees", "New worktrees", [
     ["Workspace", "Where a thread in a repository works", "checkout current default"],
     ["Start from", "The branch a new worktree starts from", "base default current origin"],
+  ]),
+  ...entries("worktrees", "Branches", [
     ["Branch prefix", "What a new thread's branch starts with", "name parallax namespace"],
   ]),
   ...entries("worktrees", "Cleanup", [
     [
-      "Clean up merged worktrees",
+      "Delete worktrees with deleted threads",
+      "Whether deleting a thread deletes its worktree and branch",
+      "remove keep on disk",
+    ],
+    [
+      "Delete merged worktrees",
       "Delete a worktree and branch once its pull request merges",
-      "remove",
+      "remove clean up",
+    ],
+    [
+      "Delete inactive worktrees",
+      "Delete a worktree once its thread has had no activity for a number of days",
+      "remove old stale unused idle days retention disk space",
+    ],
+    [
+      "Delete archived worktrees",
+      "Delete an archived thread's worktree folder, keeping the thread and branch",
+      "remove archive days retention disk space",
+    ],
+    [
+      "Delete unchanged worktrees",
+      "Delete a worktree with no commits beyond the default branch",
+      "remove empty untouched advanced",
+    ],
+    [
+      "Keep worktrees with",
+      "Which local files stop a rule from deleting a worktree",
+      "local changes uncommitted untracked ignored env node_modules advanced",
     ],
   ]),
   ...entries("sourceControl", "Pull requests", [

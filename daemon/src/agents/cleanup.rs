@@ -8,22 +8,44 @@
 //! when the newest merge came after the user's last message or unarchive, so a thread brought
 //! back stays out. A settled or archived thread's worktree and local branch go too, when the
 //! setting is on. The worktree must be on its stored branch or a merged pull request's head branch,
-//! which agents often rename it to, and hold nothing the merge didn't keep: no uncommitted changes,
+//! which agents often rename it to, and hold nothing the merge didn't keep: no local changes,
 //! and a `HEAD` that is on `origin` or is one of a merged pull request's commits. A worktree kept
 //! from an earlier sweep's merge is checked again only every [`RECHECK_EVERY`] sweeps. The thread,
 //! its transcript, and its worktree row stay, and a later message makes the worktree again at the
 //! same path before it resumes (PLX-856). A merged pull request never changes, so each is read
 //! from GitHub once per plxd run, and a closed one is read again only every [`RECHECK_EVERY`]
 //! sweeps.
+//!
+//! Every [`RECHECK_EVERY`] sweeps also apply the host's worktree rules, each off by default,
+//! behind the `worktreeRules` capability (PLX-1524), whatever a thread's pull requests. They are
+//! T3 Code's. A worktree goes when its thread has had no activity for `inactiveWorktreeDays`, has
+//! been archived for `archivedWorktreeDays`, or, with `unchangedWorktrees`, has been idle for
+//! [`UNCHANGED_AFTER`] with no commits beyond the default branch. A thread's activity is its
+//! run's `updated_at`, which plxd writes each time it saves the run's state: a turn starting or
+//! ending, a stop, a linked pull request, changed options. Archived time counts from the later of
+//! that and when the thread was archived, and a thread brought back isn't archived. Archiving
+//! isn't deleting: the thread, its transcript, and its worktree row stay. Under every rule the
+//! run isn't running or waiting and isn't in its repository's own checkout, no other thread works
+//! in the worktree (0063), its thread has no terminal open, and the worktree is on its stored
+//! branch. Its local branch
+//! stays, since its commits may exist nowhere else, and a later message checks it out again at
+//! the same path. A worktree git can't read stays.
+//!
+//! The host's `worktreeKeep` says what a worktree must hold for these rules, and the merged
+//! sweep, to keep it: any local file, ignored ones outside `node_modules` included; uncommitted
+//! changes, the default, which lets ignored files go; or edits to tracked files alone, which
+//! lets untracked files go too. The rules never force a removal, so git itself refuses a
+//! worktree that changed after its check.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use jiff::Timestamp;
-use parallax_protocol::{PrState, RunId, ThreadArchiveParams};
-use parallax_store::{Run, Thread, Worktree};
+use jiff::{SignedDuration, Timestamp};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{GitStatus, PrState, RunId, ThreadArchiveParams, WorktreeKeep};
+use parallax_store::{Run, Store, Thread, Worktree};
 use tokio::time::{self, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -31,19 +53,25 @@ use uuid::Uuid;
 
 use super::{convert, store, store_error};
 use crate::server::Daemon;
-use crate::worktree::{PrError, RunFolder};
+use crate::worktree::{PrError, RunFolder, WorktreeError, WorktreeManager};
 
 /// How often a sweep looks for merged pull requests. Each reads only the state of idle threads'
 /// linked pull requests not yet known merged or closed.
 const SWEEP_PERIOD: Duration = Duration::from_mins(1);
 
 /// Sweeps per recheck, which runs `git status` again on a worktree kept from an earlier sweep's
-/// merge and reads closed pull requests again, since one can reopen: every 15 minutes rather than
-/// every sweep.
+/// merge and on each worktree a rule is due for, and reads closed pull requests again, since one
+/// can reopen: every 15 minutes rather than every sweep.
 const RECHECK_EVERY: u32 = 15;
 
+/// How long a thread is idle before the unchanged rule takes its worktree, so one whose first
+/// commit is still ahead of it isn't removed and made again between messages. T3 Code gets the
+/// same from sweeping once an hour.
+const UNCHANGED_AFTER: SignedDuration = SignedDuration::from_hours(1);
+
 /// Sweeps once, then every [`SWEEP_PERIOD`] and on `daemon.merged` until `stop`. Every
-/// [`RECHECK_EVERY`] sweeps also removes abandoned chunked uploads (0074).
+/// [`RECHECK_EVERY`] sweeps also removes abandoned chunked uploads (0074) and applies the host's
+/// worktree rules (PLX-1524).
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut interval = time::interval(SWEEP_PERIOD);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -69,8 +97,217 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             known.retain(|_, pull| pull.state == PrState::Merged);
         }
         sweep(&daemon, &stop, &mut known, recheck).await;
+        if recheck {
+            sweep_rules(&daemon, &daemon.agents.worktrees, &stop, Timestamp::now()).await;
+        }
         count = count.wrapping_add(1);
     }
+}
+
+/// The worktree rule a thread is due under.
+#[derive(Clone, Copy, Debug)]
+enum Rule {
+    /// `inactiveWorktreeDays`.
+    Inactive,
+    /// `archivedWorktreeDays`, with when the thread was archived as the sweep read it.
+    Archived(Timestamp),
+    /// `unchangedWorktrees`, which also needs git to find no commits beyond the default branch.
+    Unchanged,
+}
+
+/// A run a rule is due for, with its worktree and the rule.
+type Due = (Run, Worktree, Rule);
+
+/// Removes, through `worktrees`, the worktree of every thread the host's inactive, archived, and
+/// unchanged rules are due for at `now` (PLX-1524), and keeps its branch, stopping early for
+/// `stop`. A worktree that fails a check, or that a check can't read, stays.
+async fn sweep_rules(
+    daemon: &Daemon,
+    worktrees: &WorktreeManager,
+    stop: &CancellationToken,
+    now: Timestamp,
+) {
+    let (keep, candidates) = match store(daemon, move |db| due(db, now)).await {
+        Ok(found) => found,
+        Err(error) => {
+            warn!(error = %error.message, "could not list the worktrees a rule is due for");
+            return;
+        }
+    };
+    for (run, worktree, rule) in candidates {
+        if stop.is_cancelled() {
+            return;
+        }
+        // A worktree already removed, or never pinned (#166), has nothing to clean. One whose
+        // thread has a terminal open may have something running in it.
+        if worktree.git_dir.is_empty()
+            || !Path::new(&worktree.path).is_dir()
+            || !daemon.terminals.list(Some(&run.id.to_string())).is_empty()
+        {
+            continue;
+        }
+        let folder = RunFolder::Worktree {
+            path: Path::new(&worktree.path),
+            git_dir: Path::new(&worktree.git_dir),
+        };
+        let repo = Path::new(&worktree.repo_path);
+        let goes = tokio::select! {
+            biased;
+            () = stop.cancelled() => return,
+            goes = may_go(worktrees, repo, folder, &worktree.branch, rule, keep) => goes,
+        };
+        match goes {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                warn!(run = %run.id, %error, "could not read a worktree's git state for its rule");
+                continue;
+            }
+        }
+        if !still_as_read(daemon, &run, rule).await {
+            continue;
+        }
+        // Only when the host keeps edited tracked files alone do untracked files go.
+        let untracked_go = keep == WorktreeKeep::TrackedChanges;
+        match worktrees
+            .remove_keeping_branch(repo, folder, untracked_go)
+            .await
+        {
+            Ok(()) => {
+                info!(run = %run.id, path = %worktree.path, ?rule, "removed a thread's worktree");
+            }
+            Err(error) => {
+                warn!(run = %run.id, %error, ?rule, "could not remove a thread's worktree");
+            }
+        }
+    }
+}
+
+/// What the host's rules keep a worktree for, and the runs a rule is due for at `now`, each with
+/// its worktree and the rule: a thread's run that is idle, outside its repository's own checkout,
+/// and in a worktree no other thread works in (0063). None when every rule is off.
+fn due(db: &Store, now: Timestamp) -> Result<(WorktreeKeep, Vec<Due>), ErrorObject> {
+    let error = |error| store_error(&error);
+    let keep = crate::methods::host::worktree_keep(db)?;
+    let inactive = db.inactive_worktree_days().map_err(error)?;
+    let archived = db.archived_worktree_days().map_err(error)?;
+    let unchanged = db.unchanged_worktrees().map_err(error)?;
+    let mut found = Vec::new();
+    if inactive.is_none() && archived.is_none() && !unchanged {
+        return Ok((keep, found));
+    }
+    for thread in db.list_threads().map_err(error)? {
+        let Some(run) = db.get_run(thread.id).map_err(error)? else {
+            continue;
+        };
+        if !idle(&run) || run.fields.checkout {
+            continue;
+        }
+        let quiet = |wait| quiet_for(run.updated_at, wait, now);
+        let rule = if inactive.is_some_and(|days| quiet(day(days))) {
+            Rule::Inactive
+        } else if let Some(at) = thread.archived_at
+            && archived.is_some_and(|days| archived_for(&thread, &run, days, now))
+        {
+            Rule::Archived(at)
+        } else if unchanged && quiet(UNCHANGED_AFTER) {
+            Rule::Unchanged
+        } else {
+            continue;
+        };
+        let Some(worktree) = db.get_worktree(thread.id).map_err(error)? else {
+            continue;
+        };
+        if db.shared_users(thread.id).map_err(error)?.is_empty()
+            && !db
+                .worktree_shared(thread.id, &worktree.path)
+                .map_err(error)?
+        {
+            found.push((run, worktree, rule));
+        }
+    }
+    Ok((keep, found))
+}
+
+/// `days` days.
+fn day(days: u32) -> SignedDuration {
+    SignedDuration::from_hours(24 * i64::from(days))
+}
+
+/// Whether `since` is at least `wait` before `now`.
+fn quiet_for(since: Timestamp, wait: SignedDuration, now: Timestamp) -> bool {
+    now.checked_sub(wait).is_ok_and(|limit| since <= limit)
+}
+
+/// Whether `thread` has been archived for `days` days at `now`, counted from the later of when it
+/// was archived and its `run`'s last change.
+fn archived_for(thread: &Thread, run: &Run, days: u32, now: Timestamp) -> bool {
+    thread
+        .archived_at
+        .filter(|_| thread.archived)
+        .is_some_and(|at| quiet_for(at.max(run.updated_at), day(days), now))
+}
+
+/// Whether the worktree `folder` of repository `repo` may go under `rule`: it is on `branch`, its
+/// stored branch, which making it again checks out, holds nothing `keep` keeps, and for the
+/// unchanged rule has no commits beyond the default branch.
+async fn may_go(
+    worktrees: &WorktreeManager,
+    repo: &Path,
+    folder: RunFolder<'_>,
+    branch: &str,
+    rule: Rule,
+    keep: WorktreeKeep,
+) -> Result<bool, WorktreeError> {
+    let status = worktrees.status(folder).await?;
+    if status.branch.as_deref() != Some(branch) || kept(worktrees, folder, &status, keep).await? {
+        return Ok(false);
+    }
+    match rule {
+        Rule::Unchanged => worktrees.in_default_branch(repo, folder).await,
+        Rule::Inactive | Rule::Archived(_) => Ok(true),
+    }
+}
+
+/// Whether the host's `keep` keeps the worktree `folder`, whose git state is `status`.
+async fn kept(
+    worktrees: &WorktreeManager,
+    folder: RunFolder<'_>,
+    status: &GitStatus,
+    keep: WorktreeKeep,
+) -> Result<bool, WorktreeError> {
+    match keep {
+        WorktreeKeep::UncommittedChanges => Ok(status.changes > 0),
+        WorktreeKeep::TrackedChanges => worktrees.tracked_changes(folder).await,
+        // A value this plxd doesn't know keeps the most.
+        WorktreeKeep::AnyLocalFiles | WorktreeKeep::Unknown => {
+            Ok(status.changes > 0 || worktrees.ignored_files(folder).await?)
+        }
+    }
+}
+
+/// Whether `run` is idle and unchanged since the sweep read it, read again from the store so a
+/// message sent mid-sweep keeps its worktree. Under the archived `rule`, its thread must also be
+/// archived still, since the same time, as unarchiving changes the thread and not the run.
+async fn still_as_read(daemon: &Daemon, run: &Run, rule: Rule) -> bool {
+    let (id, at) = (run.id, run.updated_at);
+    store(daemon, move |db| {
+        let error = |e| store_error(&e);
+        let run_as_read = db
+            .get_run(id)
+            .map_err(error)?
+            .is_some_and(|run| idle(&run) && run.updated_at == at);
+        let Rule::Archived(archived_at) = rule else {
+            return Ok(run_as_read);
+        };
+        Ok(run_as_read
+            && db
+                .get_thread(id)
+                .map_err(error)?
+                .is_some_and(|thread| thread.archived && thread.archived_at == Some(archived_at)))
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Archives every thread whose pull requests merged since the user's last message, and removes
@@ -299,7 +536,7 @@ fn last_activity(thread: &Thread) -> Timestamp {
 }
 
 /// The branch to delete with `run`'s `worktree`, when the worktree can go: it is on its own branch
-/// and holds nothing the merged `pulls` don't.
+/// and holds nothing the merged `pulls` don't, nor anything the host's `worktreeKeep` keeps.
 async fn removable(
     daemon: &Daemon,
     run: &Run,
@@ -311,6 +548,9 @@ async fn removable(
         path: Path::new(&worktree.path),
         git_dir: Path::new(&worktree.git_dir),
     };
+    let keep = store(daemon, |db| crate::methods::host::worktree_keep(db))
+        .await
+        .ok()?;
     let (status, head) = match (worktrees.status(folder).await, worktrees.head(folder).await) {
         (Ok(status), Ok(head)) => (status, head),
         (Err(error), _) | (_, Err(error)) => {
@@ -318,8 +558,15 @@ async fn removable(
             return None;
         }
     };
+    let kept = match kept(worktrees, folder, &status, keep).await {
+        Ok(kept) => kept,
+        Err(error) => {
+            warn!(run = %run.id, %error, "could not read a merged worktree's local files");
+            return None;
+        }
+    };
     let Some(branch) = branch_to_delete(pulls, &worktree.branch, status.branch.as_deref())
-        .filter(|_| status.changes == 0 && (status.ahead == 0 || in_merged(pulls, &head)))
+        .filter(|_| !kept && (status.ahead == 0 || in_merged(pulls, &head)))
     else {
         info!(run = %run.id, "kept a merged worktree that has work its pull request doesn't");
         return None;
@@ -468,6 +715,7 @@ mod tests {
             project_id: None,
             orchestrator_id: None,
             wake_reason: None,
+            archived_at: None,
         };
         let pulls = [Pull {
             merged_at: Some(at("2026-10-27T20:56:36Z")),
@@ -478,5 +726,361 @@ mod tests {
         // Unarchiving after the merge still keeps it out.
         thread.unarchived_at = Some(at("2026-10-27T21:00:00Z"));
         assert!(!merged_since(&pulls, last_activity(&thread)));
+    }
+
+    /// The rules sweep against real worktrees of a real repository, with a real `git`, as
+    /// `worktree`'s tests run it.
+    #[cfg(unix)]
+    mod rules {
+        use std::path::{Path, PathBuf};
+        use std::process::Command;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use jiff::{SignedDuration, Timestamp};
+        use parallax_protocol::RunId;
+        use parallax_store::{Lineage, RunState, Store, StoreError, ThreadFields, WorktreeFields};
+        use tokio_util::sync::CancellationToken;
+        use uuid::Uuid;
+
+        use super::super::{Rule, still_as_read, sweep_rules};
+        use crate::agents::tests::run_fields;
+        use crate::agents::{convert, store, store_error};
+        use crate::backend::process::{Environment, Launcher};
+        use crate::paths::DataDir;
+        use crate::server::Daemon;
+        use crate::worktree::{RunFolder, WorktreeManager};
+
+        fn git(dir: &Path, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git should run");
+            assert!(output.status.success(), "git {args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        }
+
+        /// A repository that ignores `*.log` and `node_modules`, a daemon whose store the sweep
+        /// reads, and a worktree manager that finds git, which the test daemon's own can't.
+        struct Fixture {
+            _dir: tempfile::TempDir,
+            repo: PathBuf,
+            daemon: Arc<Daemon>,
+            worktrees: WorktreeManager,
+        }
+
+        /// A thread's worktree, its git folder, and its branch.
+        struct Made {
+            id: Uuid,
+            path: PathBuf,
+            git_dir: PathBuf,
+            branch: String,
+        }
+
+        impl Fixture {
+            fn new() -> Self {
+                let dir = tempfile::tempdir().unwrap();
+                let repo = dir.path().join("repo");
+                std::fs::create_dir_all(&repo).unwrap();
+                git(&repo, &["init", "-q", "--initial-branch=main"]);
+                git(&repo, &["config", "user.name", "Test User"]);
+                git(&repo, &["config", "user.email", "test@example.com"]);
+                std::fs::write(repo.join(".gitignore"), "*.log\nnode_modules\n").unwrap();
+                std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+                git(&repo, &["add", "-A"]);
+                git(&repo, &["commit", "-q", "-m", "init"]);
+                let repo = repo.canonicalize().unwrap();
+                let data = dir.path().join("data");
+                std::fs::create_dir_all(&data).unwrap();
+                let daemon = Daemon::for_tests(&data, 10, Duration::from_secs(90));
+                let launcher =
+                    Launcher::new(DataDir::new(&data).unwrap(), Environment::inherited());
+                Self {
+                    worktrees: WorktreeManager::new(launcher, &data),
+                    _dir: dir,
+                    repo,
+                    daemon,
+                }
+            }
+
+            /// A thread whose run has `status`, in a new worktree, with a commit of its own when
+            /// `commits`.
+            async fn thread(&self, status: &str, commits: bool) -> Made {
+                let id = RunId::generate();
+                let created = self
+                    .worktrees
+                    .create_named(&self.repo, id, None, None)
+                    .await
+                    .unwrap();
+                if commits {
+                    std::fs::write(created.path.join("work.txt"), "work\n").unwrap();
+                    git(&created.path, &["add", "work.txt"]);
+                    git(&created.path, &["commit", "-q", "-m", "Work"]);
+                }
+                let fields = WorktreeFields {
+                    repo_path: self.repo.to_string_lossy().into_owned(),
+                    path: created.path.to_string_lossy().into_owned(),
+                    branch: created.branch.clone(),
+                    base: created.base,
+                    git_dir: created.git_dir.to_string_lossy().into_owned(),
+                    base_dirty: false,
+                };
+                let state = RunState {
+                    status: status.to_owned(),
+                    ..RunState::default()
+                };
+                store(&self.daemon, move |db| {
+                    let repo = Uuid::now_v7();
+                    db.create_thread_run(
+                        id.into(),
+                        repo,
+                        &run_fields(repo),
+                        &state,
+                        Some(&fields),
+                        &ThreadFields::default(),
+                    )
+                    .map_err(|e| store_error(&e))
+                })
+                .await
+                .unwrap();
+                Made {
+                    id: id.into(),
+                    path: created.path,
+                    git_dir: created.git_dir,
+                    branch: created.branch,
+                }
+            }
+
+            /// An idle thread with a commit of its own.
+            async fn idle(&self) -> Made {
+                self.thread("completed", true).await
+            }
+
+            /// Changes the store, as `host/settings/set` and the app's actions do.
+            async fn set(
+                &self,
+                change: impl FnOnce(&Store) -> Result<(), StoreError> + Send + 'static,
+            ) {
+                store(&self.daemon, move |db| {
+                    change(db).map_err(|e| store_error(&e))
+                })
+                .await
+                .unwrap();
+            }
+
+            /// Sweeps as if `after` had passed.
+            async fn sweep(&self, after: SignedDuration) {
+                let stop = CancellationToken::new();
+                sweep_rules(
+                    &self.daemon,
+                    &self.worktrees,
+                    &stop,
+                    Timestamp::now() + after,
+                )
+                .await;
+            }
+
+            /// The commit `made`'s branch is at, which is there whether or not its worktree is.
+            fn branch(&self, made: &Made) -> String {
+                git(&self.repo, &["rev-parse", &made.branch])
+            }
+        }
+
+        fn days(days: i64) -> SignedDuration {
+            SignedDuration::from_hours(24 * days)
+        }
+
+        #[tokio::test]
+        async fn removes_only_an_idle_unshared_clean_worktree_and_keeps_its_branch() {
+            let f = Fixture::new();
+            let old = f.idle().await;
+            std::fs::write(old.path.join("ignored.log"), "noise\n").unwrap();
+            let dirty = f.idle().await;
+            std::fs::write(dirty.path.join("untracked.txt"), "mine\n").unwrap();
+            let running = f.thread(convert::RUNNING, true).await;
+            let shared = f.idle().await;
+            // Another thread works in `shared` (0063).
+            let owner = shared.id;
+            f.set(move |db| {
+                let user = Uuid::now_v7();
+                db.create_run(user, &run_fields(Uuid::now_v7()), &RunState::default())?;
+                let lineage = Lineage {
+                    relationship: None,
+                    workspace_of: Some(owner),
+                    payload: "{}".to_owned(),
+                };
+                db.put_lineage(user, &lineage)
+            })
+            .await;
+            let all = [&old, &dirty, &running, &shared];
+
+            // Off, as a fresh host is: nothing goes, however old.
+            f.sweep(days(400)).await;
+            assert!(all.iter().all(|made| made.path.is_dir()));
+
+            // Too recent: 29 days of a 30-day setting.
+            f.set(|db| db.set_inactive_worktree_days(Some(30))).await;
+            f.sweep(days(29)).await;
+            assert!(all.iter().all(|made| made.path.is_dir()));
+
+            // After 31 days only the idle, unshared, clean one goes. The ignored file didn't keep
+            // it, and its branch still has its commit.
+            let commit = git(&old.path, &["rev-parse", "HEAD"]);
+            f.sweep(days(31)).await;
+            assert!(!old.path.exists());
+            assert!(dirty.path.join("untracked.txt").is_file());
+            assert!(running.path.is_dir());
+            assert!(shared.path.is_dir());
+            assert_eq!(f.branch(&old), commit);
+
+            // Git itself refuses a worktree that gained a file after the sweep's own check.
+            let folder = RunFolder::Worktree {
+                path: &dirty.path,
+                git_dir: &dirty.git_dir,
+            };
+            let refused = f
+                .worktrees
+                .remove_keeping_branch(&f.repo, folder, false)
+                .await;
+            assert!(refused.is_err());
+            assert!(dirty.path.join("untracked.txt").is_file());
+
+            // Only a folder under plxd's worktrees folder goes, never the repository's checkout.
+            let checkout = RunFolder::Worktree {
+                path: &f.repo,
+                git_dir: &f.repo.join(".git"),
+            };
+            let refused = f
+                .worktrees
+                .remove_keeping_branch(&f.repo, checkout, true)
+                .await;
+            assert!(refused.is_err());
+            assert!(f.repo.join("README.md").is_file());
+
+            // What a later message does (PLX-856): the branch is checked out at the same path.
+            f.worktrees
+                .restore(&f.repo, &old.path, &old.branch)
+                .await
+                .unwrap();
+            assert_eq!(git(&old.path, &["rev-parse", "HEAD"]), commit);
+            assert!(old.path.join("work.txt").is_file());
+        }
+
+        #[tokio::test]
+        async fn the_archived_rule_counts_days_from_when_a_thread_was_archived() {
+            let f = Fixture::new();
+            let archive = |made: &Made, archived| {
+                let id = made.id;
+                f.set(move |db| db.set_thread_archived(id, archived).map(drop))
+            };
+            let (archived, open, back) = (f.idle().await, f.idle().await, f.idle().await);
+            archive(&archived, true).await;
+            // Brought back, it isn't archived, whenever it was.
+            archive(&back, true).await;
+            archive(&back, false).await;
+            let commit = f.branch(&archived);
+
+            f.set(|db| db.set_archived_worktree_days(Some(3))).await;
+            f.sweep(days(2)).await;
+            assert!(archived.path.is_dir());
+            f.sweep(days(4)).await;
+            assert!(!archived.path.exists());
+            assert!(open.path.is_dir(), "a thread that isn't archived stays");
+            assert!(back.path.is_dir(), "an unarchived thread stays");
+            assert_eq!(f.branch(&archived), commit);
+
+            // 0 days is the next sweep. The thread stays, still archived.
+            f.set(|db| db.set_archived_worktree_days(Some(0))).await;
+            archive(&open, true).await;
+            f.sweep(SignedDuration::ZERO).await;
+            assert!(!open.path.exists());
+            assert!(back.path.is_dir());
+            let id = open.id;
+            let thread = store(&f.daemon, move |db| {
+                db.get_thread(id).map_err(|e| store_error(&e))
+            })
+            .await
+            .unwrap();
+            assert!(thread.is_some_and(|thread| thread.archived));
+
+            // Unarchived after the sweep chose it, before the re-read right before removal: the
+            // run is unchanged, but the worktree stays.
+            let late = f.idle().await;
+            archive(&late, true).await;
+            let id = late.id;
+            let (run, read) = store(&f.daemon, move |db| {
+                let run = db.get_run(id).map_err(|e| store_error(&e))?;
+                let thread = db.get_thread(id).map_err(|e| store_error(&e))?;
+                Ok((run.unwrap(), thread.unwrap()))
+            })
+            .await
+            .unwrap();
+            let rule = Rule::Archived(read.archived_at.unwrap());
+            assert!(still_as_read(&f.daemon, &run, rule).await);
+            archive(&late, false).await;
+            assert!(!still_as_read(&f.daemon, &run, rule).await);
+            // Archived again, it counts from then, not from when the sweep read it.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            archive(&late, true).await;
+            assert!(!still_as_read(&f.daemon, &run, rule).await);
+            assert!(late.path.is_dir());
+        }
+
+        #[tokio::test]
+        async fn the_unchanged_rule_takes_a_worktree_with_no_commits_after_an_idle_hour() {
+            let f = Fixture::new();
+            let (unchanged, committed) = (
+                f.thread("completed", false).await,
+                f.thread("completed", true).await,
+            );
+            let commit = f.branch(&unchanged);
+
+            f.set(|db| db.set_unchanged_worktrees(true)).await;
+            f.sweep(SignedDuration::from_mins(30)).await;
+            assert!(unchanged.path.is_dir(), "idle for less than an hour");
+            f.sweep(SignedDuration::from_hours(2)).await;
+            assert!(!unchanged.path.exists());
+            assert!(committed.path.is_dir(), "it has a commit of its own");
+            assert_eq!(f.branch(&unchanged), commit);
+        }
+
+        /// What each `worktreeKeep` keeps, under the inactive rule: of a worktree with only an
+        /// ignored file, one with only `node_modules`, one with an untracked file, and one with
+        /// an edited tracked file.
+        #[tokio::test]
+        async fn worktree_keep_decides_which_local_files_keep_a_worktree() {
+            let f = Fixture::new();
+            f.set(|db| db.set_inactive_worktree_days(Some(30))).await;
+            // Whether the ignored, `node_modules`, untracked, and edited worktrees stay.
+            for (keep, stays) in [
+                ("anyLocalFiles", [true, false, true, true]),
+                ("uncommittedChanges", [false, false, true, true]),
+                ("trackedChanges", [false, false, false, true]),
+            ] {
+                f.set(move |db| db.set_worktree_keep(keep)).await;
+                let [ignored, modules, untracked, edited] = [
+                    f.idle().await,
+                    f.idle().await,
+                    f.idle().await,
+                    f.idle().await,
+                ];
+                std::fs::write(ignored.path.join("secrets.log"), "noise\n").unwrap();
+                std::fs::create_dir(modules.path.join("node_modules")).unwrap();
+                std::fs::write(modules.path.join("node_modules/dep.js"), "dep\n").unwrap();
+                std::fs::write(untracked.path.join("untracked.txt"), "mine\n").unwrap();
+                std::fs::write(edited.path.join("README.md"), "edited\n").unwrap();
+                let made = [&ignored, &modules, &untracked, &edited];
+                let commits = made.map(|made| f.branch(made));
+
+                f.sweep(days(31)).await;
+                assert_eq!(made.map(|made| made.path.is_dir()), stays, "{keep}");
+                assert_eq!(made.map(|made| f.branch(made)), commits, "{keep}");
+                // What a kept worktree was kept for is still there.
+                assert!(edited.path.join("README.md").is_file());
+                assert_eq!(untracked.path.join("untracked.txt").is_file(), stays[2]);
+            }
+        }
     }
 }

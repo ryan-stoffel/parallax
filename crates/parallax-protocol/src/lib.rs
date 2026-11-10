@@ -166,7 +166,7 @@ pub use host::{
     HostReadUploadParams, HostReadUploadResult, HostSettings, HostSettingsGetParams,
     HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostUpdateResult,
     HostUpdatingParams, HostUploadParams, HostUploadResult, HostVersionParams, HostVersionResult,
-    QueueStats, StoreState, UploadId,
+    QueueStats, StoreState, UploadId, WorktreeKeep,
 };
 pub use hub::{
     Hub, HubAccount, HubAccountRemoveParams, HubAccountSetEnabledParams, HubService, HubSignIn,

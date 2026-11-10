@@ -334,17 +334,27 @@ test("Threads' Text generation holds the naming model, title instructions, and r
 
 test("Worktrees starts on All computers, says where they differ, and sets them all", async () => {
   const failed = states[mini.id]!;
-  const capabilities = { branchPrefix: {}, worktreeCleanup: {} };
+  const capabilities = { branchPrefix: {}, worktreeCleanup: {}, worktreeRules: {} };
   states["local"] = { ...states["local"]!, capabilities } as ConnectionState;
   states[mini.id] = { ...states["local"]! } as ConnectionState;
   answers["host/settings/get"] = () => ({
-    result: { autoResume: false, cleanWorktrees: true, branchPrefix: "parallax/" },
+    result: {
+      autoResume: false,
+      cleanWorktrees: true,
+      branchPrefix: "parallax/",
+      inactiveWorktreeDays: null,
+    },
   });
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (host, method, params) =>
     host === mini.id && method === "host/settings/get"
       ? ({
-          result: { autoResume: false, cleanWorktrees: false, branchPrefix: "ryan/" },
+          result: {
+            autoResume: false,
+            cleanWorktrees: false,
+            branchPrefix: "ryan/",
+            inactiveWorktreeDays: 7,
+          },
           logId: "l",
         } as never)
       : original(host, method, params),
@@ -354,8 +364,12 @@ test("Worktrees starts on All computers, says where they differ, and sets them a
   });
   await renderSettings("worktrees");
 
-  const row = () => document.querySelector('[data-setting="clean-up-merged-worktrees"]')!;
+  const row = () => document.querySelector('[data-setting="delete-merged-worktrees"]')!;
   expect(row().textContent).toContain("Differs across computers");
+  // A days rule that differs reads Differs, never Off.
+  const days = document.querySelector('[data-setting="delete-inactive-worktrees"]')!;
+  expect(days.textContent).toContain("Differs across computers");
+  expect(days.querySelector('[aria-haspopup="menu"]')!.textContent).toBe("Differs");
   await click(row().querySelector<HTMLElement>('[role="switch"]')!);
   expect(
     calls("host/settings/set")
@@ -386,6 +400,71 @@ test("Appearance's Chat keeps its settings on this computer, and search finds ea
   expect(chatPrefs.get()).toEqual({ richComposer: true, math: false, toolCalls: "zen" });
   expect(JSON.parse(localStorage.getItem("parallax.chat")!)).toEqual(chatPrefs.get());
   chatPrefs.set(chatDefaults);
+});
+
+test("Worktrees sets each cleanup rule as its picker or switch, where plxd has the rules", async () => {
+  const before = states["local"]!;
+  const row = (anchor: string) => document.querySelector(`[data-setting="${anchor}"]`)!;
+  const trigger = (anchor: string) =>
+    row(anchor).querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+  const pick = (anchor: string, option: string) =>
+    click(
+      [...row(anchor).querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((o) =>
+        o.textContent?.startsWith(option),
+      )!,
+    );
+  // An older plxd has no rules to set.
+  states["local"] = { ...before, capabilities: { worktreeCleanup: {} } } as ConnectionState;
+  answers["host/settings/get"] = () => ({ result: { autoResume: false, cleanWorktrees: true } });
+  await renderSettings("worktrees");
+  expect(row("delete-inactive-worktrees").textContent).toContain(
+    "This plxd doesn't have this rule.",
+  );
+  expect(trigger("delete-inactive-worktrees").disabled).toBe(true);
+  act(() => unmount());
+
+  const saved: Record<string, unknown> = {
+    autoResume: false,
+    deletedThreadWorktrees: true,
+    inactiveWorktreeDays: null,
+    archivedWorktreeDays: 45,
+    unchangedWorktrees: false,
+    worktreeKeep: "uncommittedChanges",
+  };
+  states["local"] = {
+    ...before,
+    capabilities: { worktreeCleanup: {}, worktreeRules: {} },
+  } as ConnectionState;
+  answers["host/settings/get"] = () => ({ result: saved });
+  answers["host/settings/set"] = (p) => ({ result: Object.assign(saved, p) });
+  // A search for a row under Advanced opens it.
+  await renderSettings("worktrees", [], "local", { anchor: "keep-worktrees-with" });
+  expect(document.querySelector("details")!.open).toBe(true);
+  expect(trigger("delete-inactive-worktrees").textContent).toBe("Off");
+  // Days that aren't a preset are their own option.
+  expect(trigger("delete-archived-worktrees").textContent).toBe("45 days");
+  // The archived rule is in the main list, not under Advanced, and nothing says settled.
+  expect(row("delete-archived-worktrees").closest("details")).toBeNull();
+  expect(document.body.textContent).not.toMatch(/settled/i);
+
+  await pick("delete-inactive-worktrees", "30 days");
+  expect(trigger("delete-inactive-worktrees").textContent).toBe("30 days");
+  await pick("delete-inactive-worktrees", "Off");
+  await pick("delete-archived-worktrees", "At the next cleanup");
+  await pick("keep-worktrees-with", "Edited tracked files");
+  await click(
+    row("delete-worktrees-with-deleted-threads").querySelector<HTMLElement>('[role="switch"]')!,
+  );
+  await click(row("delete-unchanged-worktrees").querySelector<HTMLElement>('[role="switch"]')!);
+  expect(calls("host/settings/set").map((c) => c.params)).toEqual([
+    { inactiveWorktreeDays: 30 },
+    { inactiveWorktreeDays: null },
+    { archivedWorktreeDays: 0 },
+    { worktreeKeep: "trackedChanges" },
+    { deletedThreadWorktrees: false },
+    { unchangedWorktrees: true },
+  ]);
+  states["local"] = before;
 });
 
 test("About copies its version, and its bug report link fills the version in", async () => {
@@ -580,6 +659,31 @@ test("Storage deletes only a host's archived threads, after asking", async () =>
   expect(calls("thread/delete")).toEqual([]);
   await click(button(archived, "Delete all"));
   expect(calls("thread/delete")).toEqual([{ host: "local", params: { runId: "t-old" } }]);
+});
+
+test("Storage says a deleted thread's worktree stays where the host keeps them", async () => {
+  window.parallax.storage = async () => [];
+  answers["thread/list"] = () => ({
+    result: { repos: [], threads: [{ id: "t-old", repo: "r", archived: true, createdAt: "" }] },
+  });
+  // A plxd with no such setting deletes them, as one with it on does.
+  for (const [settings, idle, asking] of [
+    [{}, "transcript and worktree from the host", "transcripts, worktrees, and branches go too"],
+    [{ deletedThreadWorktrees: true }, "transcript and worktree from the host", "worktrees, and"],
+    [
+      { deletedThreadWorktrees: false },
+      "Its worktree and branch stay on disk.",
+      "Their worktrees and branches stay on disk.",
+    ],
+  ] as const) {
+    answers["host/settings/get"] = () => ({ result: { autoResume: false, ...settings } });
+    await renderSettings("storage");
+    const archived = section("Archived threads");
+    expect(archived.textContent).toContain(idle);
+    await click(button(archived, "Delete all"));
+    expect(archived.textContent).toContain(asking);
+    act(() => unmount());
+  }
 });
 
 test("Providers opens on the host the window has open, not always this computer", async () => {

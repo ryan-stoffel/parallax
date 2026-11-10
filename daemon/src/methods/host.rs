@@ -18,7 +18,7 @@ use parallax_protocol::{
     HostSettings, HostSettingsGetParams, HostSettingsSetParams, HostUploadParams, HostUploadResult,
     HostVersionParams, HostVersionResult, IncompatibleProtocolDetail, InitializeParams,
     InitializeProtocol, InitializeResult, MAX_DEVICE_NAME_CHARS, ProtocolRange, StoreState,
-    UploadId,
+    UploadId, WorktreeKeep,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -228,6 +228,10 @@ pub(crate) fn initialize(
 /// `worktreeCleanup` (PLX-555): `cleanWorktrees` in `host/settings`, which an older plxd would
 /// silently ignore, and the sweep that removes a settled thread's merged worktree. `branchPrefix`
 /// (PLX-1249): `branchPrefix` in `host/settings`, which an older plxd would silently ignore.
+/// `worktreeRules` (PLX-1524): `deletedThreadWorktrees`, `inactiveWorktreeDays`,
+/// `archivedWorktreeDays`, `unchangedWorktrees`, and `worktreeKeep` in `host/settings`, which an
+/// older plxd would silently ignore, and the rules they set: whether a deleted thread's worktree
+/// goes with it, and the sweep that removes an inactive, archived, or unchanged thread's worktree.
 /// `connect`
 /// (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which an older
 /// plxd would silently ignore, `connect/devices`, and the tailnet listener. `terminals` (PLX-637):
@@ -436,6 +440,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "threadTools",
     "threads",
     "worktreeCleanup",
+    "worktreeRules",
     "youSync",
 ];
 
@@ -846,6 +851,11 @@ pub(crate) async fn set_settings(
         auto_resume,
         continue_after_restart,
         clean_worktrees,
+        deleted_thread_worktrees,
+        inactive_worktree_days,
+        archived_worktree_days,
+        unchanged_worktrees,
+        worktree_keep,
         branch_prefix,
         connect,
         remote,
@@ -855,6 +865,17 @@ pub(crate) async fn set_settings(
         device_name,
         device_icon,
     } = params;
+    if inactive_worktree_days.is_some_and(|days| !days_in(days, 1)) {
+        return Err(ErrorObject::invalid_params(
+            "inactiveWorktreeDays: use null for off, or 1 to 3650 days",
+        ));
+    }
+    if archived_worktree_days.is_some_and(|days| !days_in(days, 0)) {
+        return Err(ErrorObject::invalid_params(
+            "archivedWorktreeDays: use null for off, or 0 to 3650 days",
+        ));
+    }
+    let worktree_keep = worktree_keep.map(keep_name).transpose()?;
     // Other computers arrive at the remote listener, so the two go on and off together, and an
     // explicit `remote: false` wins.
     let remote = remote.or(agent_work.filter(|on| *on));
@@ -897,6 +918,42 @@ pub(crate) async fn set_settings(
                     clean_worktrees = on,
                     "changed the host's worktree cleanup setting"
                 );
+            }
+            if let Some(on) = deleted_thread_worktrees {
+                db.set_deleted_thread_worktrees(on)
+                    .map_err(|e| store_error(&e))?;
+                info!(
+                    deleted_thread_worktrees = on,
+                    "changed whether a deleted thread's worktree goes with it"
+                );
+            }
+            if let Some(days) = inactive_worktree_days {
+                db.set_inactive_worktree_days(days)
+                    .map_err(|e| store_error(&e))?;
+                info!(
+                    inactive_worktree_days = ?days,
+                    "changed when the host deletes inactive worktrees"
+                );
+            }
+            if let Some(days) = archived_worktree_days {
+                db.set_archived_worktree_days(days)
+                    .map_err(|e| store_error(&e))?;
+                info!(
+                    archived_worktree_days = ?days,
+                    "changed when the host deletes archived worktrees"
+                );
+            }
+            if let Some(on) = unchanged_worktrees {
+                db.set_unchanged_worktrees(on)
+                    .map_err(|e| store_error(&e))?;
+                info!(
+                    unchanged_worktrees = on,
+                    "changed whether the host deletes unchanged worktrees"
+                );
+            }
+            if let Some(keep) = &worktree_keep {
+                db.set_worktree_keep(keep).map_err(|e| store_error(&e))?;
+                info!(worktree_keep = %keep, "changed which worktrees the host keeps");
             }
             if let Some(prefix) = &stored_prefix {
                 db.set_branch_prefix(prefix).map_err(|e| store_error(&e))?;
@@ -957,6 +1014,35 @@ pub(crate) async fn set_settings(
     Ok(settings)
 }
 
+/// The most days `inactiveWorktreeDays` and `archivedWorktreeDays` take: ten years, as T3 Code's.
+const MAX_WORKTREE_DAYS: u32 = 3650;
+
+/// Whether a days setting is off or from `least` to [`MAX_WORKTREE_DAYS`].
+fn days_in(days: Option<u32>, least: u32) -> bool {
+    days.is_none_or(|days| (least..=MAX_WORKTREE_DAYS).contains(&days))
+}
+
+/// `worktreeKeep` as stored: its name in the protocol. One plxd doesn't know is invalid params.
+fn keep_name(keep: WorktreeKeep) -> Result<String, ErrorObject> {
+    match serde_json::to_value(keep) {
+        Ok(serde_json::Value::String(name)) if keep != WorktreeKeep::Unknown => Ok(name),
+        _ => Err(ErrorObject::invalid_params(
+            "worktreeKeep must be anyLocalFiles, uncommittedChanges, or trackedChanges",
+        )),
+    }
+}
+
+/// The host's `worktreeKeep`: `uncommittedChanges` until set, and unknown for a stored value this
+/// plxd can't read, which keeps the most.
+pub(crate) fn worktree_keep(db: &parallax_store::Store) -> Result<WorktreeKeep, ErrorObject> {
+    Ok(db
+        .worktree_keep()
+        .map_err(|e| store_error(&e))?
+        .map_or(WorktreeKeep::default(), |name| {
+            serde_json::from_value(name.into()).unwrap_or(WorktreeKeep::Unknown)
+        }))
+}
+
 /// `deviceName` as stored: without control characters, trimmed, and at most
 /// [`MAX_DEVICE_NAME_CHARS`] characters. `None` clears it, as `""` does.
 fn clean_device_name(name: &str) -> Option<String> {
@@ -984,6 +1070,11 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
         continue_after_restart: Some(db.continue_after_restart().map_err(|e| store_error(&e))?),
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
+        deleted_thread_worktrees: Some(db.deleted_thread_worktrees().map_err(|e| store_error(&e))?),
+        inactive_worktree_days: Some(db.inactive_worktree_days().map_err(|e| store_error(&e))?),
+        archived_worktree_days: Some(db.archived_worktree_days().map_err(|e| store_error(&e))?),
+        unchanged_worktrees: Some(db.unchanged_worktrees().map_err(|e| store_error(&e))?),
+        worktree_keep: Some(worktree_keep(db)?),
         branch_prefix: Some(
             db.branch_prefix()
                 .map_err(|e| store_error(&e))?

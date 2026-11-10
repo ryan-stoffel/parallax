@@ -260,6 +260,10 @@ pub(crate) struct ThreadRows {
 
 /// What `decide` reads besides the thread's rows.
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is its own fact about the store, read for one action"
+)]
 struct Rows {
     thread: ThreadRows,
     /// For `thread.create`: whether its scope, an orchestrator or repo entry, exists.
@@ -274,6 +278,9 @@ struct Rows {
     /// then stays, and the shared worktree it was the last to work in, which goes with it.
     shared: bool,
     left: Option<Removal>,
+    /// Also for `thread.delete`: whether the host keeps a deleted thread's worktree and branch,
+    /// and its scratch repository (`deletedThreadWorktrees` off, PLX-1524).
+    keep_worktree: bool,
     /// For `project.delete`: its repository, `Some(None)` for one with no repo (0093), if it
     /// exists, and its runs, orchestrators first.
     #[expect(
@@ -576,6 +583,7 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
             let (shared, left) = crate::delegation::on_delete(db, thread)?;
             rows.shared = shared;
             rows.left = left.map(Removal::from);
+            rows.keep_worktree = !db.deleted_thread_worktrees().map_err(error)?;
             rows.children = db
                 .list_threads()
                 .map_err(error)?
@@ -711,10 +719,15 @@ fn decide_delete(worktree: Option<Worktree>, rows: Rows) -> Decision {
                 .or(rows.repo_path)
         })
         .flatten();
-    let effects = if worktree.is_some() || rows.scratch || refs.is_some() {
+    // With `deletedThreadWorktrees` off, the worktree and its branch stay on disk (PLX-1524), and
+    // so does a scratch repository, which the kept worktree is a worktree of, with the thread's
+    // context folder, which goes only with it.
+    let worktree = worktree.filter(|_| !rows.keep_worktree);
+    let scratch = rows.scratch && !rows.keep_worktree;
+    let effects = if worktree.is_some() || scratch || refs.is_some() {
         vec![Effect::ThreadCleanup {
             worktree,
-            scratch: rows.scratch,
+            scratch,
             refs,
         }]
     } else {

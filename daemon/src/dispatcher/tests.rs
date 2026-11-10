@@ -6,7 +6,7 @@ use parallax_protocol::{OrchestratorCreateParams, ScopeId};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{Action, Command, Dispatcher, recover, work};
+use super::{Action, Command, Dispatcher, Effect, Removal, Rows, decide_delete, recover, work};
 use crate::server::Daemon;
 use crate::store::store_error;
 
@@ -53,6 +53,59 @@ fn db(dir: &Path) -> rusqlite::Connection {
 /// One count from the database, read on a connection of its own.
 fn count(dir: &Path, sql: &str) -> i64 {
     db(dir).query_row(sql, [], |row| row.get(0)).unwrap()
+}
+
+/// PLX-1524: a deleted thread's worktree and branch go with it, as always, unless the host's
+/// `deletedThreadWorktrees` is off. Its checkpoints go either way, except in a scratch repository,
+/// which then stays whole.
+#[test]
+fn a_deleted_threads_worktree_stays_when_the_host_keeps_them() {
+    let worktree = || parallax_store::Worktree {
+        id: Uuid::now_v7(),
+        repo_path: "/repo".to_owned(),
+        path: "/data/worktrees/repo/thread".to_owned(),
+        branch: "parallax/thread".to_owned(),
+        base: "abc".to_owned(),
+        git_dir: "/repo/.git/worktrees/thread".to_owned(),
+        base_dirty: false,
+        created_at: jiff::Timestamp::now(),
+    };
+    let cleanup = |keep_worktree| {
+        let rows = Rows {
+            keep_worktree,
+            ..Rows::default()
+        };
+        decide_delete(Some(worktree()), rows).effects
+    };
+    let removal = |worktree| {
+        vec![Effect::ThreadCleanup {
+            worktree,
+            scratch: false,
+            refs: Some("/repo".to_owned()),
+        }]
+    };
+    assert_eq!(cleanup(false), removal(Some(Removal::from(worktree()))));
+    assert_eq!(cleanup(true), removal(None));
+
+    // A thread with no repo: its scratch repository stays with its worktree, so nothing is left
+    // to clean up.
+    let scratch = |keep_worktree| {
+        let rows = Rows {
+            scratch: true,
+            keep_worktree,
+            ..Rows::default()
+        };
+        decide_delete(Some(worktree()), rows).effects
+    };
+    assert_eq!(
+        scratch(false),
+        vec![Effect::ThreadCleanup {
+            worktree: Some(Removal::from(worktree())),
+            scratch: true,
+            refs: None,
+        }]
+    );
+    assert_eq!(scratch(true), Vec::new());
 }
 
 /// Effects survive a crash (0059): one left running when plxd died runs again at the next start,

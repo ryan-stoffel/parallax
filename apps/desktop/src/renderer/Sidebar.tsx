@@ -209,6 +209,7 @@ import {
 import { Favorites, type FavoriteAction } from "./Favorites";
 import { close, Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarParts";
 import { DropLine, PinList, type PinDrag } from "./PinList";
+import { keepsDeletedWorktrees } from "./settings/hostSettings";
 import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
 import { RemoteControlBadge } from "./ClaudeRemoteControl";
@@ -539,6 +540,8 @@ export function ThreadList({
   const folders = mode === "traditional";
   // The thread or orchestrator the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
+  // Its key, once its host says a deleted thread's worktree and branch stay on disk.
+  const [keptOnDelete, setKeptOnDelete] = useState<string>();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
   // Threads deleted with Undo still offered: hidden until the toast goes, then deleted.
@@ -945,6 +948,8 @@ export function ThreadList({
         : item,
     );
     setDeleteError(undefined);
+    setKeptOnDelete(undefined);
+    void keepsDeletedWorktrees(item.host.id).then((kept) => kept && setKeptOnDelete(item.key));
     deleteDialog.current?.showModal();
   };
 
@@ -2044,8 +2049,8 @@ export function ThreadList({
       >
         “{toDelete?.title}” goes for good
         {toDelete?.kind === "orchestrator"
-          ? orchestratorLoss(toDelete.runs.length)
-          : ", with its transcript, worktree, and branch."}
+          ? orchestratorLoss(toDelete.runs.length, keptOnDelete === toDelete.key)
+          : threadLoss(keptOnDelete === toDelete?.key)}
       </ConfirmDialog>
       <ConfirmDialog
         ref={projectDelete}
@@ -2199,12 +2204,29 @@ function Toasts() {
   );
 }
 
-/** The rest of Delete orchestrator's warning, after "“name” goes for good", for an orchestrator of `agents` runs. */
-function orchestratorLoss(agents: number): string {
+/**
+ * The rest of Delete thread's warning, after "“title” goes for good". `kept` when its host keeps
+ * a deleted thread's worktree and branch (`deletedThreadWorktrees` off).
+ */
+export function threadLoss(kept: boolean): string {
+  return kept
+    ? ", with its transcript. Its worktree and branch stay on disk."
+    : ", with its transcript, worktree, and branch.";
+}
+
+/**
+ * The rest of Delete orchestrator's warning, after "“name” goes for good", for an orchestrator of
+ * `agents` runs. `kept` when its host keeps a deleted thread's worktree and branch.
+ */
+export function orchestratorLoss(agents: number, kept: boolean): string {
   if (agents === 0) return ".";
   if (agents === 1)
-    return ", with its agent's transcript, worktree, and branch. A running agent is stopped first.";
-  return `, with its ${agents} agents' transcripts, worktrees, and branches. Running agents are stopped first.`;
+    return kept
+      ? ", with its agent's transcript. A running agent is stopped first. Its worktree and branch stay on disk."
+      : ", with its agent's transcript, worktree, and branch. A running agent is stopped first.";
+  return kept
+    ? `, with its ${agents} agents' transcripts. Running agents are stopped first. Their worktrees and branches stay on disk.`
+    : `, with its ${agents} agents' transcripts, worktrees, and branches. Running agents are stopped first.`;
 }
 
 /** `Date.now()`, rendering again each minute. */

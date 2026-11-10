@@ -8525,6 +8525,34 @@ export type HostSettings = {
 	 */
 	cleanWorktrees?: boolean,
 	/**
+	 * Whether deleting a thread deletes its worktree and branch, whatever they hold (PLX-1524).
+	 * On by default. Off, both stay on disk, as does the repository plxd made for a thread with
+	 * none. This and the four settings after it are plxd's worktree rules, which an older plxd,
+	 * without the `worktreeRules` capability, leaves out.
+	 */
+	deletedThreadWorktrees?: boolean,
+	/**
+	 * The days a thread goes without activity before plxd deletes its worktree, or null, the
+	 * default, for off. The local branch, the thread, and its transcript stay, as they do for the
+	 * next two rules, and a later message makes the worktree again.
+	 */
+	inactiveWorktreeDays?: number | null,
+	/**
+	 * The days after a thread is archived before plxd deletes its worktree, where 0 is its next
+	 * sweep, or null, the default, for off.
+	 */
+	archivedWorktreeDays?: number | null,
+	/**
+	 * Whether plxd deletes a worktree with no commits beyond the default branch, once its thread
+	 * has been idle for an hour. Off by default.
+	 */
+	unchangedWorktrees?: boolean,
+	/**
+	 * What a worktree must hold for the merged, inactive, archived, and unchanged rules to keep
+	 * it. `uncommittedChanges` by default.
+	 */
+	worktreeKeep?: WorktreeKeep,
+	/**
 	 * What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
 	 * made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
 	 */
@@ -8570,6 +8598,13 @@ export type HostSettings = {
 };
 
 /**
+ * What a worktree must hold for plxd's cleanup rules to keep it (`worktreeKeep`), as T3 Code's.
+ *
+ * A newer plxd may send values that are not listed here. Treat those as unknown.
+ */
+export type WorktreeKeep = "anyLocalFiles" | "uncommittedChanges" | "trackedChanges";
+
+/**
  * Params of `host/settings/set`: changes the settings it names and leaves the rest.
  */
 export type HostSettingsSetParams = {
@@ -8585,6 +8620,29 @@ export type HostSettingsSetParams = {
 	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
 	 */
 	cleanWorktrees?: boolean,
+	/**
+	 * The new `deletedThreadWorktrees`, behind the `worktreeRules` capability. Absent leaves it.
+	 */
+	deletedThreadWorktrees?: boolean,
+	/**
+	 * The new `inactiveWorktreeDays`, behind the `worktreeRules` capability: 1 to 3650 days, or
+	 * null for off. Absent leaves it. Anything else fails with `invalidParams`.
+	 */
+	inactiveWorktreeDays?: number | null,
+	/**
+	 * The new `archivedWorktreeDays`, behind the `worktreeRules` capability: 0 to 3650 days, or
+	 * null for off. Absent leaves it. Anything else fails with `invalidParams`.
+	 */
+	archivedWorktreeDays?: number | null,
+	/**
+	 * The new `unchangedWorktrees`, behind the `worktreeRules` capability. Absent leaves it.
+	 */
+	unchangedWorktrees?: boolean,
+	/**
+	 * The new `worktreeKeep`, behind the `worktreeRules` capability. Absent leaves it. A value
+	 * plxd doesn't know fails with `invalidParams`.
+	 */
+	worktreeKeep?: WorktreeKeep,
 	/**
 	 * The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
 	 * thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch

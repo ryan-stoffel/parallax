@@ -3709,8 +3709,8 @@ impl Actor {
             .map(Some)
     }
 
-    /// Makes the run's worktree again, in git, its row, and here, when the merged-worktree sweep
-    /// removed it (PLX-781), so a message to a merged thread resumes it.
+    /// Makes the run's worktree again, in git, its row, and here, when a cleanup sweep removed it
+    /// (PLX-781, PLX-1524), so a message to a merged or inactive thread resumes it.
     async fn restore_worktree(&mut self) -> Result<(), String> {
         let Some(worktree) = &self.worktree else {
             return Ok(());
@@ -3737,7 +3737,7 @@ impl Actor {
         })
         .await
         .map_err(|error| error.message)?;
-        info!(run = %self.id, path = %worktree.path, "made a merged thread's worktree again");
+        info!(run = %self.id, path = %worktree.path, "made a thread's removed worktree again");
         if let Some(worktree) = &mut self.worktree {
             worktree.git_dir = git_dir;
             if let Some(base) = base {
