@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
-import { act, type ReactNode } from "react";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
@@ -189,17 +189,26 @@ test("a streaming message renders as the whole text does, at every line", async 
 
 test("Response streaming decides how much of a reply still arriving shows, and never a finished one (PLX-1523)", () => {
   const text = "First paragraph.\n\n- one\n- two\n\n```sh\ncargo test\n```\n\nLast, still arr";
-  const turn = (partial: boolean): Item[] => [
-    { kind: "user", key: "p", text: "Go", turnId: "turn-1" },
-    { kind: "assistant", key: "a", text, partial },
-  ];
-  // What the list reads after the prompt and its "Working for" line.
-  const shown = (mode: BehaviorPrefs["responseStreaming"], partial = true, live = true) => {
+  type Rows = ComponentProps<typeof TranscriptView>["rows"];
+  // What the list reads after the prompt, without the "Working for" line, for a turn whose reply
+  // is followed by `after`.
+  const shown = (
+    mode: BehaviorPrefs["responseStreaming"],
+    partial = true,
+    live = true,
+    after: Rows = [],
+  ) => {
     setBehaviorPrefs({ responseStreaming: mode });
-    render(<TranscriptView rows={turn(partial)} sent={new Map()} live={live} />);
+    const rows: Rows = [
+      { kind: "user", key: "p", text: "Go", turnId: "turn-1" },
+      { kind: "assistant", key: "a", text, partial },
+      ...after,
+    ];
+    render(<TranscriptView rows={rows} sent={new Map()} live={live} />);
     const said = [...document.querySelectorAll('[role="log"] [data-index]')]
-      .slice(live ? 2 : 1)
-      .map((row) => row.textContent);
+      .slice(1)
+      .map((row) => row.textContent ?? "")
+      .filter((row) => !row.startsWith("Working for"));
     act(() => unmount());
     return said;
   };
@@ -220,6 +229,21 @@ test("Response streaming decides how much of a reply still arriving shows, and n
     const whole = expect.stringContaining("Last, still arr");
     expect(shown("full", false)).toEqual([whole, "Working"]);
     expect(shown("full", true, false)).toEqual([whole]);
+    // A follow-up sent while the reply arrives lands after it, and the reply stays held, with
+    // the Working line after the follow-up.
+    const followUp: Rows = [{ kind: "pending", key: "q", text: "And then" }];
+    const sent = expect.stringContaining("And then");
+    expect(shown("full", true, true, followUp)).toEqual([sent, "Working"]);
+    const [kept, ...under] = shown("paragraphs", true, true, followUp);
+    expect(kept).toContain("cargo test");
+    expect(kept).not.toContain("Last");
+    expect(under).toEqual([sent, "Working"]);
+    // A reply its turn's end cut off shows whole while the next turn goes.
+    const next: Rows = [
+      { kind: "end", key: "e", outcome: { status: "completed" } },
+      { kind: "user", key: "n", text: "Next", turnId: "turn-2" },
+    ];
+    expect(shown("full", true, true, next)[0]).toEqual(whole);
   } finally {
     setBehaviorPrefs({ responseStreaming: "live" });
   }

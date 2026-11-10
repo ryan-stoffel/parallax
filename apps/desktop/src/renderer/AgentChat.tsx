@@ -1327,17 +1327,23 @@ export function TranscriptView({
     const shown = grouped.filter(
       (r, i) => r.kind !== "compaction" || r.done || (going && i === tail),
     );
-    // The reply still arriving, last in a turn that goes, shows what Response streaming lets it
+    // The reply still arriving in a turn that goes shows what Response streaming lets it
     // (PLX-1523): by paragraphs, every block before its last, which may still grow, and until the
-    // full response, nothing. One with nothing to show yet has no row. A finished reply, or one
-    // whose turn stopped, shows whole.
-    const reply = shown.findLast((r) => r.kind !== "notice");
-    const held = going && streaming !== "live" && reply?.kind === "assistant" && !!reply.partial;
+    // full response, nothing. One with nothing to show yet has no row. It's the last message
+    // still arriving, wherever it sits, since a follow-up sent meanwhile lands after it. A
+    // finished reply shows whole, and so does one whose turn ended or stopped before it finished.
+    const where = shown.findLastIndex((r) => r.kind === "assistant" && !!r.partial);
+    const reply = shown[where];
+    const held =
+      going &&
+      streaming !== "live" &&
+      reply?.kind === "assistant" &&
+      where > shown.findLastIndex((r) => r.kind === "end");
     if (held) {
       arriving.current =
         streaming === "paragraphs" ? markdownBlocks(reply.text, arriving.current) : [];
       const text = arriving.current.slice(0, -1).join("");
-      shown.splice(shown.indexOf(reply), 1, ...(text.trim() ? [{ ...reply, text }] : []));
+      shown.splice(where, 1, ...(text.trim() ? [{ ...reply, text }] : []));
     }
     const at = shown.findLastIndex((r) => r.kind !== "notice");
     const last = shown[at];
