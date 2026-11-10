@@ -224,6 +224,27 @@ test("with Rich text composer off, the formatting shortcuts do nothing (PLX-1519
   await press("*", { ...mod, shiftKey: true, code: "Digit8" });
   type("plain");
   expect(box.innerHTML).toBe("<p>plain</p>");
+
+  // Windows reports AltGr as Ctrl+Alt. AltGr+2 types "@" on a Spanish keyboard, so it isn't the
+  // heading's shortcut, which Ctrl+Alt+1 still is.
+  Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+  onTestFinished(() => void Reflect.deleteProperty(navigator, "platform"));
+  const swallowed = (key: string, code: string) => {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      code,
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => void box.dispatchEvent(event));
+    return event.defaultPrevented;
+  };
+  expect(swallowed("@", "Digit2")).toBe(false);
+  type("@");
+  expect(swallowed("1", "Digit1")).toBe(true);
+  expect(box.innerHTML).toBe("<p>plain@</p>");
 });
 
 test("scrolling up steps back with the caret in an empty box, until the text is pressed", () => {

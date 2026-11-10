@@ -636,9 +636,14 @@ const htmlText = (html: string, schema: Schema) => {
  * bold, italic, lists), or with Alt and 1 to 6 or C (headings, code block).
  */
 function formats(event: KeyboardEvent) {
-  if (!(isMacOS() ? event.metaKey : event.ctrlKey)) return false;
+  const mac = isMacOS();
+  if (!(mac ? event.metaKey : event.ctrlKey)) return false;
+  const typed = /^[a-z0-9]$/i.test(event.key);
+  // Ctrl+Alt off macOS is how Windows reports AltGr, which types a character, as "@" for
+  // AltGr+2 on a Spanish keyboard: only what it types counts, as in the editor's own keymaps.
+  if (!typed && !mac && event.altKey) return false;
   // The key by its place where Shift or Alt change what it types, as "*" for 8.
-  const key = /^[a-z0-9]$/i.test(event.key)
+  const key = typed
     ? event.key.toLowerCase()
     : event.code.replace(/^(Key|Digit)/, "").toLowerCase();
   if (event.altKey) return !event.shiftKey && /^[1-6c]$/.test(key);
