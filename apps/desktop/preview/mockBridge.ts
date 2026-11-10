@@ -434,15 +434,25 @@ function output(runId: string, ...items: AgentOutputItem[]) {
   emit({ kind: "agent.output", runId, items }, scopeOf(runId));
 }
 
-/** What every faked turn answers: plxd isn't here, so nothing reached an agent. */
-const previewReply =
-  "This is the Parallax preview: there's no plxd behind it, so nothing was sent to an agent. Everything you see is fixture data.";
+/**
+ * What every faked turn answers: plxd isn't here, so nothing reached an agent. Paragraphs, a list,
+ * and a code block, so Response streaming (Settings > Threads, PLX-1523) has blocks to show.
+ */
+const previewReply = [
+  "This is the Parallax preview: there's no plxd behind it, so nothing was sent to an agent. Everything you see is fixture data.",
+  "A faked turn goes like this:",
+  "- A thought, a few tool calls, and a message between them.\n- This reply, which arrives in pieces over about four seconds.\n- The turn's end.",
+  "The preview itself starts with:",
+  "```sh\npnpm exec vp dev -c preview/vite.config.ts\n```",
+  "Reload the page to get the fixtures back as they were.",
+].join("\n\n");
 
 let fakeCall = 0;
 
 /**
  * Runs a faked turn on `runId`: its message, then a few seconds of work as an agent's would come
- * in (a thought, calls and their results, a message between them), a short reply, and its end.
+ * in (a thought, calls and their results, a message between them), a reply that arrives in
+ * pieces, and its end.
  */
 function fakeTurn(runId: string, turnId: string | undefined, text: string | undefined) {
   patchRun(runId, { status: "running" });
@@ -498,8 +508,17 @@ function fakeTurn(runId: string, turnId: string | undefined, text: string | unde
   );
   call(4200, 900, "Edit", { file_path: "apps/desktop/src/renderer/transcript.ts" });
   call(5300, 1800, "Bash", { command: "pnpm exec vp test run src/renderer" });
-  later(7600, () => {
-    output(runId, { kind: "text", text: previewReply }, { kind: "turnFinished" });
+  // The reply streams as plxd sends one (PLX-1523): `textDelta`s over four seconds, each a few
+  // characters, then the whole message as `text` under the same id.
+  const messageId = `msg_preview_${++fakeCall}`;
+  const pieces = previewReply.match(/[^]{1,6}/g) ?? [];
+  pieces.forEach((piece, i) =>
+    later(7600 + (i * 4000) / pieces.length, () =>
+      output(runId, { kind: "textDelta", messageId, text: piece }),
+    ),
+  );
+  later(11_700, () => {
+    output(runId, { kind: "text", messageId, text: previewReply }, { kind: "turnFinished" });
     const run = patchRun(runId, { status: "completed" });
     if (run) emit({ kind: "agent.finished", runId, outcome: { status: "completed" } }, run.project);
   });
