@@ -89,5 +89,89 @@
     "jsonrpc": "2.0",
     "id": 9,
     "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "addReviewComment", "pullRequestId": "PR_1", "path": "src/main.rs", "body": "Why this?", "line": 14, "startLine": 12, "side": "right" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "addReviewComment", "pullRequestId": "PR_1", "path": "src/main.rs", "body": "Why this file?", "headSha": "abc123" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "editReviewComment", "commentId": "PRRC_1", "body": "Why this, again?" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "deleteReviewComment", "commentId": "PRRC_1" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "submitReview", "reviewId": "PRR_1", "event": "comment", "body": "" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 14,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 15,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "discardReview", "reviewId": "PRR_1" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 15,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
   }
 ]

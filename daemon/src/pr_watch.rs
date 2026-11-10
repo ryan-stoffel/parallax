@@ -141,9 +141,11 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
         id author { login avatarUrl } body state submittedAt lastEditedAt url
       } }
       reviewThreads(last: 100) { pageInfo { hasPreviousPage } nodes {
-        id path line originalLine diffSide isOutdated isResolved comments(first: 50) {
+        id path line originalLine startLine originalStartLine diffSide subjectType isOutdated
+        isResolved comments(first: 50) {
           pageInfo { hasNextPage } nodes {
-            id author { login avatarUrl } body createdAt lastEditedAt url diffHunk
+            id author { login avatarUrl } body createdAt lastEditedAt url diffHunk state
+            pullRequestReview { id }
           }
         }
       } }
@@ -1496,6 +1498,7 @@ fn parts(url: &str) -> Result<(&str, &str, u64), PrError> {
 }
 
 /// `gh api graphql`'s answer to [`QUERY`].
+#[allow(clippy::too_many_lines)]
 fn parse(answer: &str) -> Result<Detail, PrError> {
     let answer: Answer = serde_json::from_str(answer)
         .map_err(|error| PrError::Gh(format!("could not read GitHub's answer: {error}")))?;
@@ -1552,8 +1555,14 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
     let mut unresolved = Vec::new();
     for thread in pr.review_threads.nodes.into_iter().flatten() {
         let path = thread.path;
+        // A pending comment is seen by its reviewer alone until sent.
         if !thread.is_resolved
-            && let Some(first) = thread.comments.nodes.iter().flatten().next()
+            && let Some(first) = thread
+                .comments
+                .nodes
+                .iter()
+                .flatten()
+                .find(|c| !c.is_pending())
         {
             unresolved.push(PrStatusThread {
                 id: Some(thread.id.clone()),
@@ -1569,6 +1578,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
                 .nodes
                 .into_iter()
                 .flatten()
+                .filter(|comment| !comment.is_pending())
                 .filter_map(|comment| remark(comment, path.clone(), None)),
         );
     }
@@ -1604,12 +1614,18 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
 /// [`QUERY`]'s pull request `pr` as `pr/view` serves it, but for what [`viewed`] adds, with the
 /// repository's `merge_methods` and the head's `checks`. `None` when GitHub's answer lacks its
 /// number, URL, or last change.
+#[allow(clippy::too_many_lines)]
 fn pr_view(
     pr: &PullRequest,
     merge_methods: Vec<PrMergeMethod>,
     checks: Vec<PrCheck>,
 ) -> Option<PrView> {
     let (number, url, updated_at) = (pr.number?, pr.url.clone()?, pr.updated_at?);
+    let pending_review_id = pr
+        .reviews
+        .iter()
+        .find(|review| review.is_pending())
+        .map(|review| review.id.clone());
     let any = |state| checks.iter().any(|check: &PrCheck| check.state == state);
     let checks_state = (!checks.is_empty()).then(|| {
         if any(PrCheckState::Failed) {
@@ -1699,9 +1715,14 @@ fn pr_view(
         head_sha: pr.head_ref_oid.clone(),
         merge_methods,
         label_colors: labels,
-        review_threads: pr.review_threads.iter().map(review_thread).collect(),
+        review_threads: pr
+            .review_threads
+            .iter()
+            .filter_map(|thread| review_thread(thread, pending_review_id.as_deref()))
+            .collect(),
         review_threads_truncated: pr.review_threads.cut(),
         node_id: pr.id.clone(),
+        pending_review_id,
     })
 }
 
@@ -1822,16 +1843,48 @@ fn discussion(pr: &PullRequest) -> (Vec<PrComment>, Vec<PrReview>) {
 }
 
 /// A review thread as `pr/view` serves it. Its line is where it was written once it is outdated.
-fn review_thread(thread: &Thread) -> PrReviewThread {
-    PrReviewThread {
+fn review_thread(thread: &Thread, pending_review: Option<&str>) -> Option<PrReviewThread> {
+    // GitHub says a discarded review's comments are pending for a moment after, in no review.
+    let gone = |comment: &&Comment| {
+        comment.is_pending()
+            && comment.pull_request_review.as_ref().map(|r| r.id.as_str()) != pending_review
+    };
+    let comments: Vec<_> = thread
+        .comments
+        .iter()
+        .filter(|comment| !gone(comment))
+        .filter_map(|comment| {
+            Some(PrThreadComment {
+                id: comment.id.clone(),
+                pending: comment.is_pending(),
+                url: comment.url.clone(),
+                author: login(comment.author.as_ref()),
+                avatar_url: comment.avatar_url(),
+                body: comment.body.clone(),
+                created_at: comment.created_at?,
+            })
+        })
+        .collect();
+    if comments.is_empty() && thread.comments.iter().next().is_some() {
+        return None;
+    }
+    // GitHub gives a thread on a whole file line 1.
+    let on_file = thread.subject_type.as_deref() == Some("FILE");
+    let line = thread.line.or(thread.original_line).filter(|_| !on_file);
+    Some(PrReviewThread {
         id: thread.id.clone(),
         path: thread.path.clone(),
-        line: thread.line.or(thread.original_line),
+        line,
         side: match thread.diff_side.as_deref() {
             Some("LEFT") => Some(PrDiffSide::Left),
             Some("RIGHT") => Some(PrDiffSide::Right),
             _ => None,
         },
+        // GitHub repeats a one-line thread's line here on the old side.
+        start_line: thread
+            .start_line
+            .or(thread.original_start_line)
+            .filter(|start| Some(*start) != line && !on_file),
         diff_hunk: thread
             .comments
             .iter()
@@ -1839,22 +1892,9 @@ fn review_thread(thread: &Thread) -> PrReviewThread {
             .and_then(|first| first.diff_hunk.clone()),
         is_outdated: thread.is_outdated,
         is_resolved: thread.is_resolved,
-        comments: thread
-            .comments
-            .iter()
-            .filter_map(|comment| {
-                Some(PrThreadComment {
-                    id: comment.id.clone(),
-                    url: comment.url.clone(),
-                    author: login(comment.author.as_ref()),
-                    avatar_url: comment.avatar_url(),
-                    body: comment.body.clone(),
-                    created_at: comment.created_at?,
-                })
-            })
-            .collect(),
+        comments,
         truncated: thread.comments.cut(),
-    }
+    })
 }
 
 fn check_state(context: &RollupNode) -> CheckState {
@@ -2275,9 +2315,21 @@ struct Comment {
     state: Option<String>,
     /// A review-thread comment's diff, down to its line.
     diff_hunk: Option<String>,
+    /// The review a review-thread comment is in.
+    pull_request_review: Option<ReviewId>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReviewId {
+    id: String,
 }
 
 impl Comment {
+    /// Whether it waits in a pending review.
+    fn is_pending(&self) -> bool {
+        self.state.as_deref() == Some("PENDING")
+    }
+
     fn avatar_url(&self) -> Option<String> {
         self.author
             .as_ref()
@@ -2302,7 +2354,10 @@ struct Thread {
     /// Null once the thread is outdated, or for a thread on the whole file.
     line: Option<u64>,
     original_line: Option<u64>,
+    start_line: Option<u64>,
+    original_start_line: Option<u64>,
     diff_side: Option<String>,
+    subject_type: Option<String>,
     #[serde(default)]
     is_outdated: bool,
     #[serde(default)]

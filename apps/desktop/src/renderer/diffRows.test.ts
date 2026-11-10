@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { diffRows, pairLines, sameRow, type Row } from "./diffRows";
+import { diffRows, pairLines, pickRange, sameRow, type Row } from "./diffRows";
 import { parseDiff, type DiffFile } from "./parseDiff";
 import type { ThreadView } from "./pr/model";
 
@@ -110,4 +110,68 @@ test("sameRow finds a line in the other layout", () => {
   const added = unified.find((r: Row) => r.line?.text === "new")!;
   expect(split[sameRow(split, added)]?.right?.text).toBe("new");
   expect(sameRow(split, unified[0]!)).toBe(0);
+});
+
+const twoHunks = () =>
+  parseDiff(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,3 +1,3 @@",
+      " one",
+      "-two",
+      "+TWO",
+      " three",
+      "@@ -20,2 +20,2 @@",
+      " twenty",
+      "+new",
+    ].join("\n"),
+  )[0]!;
+
+test("a range keeps its ends in order, on one side", () => {
+  const { lines } = twoHunks();
+  expect(pickRange(lines, "right", 3, 1)).toEqual({ side: "right", start: 1, end: 3 });
+  expect(pickRange(lines, "right", 1, 2)).toEqual({ side: "right", start: 1, end: 2 });
+  expect(pickRange(lines, "left", 2, 2)).toEqual({ side: "left", start: 2, end: 2 });
+});
+
+test("a range stops at the end of its hunk, in either direction", () => {
+  const { lines } = twoHunks();
+  expect(pickRange(lines, "right", 2, 20)).toEqual({ side: "right", start: 2, end: 3 });
+  expect(pickRange(lines, "right", 21, 3)).toEqual({ side: "right", start: 20, end: 21 });
+});
+
+test("a range from a line the diff doesn't show is just that line", () => {
+  expect(pickRange(twoHunks().lines, "right", 99, 2)).toEqual({
+    side: "right",
+    start: 99,
+    end: 99,
+  });
+});
+
+test("the comment box sits under its range's last line, after the threads there", () => {
+  const file = twoHunks();
+  const on = thread({ line: 3 });
+  const range = { side: "right", start: 2, end: 3 } as const;
+  const rows = diffRows([file], "unified", open, [on], { path: "a.ts", range });
+  const box = rows.findIndex((r) => r.composer);
+  expect(rows[box]?.composer).toBe("across");
+  expect(rows[box - 1]?.threads).toEqual([on]);
+  expect(rows[box - 2]?.line?.text).toBe("three");
+});
+
+test("in split the comment box sits on its side, for an old or a new line", () => {
+  const file = twoHunks();
+  const left = { side: "left", start: 2, end: 2 } as const;
+  const rows = diffRows([file], "split", open, [], { path: "a.ts", range: left });
+  const box = rows.findIndex((r) => r.composer);
+  expect(rows[box]?.composer).toBe("left");
+  expect(rows[box - 1]?.left?.text).toBe("two");
+});
+
+test("a whole-file comment box sits atop the file, and another file's isn't here", () => {
+  const rows = diffRows([twoHunks()], "split", open, [], { path: "a.ts" });
+  expect(rows[1]?.composer).toBe("across");
+  const other = diffRows([twoHunks()], "split", open, [], { path: "b.ts" });
+  expect(other.some((r) => r.composer)).toBe(false);
 });
