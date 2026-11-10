@@ -356,7 +356,7 @@ function CiteRef({ node, updateAttributes, editor }: NodeViewProps) {
           onClick={(e) =>
             setEditing(e.currentTarget.closest("[data-chip]")!.getBoundingClientRect())
           }
-          className="inline-flex shrink-0 rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+          className="inline-flex shrink-0 rounded-md p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
         >
           <Pencil aria-hidden className="size-3.5" />
         </button>
@@ -549,7 +549,11 @@ const markdown = new MarkdownSerializer(
     taskList: (state, node) =>
       state.renderList(node, "  ", (i) => (node.child(i).attrs["checked"] ? "- [x] " : "- [ ] ")),
     taskItem: nodes["list_item"]!,
-    hardBreak: (state) => state.write("\n"),
+    // Not beside a citation, which already sits a paragraph apart.
+    hardBreak: (state, _node, parent, index) => {
+      const cited = (i: number) => parent.maybeChild(i)?.type.name === "citeRef";
+      if (!cited(index - 1) && !cited(index + 1)) state.write("\n");
+    },
     mention: (state, node) => state.text(node.attrs["token"] as string, false),
     threadRef: (state, node) => state.text(`@"${node.attrs["title"] as string}"`, false),
     computerRef: (state, node) => state.text(`@"${node.attrs["name"] as string}"`, false),
@@ -2220,14 +2224,12 @@ export function Composer({
 
   useEffect(() => {
     if (!cite) return;
-    const project = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
+    // The card takes a line of its own, and a line break after it puts the caret on the next line,
+    // at the text's height, not the card's.
     editor
       .chain()
       .focus("end")
-      .insertContent([
-        ...(project ? [{ type: "text", text: project }] : []),
-        { type: "citeRef", attrs: cite },
-      ])
+      .insertContent([{ type: "citeRef", attrs: cite }, { type: "hardBreak" }])
       .run();
   }, [cite, editor]);
 
