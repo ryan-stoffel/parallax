@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev --env dev",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run && node --test scripts/staging-target.test.mjs",
+    "deploy:staging": "node scripts/deploy-staging.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.9",

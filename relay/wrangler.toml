@@ -82,3 +82,40 @@ class_name = "StreamRelay"
 name = "ANON"
 namespace_id = "6520"
 simple = { limit = 120, period = 60 }
+
+# Staging (PLX-1495): a second Worker, `parallax-relay-staging`, on its `workers.dev` URL, for
+# agents to deploy to and measure. Deploy it only with `pnpm deploy:staging` (README.md). Its
+# Durable Objects are its own Worker's, so it shares no storage with production, and it has no
+# route on `parallax.codes`. It takes the same Clerk instances as production, and serves only the
+# relay probe's test account: `REQUIRE_ALLOWED_USERS` makes it refuse everyone its `ALLOWED_USERS`
+# secret doesn't list, so it stays closed when that secret is missing. The migrations and
+# observability settings are the top level's, which every environment inherits.
+[env.staging]
+name = "parallax-relay-staging"
+workers_dev = true
+preview_urls = false
+routes = []
+
+[env.staging.vars]
+REQUIRE_ALLOWED_USERS = "1"
+CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
+CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
+CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
+
+[[env.staging.durable_objects.bindings]]
+name = "HOSTS"
+class_name = "HostRelay"
+
+[[env.staging.durable_objects.bindings]]
+name = "USERS"
+class_name = "UserAccount"
+
+[[env.staging.durable_objects.bindings]]
+name = "STREAMS"
+class_name = "StreamRelay"
+
+# Its own namespace, so staging's counts and production's stay apart.
+[[env.staging.ratelimits]]
+name = "ANON"
+namespace_id = "1495"
+simple = { limit = 120, period = 60 }
