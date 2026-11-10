@@ -710,7 +710,8 @@ export function rootOf(state: ThreadsState, thread: Thread): Thread {
 /**
  * A thread to start in group `groupId` with `prompt` and its `images`, with `options` sent as they
  * are, on a branch named from the prompt's words. A plxd with `threadNaming` then names the thread
- * and its branch with the naming model in Settings (0058). With `checkout`, it works in the
+ * and its branch with the naming model in Settings (0058), and one with `threadTitleInstructions`
+ * takes the title instructions there too (PLX-1523). With `checkout`, it works in the
  * repository's own checkout instead of a new worktree, so it gets no branch. Reuse `runId`, with
  * the same options, `checkout`, and `gitRef`, to retry.
  */
@@ -890,6 +891,7 @@ export function useThreads(
   const approvals = has("approvals");
   const lineage = has("threadLineage");
   const naming = has("threadNaming");
+  const titleInstructions = has("threadTitleInstructions");
   const [state, dispatch] = useReducer(threadsReducer, emptyThreads);
   const [error, setError] = useState<string>();
   const [outdated, setOutdated] = useState(false);
@@ -990,7 +992,9 @@ export function useThreads(
         gitRef,
       }: ThreadStart) {
         const branchSlug = slugify(prompt);
-        const { naming: model, namingEffort } = newThreadPrefs.get();
+        const { naming: model, namingEffort, namingInstructions } = newThreadPrefs.get();
+        // An older plxd would ignore them, so it isn't sent them.
+        const instructions = titleInstructions ? namingInstructions.trim() : "";
         const answer = await window.parallax.request(hostId, "thread/start", {
           runId,
           prompt,
@@ -1006,7 +1010,12 @@ export function useThreads(
           ...(approvals && { approvals }),
           ...(naming &&
             prompt.trim() && {
-              naming: { backend: model.provider, model: model.id, effort: namingEffort },
+              naming: {
+                backend: model.provider,
+                model: model.id,
+                effort: namingEffort,
+                ...(instructions && { titleInstructions: instructions }),
+              },
             }),
         });
         if ("error" in answer) return answer.error;
@@ -1167,7 +1176,7 @@ export function useThreads(
         return undefined;
       },
     }),
-    [hostId, approvals, naming],
+    [hostId, approvals, naming, titleInstructions],
   );
 
   // One object per change, so a parent can keep it and compare.

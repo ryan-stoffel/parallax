@@ -278,8 +278,8 @@ pub use terminal::{
 };
 pub use thread::{
     ForkedFrom, MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS_BYTES, MAX_PROJECT_NAME_BYTES,
-    MAX_THREAD_TITLE_BYTES, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
+    MAX_THREAD_TITLE_BYTES, MAX_TITLE_INSTRUCTIONS_BYTES, ProjectCreateParams, ProjectCreateResult,
+    ProjectDeleteParams, ProjectDeleteResult, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
     RepoCloneProgressParams, RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult,
     RepoId, RepoLogo, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRef,
     RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,

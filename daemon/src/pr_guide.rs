@@ -599,6 +599,7 @@ mod tests {
                         backend: "claude".to_owned(),
                         model: "m".to_owned(),
                         effort: None,
+                        title_instructions: None,
                     },
                     regenerate,
                 },

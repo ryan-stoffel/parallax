@@ -25,6 +25,7 @@ import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import "./markdownTest";
 import { Notifications } from "./notifications";
+import { setBehaviorPrefs, type BehaviorPrefs } from "./prefs";
 import { ThreadLinksContext } from "./threadContext";
 import { emptyThreads, type ThreadsState } from "./threads";
 import type { Item } from "./transcript";
@@ -185,6 +186,44 @@ test("a streaming message renders as the whole text does, at every line", async 
   }
   // Hundreds of renders, a few seconds when other files run alongside.
 }, 30_000);
+
+test("Response streaming decides how much of a reply still arriving shows, and never a finished one (PLX-1523)", () => {
+  const text = "First paragraph.\n\n- one\n- two\n\n```sh\ncargo test\n```\n\nLast, still arr";
+  const turn = (partial: boolean): Item[] => [
+    { kind: "user", key: "p", text: "Go", turnId: "turn-1" },
+    { kind: "assistant", key: "a", text, partial },
+  ];
+  // What the list reads after the prompt and its "Working for" line.
+  const shown = (mode: BehaviorPrefs["responseStreaming"], partial = true, live = true) => {
+    setBehaviorPrefs({ responseStreaming: mode });
+    render(<TranscriptView rows={turn(partial)} sent={new Map()} live={live} />);
+    const said = [...document.querySelectorAll('[role="log"] [data-index]')]
+      .slice(live ? 2 : 1)
+      .map((row) => row.textContent);
+    act(() => unmount());
+    return said;
+  };
+  try {
+    // As it's written: all of it, with no Working line under it.
+    expect(shown("live")).toEqual([expect.stringContaining("Last, still arr")]);
+    // By paragraphs: the blocks another follows, then the Working line for the one arriving.
+    const [blocks, working, ...rest] = shown("paragraphs");
+    expect(blocks).toContain("First paragraph.");
+    expect(blocks).toContain("two");
+    expect(blocks).toContain("cargo test");
+    expect(blocks).not.toContain("Last");
+    expect([working, ...rest]).toEqual(["Working"]);
+    // The full response: only the Working line, with no empty row before it.
+    expect(shown("full")).toEqual(["Working"]);
+    // A finished reply shows whole, over the Working line for what the agent does next, and so
+    // does one whose turn stopped while it arrived.
+    const whole = expect.stringContaining("Last, still arr");
+    expect(shown("full", false)).toEqual([whole, "Working"]);
+    expect(shown("full", true, false)).toEqual([whole]);
+  } finally {
+    setBehaviorPrefs({ responseStreaming: "live" });
+  }
+});
 
 // The sample's run, as it started.
 const sampleRun = (logged[0]!.event as { run: AgentRun }).run;

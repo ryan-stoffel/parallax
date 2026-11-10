@@ -6807,6 +6807,13 @@ export type ThreadNaming = {
 	 * How hard it thinks. Absent means the CLI's default.
 	 */
 	effort?: AgentEffort,
+	/**
+	 * The user's own instructions for a new thread's title, behind `threadTitleInstructions`
+	 * (PLX-1523). plxd adds them to the model's prompt after its own rules, trimmed and cut to
+	 * their first 2048 bytes ([`MAX_TITLE_INSTRUCTIONS_BYTES`]). Absent or empty names the
+	 * thread by plxd's rules alone. `pr/guide` ignores them.
+	 */
+	titleInstructions?: string,
 };
 
 /**

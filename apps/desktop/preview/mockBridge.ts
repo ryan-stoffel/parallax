@@ -147,6 +147,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "threadImportRemote",
     "threadLineage",
     "threadNaming",
+    "threadTitleInstructions",
     "threadTools",
     "threads",
   ].map((name) => [name, {}]),

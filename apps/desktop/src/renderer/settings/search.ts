@@ -170,7 +170,19 @@ export const settingsIndex: SettingEntry[] = [
       "access approve ask sandbox edit yolo full",
     ],
     ["Legacy Plan mode", "List Plan in the Access picker", "plan access picker"],
+  ]),
+  ...entries("threads", "Text generation", [
     ["Naming model", "Names a new thread and its branch", "title rename branch name auto"],
+    [
+      "Thread title instructions",
+      "Added to the prompt that names a new thread",
+      "title naming prompt custom rules rename",
+    ],
+    [
+      "Response streaming",
+      "When a reply's text appears while the agent writes it",
+      "stream paragraphs wait full response typing live text",
+    ],
   ]),
   ...entries("threads", "Resuming threads", [
     [

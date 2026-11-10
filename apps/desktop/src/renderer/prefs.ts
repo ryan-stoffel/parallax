@@ -32,6 +32,11 @@ export type NewThreadPrefs = {
    */
   naming: { provider: string; id: string };
   namingEffort: AgentEffort;
+  /**
+   * The user's own instructions for a new thread's title, which a plxd with
+   * `threadTitleInstructions` adds to that model's prompt (PLX-1523). Empty: none.
+   */
+  namingInstructions: string;
 };
 
 export const newThreadDefaults: NewThreadPrefs = {
@@ -43,6 +48,7 @@ export const newThreadDefaults: NewThreadPrefs = {
   worktreeBase: "default",
   naming: { provider: "codex", id: "gpt-6-luna" },
   namingEffort: "low",
+  namingInstructions: "",
 };
 
 export const newThreadPrefs = stored("parallax.newThreads", newThreadDefaults, merged);
@@ -78,6 +84,12 @@ export type BehaviorPrefs = {
   timeFormat: "system" | "12" | "24";
   /** What sends a prompt. With `modEnter`, Enter starts a new line. */
   sendKey: "enter" | "modEnter";
+  /**
+   * When a reply's text shows while it arrives (PLX-1523): `live` as it's written, `paragraphs`
+   * each paragraph, list, or code block once it's complete, `full` once the reply is. A finished
+   * reply always shows whole.
+   */
+  responseStreaming: "live" | "paragraphs" | "full";
   /** Where a pull request's Open on GitHub goes: the system browser, or the side panel's Browser. */
   openPrsIn: "external" | "browser";
   /**
@@ -98,6 +110,7 @@ export const behaviorDefaults: BehaviorPrefs = {
   inAppNotifications: true,
   timeFormat: "system",
   sendKey: "enter",
+  responseStreaming: "live",
   openPrsIn: "external",
   prLinkClick: "parallax",
   cleanDictation: true,
