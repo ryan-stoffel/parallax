@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { closeHistory } from "@tiptap/pm/history";
-import type { TiptapEditorHTMLElement } from "@tiptap/react";
+import { isMacOS, type TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
@@ -191,6 +191,39 @@ test("with Rich text composer off, Markdown shows as typed and is sent the same 
 
   await press("Enter");
   expect(onSend).toHaveBeenCalledWith("- first, **all** of it\n```\n# not a heading", {}, [], []);
+});
+
+test("with Rich text composer off, pasted Markdown and copied HTML go in as plain text (PLX-1519)", async () => {
+  setChatPrefs({ richComposer: false });
+  const { box, paste } = render(vi.fn(async () => undefined));
+  const formatted = "<p><strong>bold</strong> text</p><ul><li>item</li></ul>";
+  await paste([], { "text/plain": "**bold**\n- item" });
+  expect(box.innerHTML).toBe("<p>**bold**</p><p>- item</p>");
+
+  // A web page's copy is its text, with or without plain text beside its HTML.
+  act(() => void box.editor!.commands.clearContent());
+  await paste([], { "text/plain": "bold text\nitem", "text/html": formatted });
+  expect(box.innerHTML).toBe("<p>bold text</p><p>item</p>");
+  act(() => void box.editor!.commands.clearContent());
+  await paste([], { "text/html": formatted });
+  expect(box.innerHTML).toBe("<p>bold text</p><p>item</p>");
+});
+
+test("with Rich text composer off, the formatting shortcuts do nothing (PLX-1519)", async () => {
+  const { box, type, press } = render(vi.fn(async () => undefined));
+  const mod = isMacOS() ? { metaKey: true } : { ctrlKey: true };
+  // On, as it starts: Mod+B makes what's typed next bold.
+  await press("b", mod);
+  type("bold");
+  expect(box.innerHTML).toBe("<p><strong>bold</strong></p>");
+
+  act(() => void box.editor!.commands.clearContent());
+  setChatPrefs({ richComposer: false });
+  await press("b", mod);
+  // Shift+8 types "*", so the list's shortcut is read by the key's place.
+  await press("*", { ...mod, shiftKey: true, code: "Digit8" });
+  type("plain");
+  expect(box.innerHTML).toBe("<p>plain</p>");
 });
 
 test("scrolling up steps back with the caret in an empty box, until the text is pressed", () => {

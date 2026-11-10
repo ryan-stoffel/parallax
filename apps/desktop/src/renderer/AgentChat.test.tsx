@@ -122,12 +122,19 @@ test("an assistant message renders Markdown, but never raw HTML or images", asyn
 });
 
 test("with Render math off, LaTeX shows as its source (PLX-1519)", () => {
-  row({ kind: "assistant", key: "a", text: "So $x^2$ it is." });
-  expect(document.querySelector('[role="math"]')?.getAttribute("aria-label")).toBe("x^2");
-  // An open thread's messages follow the setting at once.
+  row({ kind: "assistant", key: "a", text: "So $x^2$ and \\(y^2\\), for $5:\n\n\\[\nz = 1\n\\]" });
+  const math = () =>
+    [...document.querySelectorAll('[role="math"]')].map((m) =>
+      m.getAttribute("aria-label")?.trim(),
+    );
+  expect(math()).toEqual(["x^2", "y^2", "z = 1"]);
+  // An open thread's messages follow the setting at once. Each delimiter reads as dollars.
   act(() => setChatPrefs({ math: false }));
-  expect(document.querySelector('[role="math"]')).toBeNull();
-  expect(document.body.textContent).toBe("So $x^2$ it is.");
+  expect(math()).toEqual([]);
+  expect([...document.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+    "So $x^2$ and $y^2$, for $5:",
+    "$$ z = 1 $$",
+  ]);
   act(() => setChatPrefs(chatDefaults));
 });
 

@@ -2799,6 +2799,8 @@ function SiteIcon({ site }: { site: string }) {
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
 const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; images: Images }) {
   const openFile = useOpenFile();
+  // Settings > Appearance > Chat's Render math (PLX-1519). Off, the renderer reads no math, so
+  // what `dollarMath` leaves shows as its source: `$x$`, and `$$x$$` on a line of its own.
   const { math } = chatPrefs.use();
   const remote = (url: string) => images === "github" && isHttps(url);
   // A thread's own file shows, as FileImage reads it, where it's a paragraph of its own, which
@@ -2899,12 +2901,6 @@ function Runs({ text, images = "none" }: { text: string; images?: Images }) {
 }
 
 /**
- * `text` with its LaTeX readied for the renderer (math.ts), or as it is while Settings >
- * Appearance > Chat's Render math is off, when math shows as its source (PLX-1519).
- */
-const useMath = (text: string) => (chatPrefs.use().math ? dollarMath(text) : text);
-
-/**
  * Markdown as GitHub writes it, drawn by Enriched Markdown as the phone draws it (apps/mobile
  * ui.tsx): headings, lists and task lists, tables, quotes and GitHub's alerts, KaTeX math, and
  * links, with code blocks as CodeBlock. With `images` "github", https images load, as a pull
@@ -2920,10 +2916,9 @@ export const MarkdownText = memo(function MarkdownText({
   /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
   streaming?: boolean;
 }) {
-  const read = useMath(text);
   return (
     <div className={streaming ? "enriched streaming" : "enriched"}>
-      <Runs text={read} images={images} />
+      <Runs text={dollarMath(text)} images={images} />
     </div>
   );
 });
@@ -2937,7 +2932,7 @@ export const MarkdownText = memo(function MarkdownText({
 function StreamingMarkdown({ text }: { text: string }) {
   // The last update's blocks, so the split parses only the end of the message again.
   const blocks = useRef<string[]>([]);
-  blocks.current = markdownBlocks(useMath(text), blocks.current);
+  blocks.current = markdownBlocks(dollarMath(text), blocks.current);
   return (
     <div className="enriched streaming">
       {blocks.current.map((block, i) => (
