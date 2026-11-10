@@ -21,9 +21,25 @@ const CONTINUE_AFTER_RESTART: &str = "continue_after_restart";
 /// request merges (PLX-555).
 const CLEAN_WORKTREES: &str = "clean_worktrees";
 
+/// The `host_settings` key for whether deleting a thread removes its worktree and branch
+/// (PLX-1524).
+const DELETED_THREAD_WORKTREES: &str = "deleted_thread_worktrees";
+
 /// The `host_settings` key for the days without activity after which plxd removes a thread's
 /// worktree (PLX-1524).
 const INACTIVE_WORKTREE_DAYS: &str = "inactive_worktree_days";
+
+/// The `host_settings` key for the days after a thread settles after which plxd removes its
+/// worktree (PLX-1524).
+const SETTLED_WORKTREE_DAYS: &str = "settled_worktree_days";
+
+/// The `host_settings` key for whether plxd removes a worktree with no commits beyond the default
+/// branch (PLX-1524).
+const UNCHANGED_WORKTREES: &str = "unchanged_worktrees";
+
+/// The `host_settings` key for what a worktree must hold for plxd's cleanup rules to keep it, as
+/// the protocol names it (PLX-1524).
+const WORKTREE_KEEP: &str = "worktree_keep";
 
 /// The `host_settings` key for what a new thread's branch starts with (PLX-1249).
 const BRANCH_PREFIX: &str = "branch_prefix";
@@ -193,27 +209,107 @@ impl Store {
         self.set_flag(CLEAN_WORKTREES, on)
     }
 
+    /// Whether deleting a thread removes its worktree and branch (PLX-1524). On when never set,
+    /// as plxd always did.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn deleted_thread_worktrees(&self) -> Result<bool, StoreError> {
+        self.flag_default_on(DELETED_THREAD_WORKTREES)
+    }
+
+    /// Sets whether deleting a thread removes its worktree and branch.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_deleted_thread_worktrees(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(DELETED_THREAD_WORKTREES, on)
+    }
+
     /// The days a thread goes without activity before plxd removes its worktree (PLX-1524).
-    /// `None`, off, when never set, set to 0, or unreadable.
+    /// `None`, off, when never set or unreadable.
     ///
     /// # Errors
     ///
     /// A database error.
     pub fn inactive_worktree_days(&self) -> Result<Option<u32>, StoreError> {
-        Ok(self
-            .text(INACTIVE_WORKTREE_DAYS)?
-            .and_then(|days| days.parse().ok())
-            .filter(|days| *days > 0))
+        self.days(INACTIVE_WORKTREE_DAYS)
     }
 
-    /// Sets the days without activity after which plxd removes a thread's worktree. 0 turns it
-    /// off. The caller checks the range.
+    /// Sets the days without activity after which plxd removes a thread's worktree, or turns the
+    /// rule off with `None`. The caller checks the range.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn set_inactive_worktree_days(&self, days: u32) -> Result<(), StoreError> {
-        self.set_text(INACTIVE_WORKTREE_DAYS, Some(&days.to_string()))
+    pub fn set_inactive_worktree_days(&self, days: Option<u32>) -> Result<(), StoreError> {
+        self.set_text(
+            INACTIVE_WORKTREE_DAYS,
+            days.map(|d| d.to_string()).as_deref(),
+        )
+    }
+
+    /// The days after a thread settles before plxd removes its worktree, where 0 is the next
+    /// sweep (PLX-1524). `None`, off, when never set or unreadable.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn settled_worktree_days(&self) -> Result<Option<u32>, StoreError> {
+        self.days(SETTLED_WORKTREE_DAYS)
+    }
+
+    /// Sets the days after a thread settles after which plxd removes its worktree, or turns the
+    /// rule off with `None`. The caller checks the range.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_settled_worktree_days(&self, days: Option<u32>) -> Result<(), StoreError> {
+        self.set_text(
+            SETTLED_WORKTREE_DAYS,
+            days.map(|d| d.to_string()).as_deref(),
+        )
+    }
+
+    /// Whether plxd removes a worktree with no commits beyond the default branch (PLX-1524). Off
+    /// unless set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn unchanged_worktrees(&self) -> Result<bool, StoreError> {
+        self.flag_default_off(UNCHANGED_WORKTREES)
+    }
+
+    /// Sets whether plxd removes a worktree with no commits beyond the default branch.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_unchanged_worktrees(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(UNCHANGED_WORKTREES, on)
+    }
+
+    /// What a worktree must hold for plxd's cleanup rules to keep it, as the protocol names it, if
+    /// it was ever set (PLX-1524).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn worktree_keep(&self) -> Result<Option<String>, StoreError> {
+        self.text(WORKTREE_KEEP)
+    }
+
+    /// Sets what a worktree must hold for plxd's cleanup rules to keep it. The caller checks it.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_worktree_keep(&self, keep: &str) -> Result<(), StoreError> {
+        self.set_text(WORKTREE_KEEP, Some(keep))
     }
 
     /// What a new thread's branch starts with, if it was ever set. An empty one means none.
@@ -598,6 +694,11 @@ impl Store {
         self.set_text(UNUSED_SECRET_KEYS, keys)
     }
 
+    /// A host setting that counts days, `None` unless a number is stored.
+    fn days(&self, key: &str) -> Result<Option<u32>, StoreError> {
+        Ok(self.text(key)?.and_then(|days| days.parse().ok()))
+    }
+
     /// A boolean host setting, on unless stored as `false`.
     fn flag_default_on(&self, key: &str) -> Result<bool, StoreError> {
         Ok(self.text(key)?.is_none_or(|value| value != "false"))
@@ -644,8 +745,8 @@ mod tests {
     use crate::Store;
 
     /// A fresh install has auto-resume (0060), continuing after a restart, remote access,
-    /// Parallax Connect, and deleting inactive worktrees off, and worktree cleanup on. Each setting
-    /// changes alone.
+    /// Parallax Connect, and the inactive, settled, and unchanged worktree rules off, and merged
+    /// worktree cleanup and removing a deleted thread's worktree on. Each setting changes alone.
     #[test]
     fn host_settings_start_safe_and_change_independently() {
         let dir = tempfile::tempdir().unwrap();
@@ -655,7 +756,11 @@ mod tests {
         assert!(!store.remote().unwrap());
         assert!(!store.connect().unwrap());
         assert!(store.clean_worktrees().unwrap());
+        assert!(store.deleted_thread_worktrees().unwrap());
         assert_eq!(store.inactive_worktree_days().unwrap(), None);
+        assert_eq!(store.settled_worktree_days().unwrap(), None);
+        assert!(!store.unchanged_worktrees().unwrap());
+        assert_eq!(store.worktree_keep().unwrap(), None);
 
         store.set_auto_resume(true).unwrap();
         store.set_remote(true).unwrap();
@@ -669,11 +774,26 @@ mod tests {
         store.set_branch_prefix("").unwrap();
         assert_eq!(store.branch_prefix().unwrap().as_deref(), Some(""));
 
-        store.set_inactive_worktree_days(30).unwrap();
+        // The worktree rules: off differs from 0 days, and each changes alone.
+        store.set_inactive_worktree_days(Some(30)).unwrap();
+        store.set_settled_worktree_days(Some(0)).unwrap();
         assert_eq!(store.inactive_worktree_days().unwrap(), Some(30));
+        assert_eq!(store.settled_worktree_days().unwrap(), Some(0));
         assert!(store.clean_worktrees().unwrap());
-        store.set_inactive_worktree_days(0).unwrap();
+        assert!(store.deleted_thread_worktrees().unwrap());
+        assert!(!store.unchanged_worktrees().unwrap());
+        store.set_inactive_worktree_days(None).unwrap();
+        store.set_deleted_thread_worktrees(false).unwrap();
+        store.set_unchanged_worktrees(true).unwrap();
+        store.set_worktree_keep("trackedChanges").unwrap();
         assert_eq!(store.inactive_worktree_days().unwrap(), None);
+        assert_eq!(store.settled_worktree_days().unwrap(), Some(0));
+        assert!(!store.deleted_thread_worktrees().unwrap());
+        assert!(store.unchanged_worktrees().unwrap());
+        assert_eq!(
+            store.worktree_keep().unwrap().as_deref(),
+            Some("trackedChanges")
+        );
 
         store.set_clean_worktrees(false).unwrap();
         store.set_connect(true).unwrap();

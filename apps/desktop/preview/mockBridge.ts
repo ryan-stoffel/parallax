@@ -31,6 +31,7 @@ import {
   type Capabilities,
   type DeviceStateResult,
   type EventsEventParams,
+  type HostSettings,
   type ImportableSession,
   type JsonValue,
   type RelayHost,
@@ -56,8 +57,21 @@ const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 
 /** Worktree settings, as `host/settings` holds them. */
 const worktrees = { clean: true, prefix: "parallax/" };
-/** The days before an inactive worktree is deleted, as `host/settings` holds them: 0 is off. */
-const inactiveWorktrees = { days: 0 };
+/** The worktree rules, as `host/settings` holds them, at what plxd starts with. */
+const worktreeRules: Pick<
+  HostSettings,
+  | "deletedThreadWorktrees"
+  | "inactiveWorktreeDays"
+  | "settledWorktreeDays"
+  | "unchangedWorktrees"
+  | "worktreeKeep"
+> = {
+  deletedThreadWorktrees: true,
+  inactiveWorktreeDays: null,
+  settledWorktreeDays: null,
+  unchangedWorktrees: false,
+  worktreeKeep: "uncommittedChanges",
+};
 
 /** This Mac's simulators and emulators, as `device/state` says them. */
 const devices: DeviceStateResult = {
@@ -85,7 +99,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "agentReview",
     "agentWait",
     "worktreeCleanup",
-    "inactiveWorktrees",
+    "worktreeRules",
     "devices",
     "branchPrefix",
     "agents",
@@ -794,7 +808,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "host/settings/get": () => ({
     autoResume: true,
     cleanWorktrees: worktrees.clean,
-    inactiveWorktreeDays: inactiveWorktrees.days,
+    ...worktreeRules,
     branchPrefix: worktrees.prefix,
     connect: !!connect.on,
     remote: lan.on,
@@ -806,11 +820,12 @@ const handlers: { [M in Method]?: Handler<M> } = {
     lan.relay = p.relay ?? lan.relay;
     worktrees.clean = p.cleanWorktrees ?? worktrees.clean;
     worktrees.prefix = p.branchPrefix ?? worktrees.prefix;
-    inactiveWorktrees.days = p.inactiveWorktreeDays ?? inactiveWorktrees.days;
+    for (const name of Object.keys(worktreeRules) as (keyof typeof worktreeRules)[])
+      if (p[name] !== undefined) Object.assign(worktreeRules, { [name]: p[name] });
     return {
       autoResume: p.autoResume ?? true,
       cleanWorktrees: worktrees.clean,
-      inactiveWorktreeDays: inactiveWorktrees.days,
+      ...worktreeRules,
       branchPrefix: worktrees.prefix,
       connect: p.connect ?? !!connect.on,
       remote: lan.on,

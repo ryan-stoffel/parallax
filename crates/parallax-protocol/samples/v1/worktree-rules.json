@@ -1,0 +1,65 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/settings/get",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "autoResume": true,
+      "cleanWorktrees": true,
+      "deletedThreadWorktrees": true,
+      "inactiveWorktreeDays": null,
+      "settledWorktreeDays": null,
+      "unchangedWorktrees": false,
+      "worktreeKeep": "uncommittedChanges"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "host/settings/set",
+    "params": {
+      "deletedThreadWorktrees": false,
+      "inactiveWorktreeDays": 30,
+      "settledWorktreeDays": 0,
+      "unchangedWorktrees": true,
+      "worktreeKeep": "anyLocalFiles"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "autoResume": true,
+      "cleanWorktrees": true,
+      "deletedThreadWorktrees": false,
+      "inactiveWorktreeDays": 30,
+      "settledWorktreeDays": 0,
+      "unchangedWorktrees": true,
+      "worktreeKeep": "anyLocalFiles"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "host/settings/set",
+    "params": { "inactiveWorktreeDays": null, "worktreeKeep": "trackedChanges" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "autoResume": true,
+      "cleanWorktrees": true,
+      "deletedThreadWorktrees": false,
+      "inactiveWorktreeDays": null,
+      "settledWorktreeDays": 0,
+      "unchangedWorktrees": true,
+      "worktreeKeep": "trackedChanges"
+    }
+  }
+]

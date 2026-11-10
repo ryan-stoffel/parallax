@@ -11,9 +11,10 @@ use parallax_protocol::methods::{
     HostVersion, NotificationMethod, OrchestratorList,
 };
 use parallax_protocol::{
-    Capabilities, ErrorKind, HostAnnounceUpdateParams, HostHealthParams, HostSettingsGetParams,
-    HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostVersionParams,
-    IncompatibleProtocolDetail, OrchestratorListParams, ProtocolRange, StoreState,
+    Capabilities, ErrorKind, HostAnnounceUpdateParams, HostHealthParams, HostSettings,
+    HostSettingsGetParams, HostSettingsSetParams, HostUpdateParams, HostUpdateRestart,
+    HostVersionParams, IncompatibleProtocolDetail, OrchestratorListParams, ProtocolRange,
+    StoreState, WorktreeKeep,
 };
 use serde_json::json;
 
@@ -92,7 +93,6 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("hostUpdate".to_owned(), serde_json::Map::new()),
             ("hubAccounts".to_owned(), serde_json::Map::new()),
             ("hubs".to_owned(), serde_json::Map::new()),
-            ("inactiveWorktrees".to_owned(), serde_json::Map::new()),
             ("inbox".to_owned(), serde_json::Map::new()),
             ("integrationBranch".to_owned(), serde_json::Map::new()),
             ("landing".to_owned(), serde_json::Map::new()),
@@ -177,6 +177,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("threadTools".to_owned(), serde_json::Map::new()),
             ("threads".to_owned(), serde_json::Map::new()),
             ("worktreeCleanup".to_owned(), serde_json::Map::new()),
+            ("worktreeRules".to_owned(), serde_json::Map::new()),
             ("youSync".to_owned(), serde_json::Map::new()),
         ]))
     );
@@ -233,35 +234,88 @@ async fn the_branch_prefix_is_saved_and_a_bad_one_is_refused() {
     assert_eq!(cleared.branch_prefix.as_deref(), Some(""));
 }
 
-/// PLX-1524: `inactiveWorktreeDays` starts off, as 0, takes 1 to 3650 days, and refuses more.
+/// PLX-1524: the worktree rules start as plxd always behaved, each is saved alone, null turns a
+/// days rule off where 0 settled days is the next sweep, and what's out of range is refused.
 #[tokio::test]
-async fn the_inactive_worktree_days_are_saved_and_too_many_are_refused() {
+async fn the_worktree_rules_are_saved_and_what_is_out_of_range_is_refused() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
     let mut client = Client::connect(&plxd.socket).await;
     client.initialize().await.unwrap();
+    let rules = |settings: &HostSettings| {
+        (
+            settings.deleted_thread_worktrees,
+            settings.inactive_worktree_days,
+            settings.settled_worktree_days,
+            settings.unchanged_worktrees,
+            settings.worktree_keep,
+        )
+    };
     let settings = client
         .call::<HostSettingsGet>(HostSettingsGetParams::default())
         .await
         .unwrap();
-    assert_eq!(settings.inactive_worktree_days, Some(0));
+    assert_eq!(
+        rules(&settings),
+        (
+            Some(true),
+            Some(None),
+            Some(None),
+            Some(false),
+            Some(WorktreeKeep::UncommittedChanges)
+        )
+    );
 
-    let mut set = async |days: u32| {
-        client
-            .call::<HostSettingsSet>(HostSettingsSetParams {
-                inactive_worktree_days: Some(days),
-                ..HostSettingsSetParams::default()
-            })
-            .await
-    };
-    let saved = set(30).await.unwrap();
-    assert_eq!(saved.inactive_worktree_days, Some(30));
-    let refused = set(3651).await.unwrap_err();
-    assert_eq!(refused.code, INVALID_PARAMS);
-    let off = set(0).await.unwrap();
-    assert_eq!(off.inactive_worktree_days, Some(0));
-    // The other settings are as they were.
+    let mut set =
+        async |params: HostSettingsSetParams| client.call::<HostSettingsSet>(params).await;
+    let saved = set(HostSettingsSetParams {
+        deleted_thread_worktrees: Some(false),
+        inactive_worktree_days: Some(Some(30)),
+        settled_worktree_days: Some(Some(0)),
+        unchanged_worktrees: Some(true),
+        worktree_keep: Some(WorktreeKeep::TrackedChanges),
+        ..HostSettingsSetParams::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        rules(&saved),
+        (
+            Some(false),
+            Some(Some(30)),
+            Some(Some(0)),
+            Some(true),
+            Some(WorktreeKeep::TrackedChanges)
+        )
+    );
+
+    // Null turns one rule off and leaves the rest, and the settings beside them.
+    let off = set(HostSettingsSetParams {
+        inactive_worktree_days: Some(None),
+        ..HostSettingsSetParams::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(off.inactive_worktree_days, Some(None));
+    assert_eq!(off.settled_worktree_days, Some(Some(0)));
     assert_eq!(off.clean_worktrees, Some(true));
+
+    for refused in [
+        HostSettingsSetParams {
+            inactive_worktree_days: Some(Some(0)),
+            ..HostSettingsSetParams::default()
+        },
+        HostSettingsSetParams {
+            settled_worktree_days: Some(Some(3651)),
+            ..HostSettingsSetParams::default()
+        },
+        HostSettingsSetParams {
+            worktree_keep: Some(WorktreeKeep::Unknown),
+            ..HostSettingsSetParams::default()
+        },
+    ] {
+        assert_eq!(set(refused).await.unwrap_err().code, INVALID_PARAMS);
+    }
 }
 
 /// `host/updating` follows the answer to `initialize`, since `service install`'s probe reads that

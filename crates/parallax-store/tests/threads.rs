@@ -468,6 +468,51 @@ fn migration_23_makes_an_orchestrators_runs_its_children() {
     assert!(!thread.settled);
 }
 
+/// PLX-1524: a thread keeps when it was settled for as long as it is, and one settled before
+/// migration 63 counts from that migration.
+#[test]
+fn a_thread_keeps_when_it_was_settled() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallax.sqlite3");
+    let mut store = Store::open(&path).unwrap();
+    let repo = store
+        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let thread = Uuid::now_v7();
+    store
+        .create_thread_run(
+            thread,
+            repo.id,
+            &run_fields(repo.id),
+            &state(),
+            None,
+            &ThreadFields::default(),
+        )
+        .unwrap();
+    let settle = |settled| {
+        let update = ThreadUpdate {
+            settled: Some(settled),
+            ..ThreadUpdate::default()
+        };
+        store.update_thread(thread, &update).unwrap().0.settled_at
+    };
+    assert!(settle(true).is_some());
+    assert_eq!(settle(false), None);
+
+    settle(true);
+    drop(store);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE threads DROP COLUMN settled_at;
+         DELETE FROM schema_version WHERE version = 63;",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path).unwrap();
+    let thread = store.get_thread(thread).unwrap().unwrap();
+    assert!(thread.settled && thread.settled_at.is_some());
+}
+
 /// A snippet longer than 120 characters is cut around its match, on character boundaries
 /// (PLX-789).
 #[test]

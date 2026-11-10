@@ -334,17 +334,27 @@ test("Threads' Text generation holds the naming model, title instructions, and r
 
 test("Worktrees starts on All computers, says where they differ, and sets them all", async () => {
   const failed = states[mini.id]!;
-  const capabilities = { branchPrefix: {}, worktreeCleanup: {} };
+  const capabilities = { branchPrefix: {}, worktreeCleanup: {}, worktreeRules: {} };
   states["local"] = { ...states["local"]!, capabilities } as ConnectionState;
   states[mini.id] = { ...states["local"]! } as ConnectionState;
   answers["host/settings/get"] = () => ({
-    result: { autoResume: false, cleanWorktrees: true, branchPrefix: "parallax/" },
+    result: {
+      autoResume: false,
+      cleanWorktrees: true,
+      branchPrefix: "parallax/",
+      inactiveWorktreeDays: null,
+    },
   });
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (host, method, params) =>
     host === mini.id && method === "host/settings/get"
       ? ({
-          result: { autoResume: false, cleanWorktrees: false, branchPrefix: "ryan/" },
+          result: {
+            autoResume: false,
+            cleanWorktrees: false,
+            branchPrefix: "ryan/",
+            inactiveWorktreeDays: 7,
+          },
           logId: "l",
         } as never)
       : original(host, method, params),
@@ -354,8 +364,12 @@ test("Worktrees starts on All computers, says where they differ, and sets them a
   });
   await renderSettings("worktrees");
 
-  const row = () => document.querySelector('[data-setting="clean-up-merged-worktrees"]')!;
+  const row = () => document.querySelector('[data-setting="delete-merged-worktrees"]')!;
   expect(row().textContent).toContain("Differs across computers");
+  // A days rule that differs reads Differs, never Off.
+  const days = document.querySelector('[data-setting="delete-inactive-worktrees"]')!;
+  expect(days.textContent).toContain("Differs across computers");
+  expect(days.querySelector('[aria-haspopup="menu"]')!.textContent).toBe("Differs");
   await click(row().querySelector<HTMLElement>('[role="switch"]')!);
   expect(
     calls("host/settings/set")
@@ -388,48 +402,65 @@ test("Appearance's Chat keeps its settings on this computer, and search finds ea
   chatPrefs.set(chatDefaults);
 });
 
-test("Worktrees deletes inactive worktrees after the days set, where plxd can", async () => {
+test("Worktrees sets each cleanup rule as its picker or switch, where plxd has the rules", async () => {
   const before = states["local"]!;
-  const older = { ...before, capabilities: { worktreeCleanup: {} } } as ConnectionState;
-  states["local"] = older;
+  const row = (anchor: string) => document.querySelector(`[data-setting="${anchor}"]`)!;
+  const trigger = (anchor: string) =>
+    row(anchor).querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+  const pick = (anchor: string, option: string) =>
+    click(
+      [...row(anchor).querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((o) =>
+        o.textContent?.startsWith(option),
+      )!,
+    );
+  // An older plxd has no rules to set.
+  states["local"] = { ...before, capabilities: { worktreeCleanup: {} } } as ConnectionState;
   answers["host/settings/get"] = () => ({ result: { autoResume: false, cleanWorktrees: true } });
   await renderSettings("worktrees");
-  const row = () => document.querySelector('[data-setting="delete-inactive-worktrees"]')!;
-  const toggle = () => row().querySelector<HTMLButtonElement>('[role="switch"]')!;
-  const days = () => row().querySelector<HTMLInputElement>("input");
-  // An older plxd ignores the setting.
-  expect(row().textContent).toContain("This plxd can't delete inactive worktrees.");
-  expect(toggle().disabled).toBe(true);
+  expect(row("delete-inactive-worktrees").textContent).toContain(
+    "This plxd doesn't have this rule.",
+  );
+  expect(trigger("delete-inactive-worktrees").disabled).toBe(true);
   act(() => unmount());
 
+  const saved: Record<string, unknown> = {
+    autoResume: false,
+    deletedThreadWorktrees: true,
+    inactiveWorktreeDays: null,
+    settledWorktreeDays: 45,
+    unchangedWorktrees: false,
+    worktreeKeep: "uncommittedChanges",
+  };
   states["local"] = {
     ...before,
-    capabilities: { worktreeCleanup: {}, inactiveWorktrees: {} },
+    capabilities: { worktreeCleanup: {}, worktreeRules: {} },
   } as ConnectionState;
-  answers["host/settings/get"] = () => ({ result: { autoResume: false, inactiveWorktreeDays: 0 } });
-  answers["host/settings/set"] = (p) => ({ result: { autoResume: false, ...p } });
-  await renderSettings("worktrees");
-  const sent = () => calls("host/settings/set").map((c) => c.params);
-  expect(toggle().getAttribute("aria-checked")).toBe("false");
-  expect(days()).toBeNull();
+  answers["host/settings/get"] = () => ({ result: saved });
+  answers["host/settings/set"] = (p) => ({ result: Object.assign(saved, p) });
+  // A search for a row under Advanced opens it.
+  await renderSettings("worktrees", [], "local", { anchor: "keep-worktrees-with" });
+  expect(document.querySelector("details")!.open).toBe(true);
+  expect(trigger("delete-inactive-worktrees").textContent).toBe("Off");
+  // Days that aren't a preset are their own option.
+  expect(trigger("delete-settled-worktrees").textContent).toBe("45 days");
 
-  await click(toggle());
-  expect(sent()).toEqual([{ inactiveWorktreeDays: 30 }]);
-  expect(days()!.value).toBe("30");
-  // Out of range goes back to what's saved, and a number of days is saved.
-  for (const typed of ["0", "7"]) {
-    await act(async () => {
-      days()!.value = typed;
-      days()!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    });
-    await settle();
-  }
-  expect(sent()).toEqual([{ inactiveWorktreeDays: 30 }, { inactiveWorktreeDays: 7 }]);
-  expect(days()!.value).toBe("7");
-
-  await click(toggle());
-  expect(sent().at(-1)).toEqual({ inactiveWorktreeDays: 0 });
-  expect(days()).toBeNull();
+  await pick("delete-inactive-worktrees", "30 days");
+  expect(trigger("delete-inactive-worktrees").textContent).toBe("30 days");
+  await pick("delete-inactive-worktrees", "Off");
+  await pick("delete-settled-worktrees", "At the next cleanup");
+  await pick("keep-worktrees-with", "Edited tracked files");
+  await click(
+    row("delete-worktrees-with-deleted-threads").querySelector<HTMLElement>('[role="switch"]')!,
+  );
+  await click(row("delete-unchanged-worktrees").querySelector<HTMLElement>('[role="switch"]')!);
+  expect(calls("host/settings/set").map((c) => c.params)).toEqual([
+    { inactiveWorktreeDays: 30 },
+    { inactiveWorktreeDays: null },
+    { settledWorktreeDays: 0 },
+    { worktreeKeep: "trackedChanges" },
+    { deletedThreadWorktrees: false },
+    { unchangedWorktrees: true },
+  ]);
   states["local"] = before;
 });
 

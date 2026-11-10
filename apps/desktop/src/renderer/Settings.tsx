@@ -251,7 +251,7 @@ export function Settings({
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
         ) : section === "worktrees" ? (
-          <WorktreeSettings onProjects={() => onSection?.("projects")} />
+          <WorktreeSettings onProjects={() => onSection?.("projects")} focus={focus} />
         ) : section === "computerUse" ? (
           <ComputerSettings />
         ) : section === "schedules" ? (

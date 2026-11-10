@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
 use crate::ProtocolRange;
@@ -284,6 +284,36 @@ pub struct HostReadUploadResult {
     pub size: Option<u64>,
 }
 
+/// What a worktree must hold for plxd's cleanup rules to keep it (`worktreeKeep`), as T3 Code's.
+///
+/// A newer plxd may send values that are not listed here. Treat those as unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeKeep {
+    /// Any file git doesn't have: edits to tracked files, untracked files, and ignored files
+    /// outside `node_modules`.
+    AnyLocalFiles,
+    /// Edits to tracked files and untracked files. Ignored files, such as `.env`, go with the
+    /// worktree.
+    #[default]
+    UncommittedChanges,
+    /// Edits to tracked files alone. Untracked and ignored files go with the worktree.
+    TrackedChanges,
+    /// A value this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// A field that was sent, null included, as `Some`, so that null differs from absent.
+fn sent<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 /// Params of `host/settings/get`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -305,11 +335,37 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
-    /// The new `inactiveWorktreeDays`, behind the `inactiveWorktrees` capability: 0 turns it off,
-    /// and 1 to 3650 is the number of days. Absent leaves it. More fails with `invalidParams`.
+    /// The new `deletedThreadWorktrees`, behind the `worktreeRules` capability. Absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub inactive_worktree_days: Option<u32>,
+    pub deleted_thread_worktrees: Option<bool>,
+    /// The new `inactiveWorktreeDays`, behind the `worktreeRules` capability: 1 to 3650 days, or
+    /// null for off. Absent leaves it. Anything else fails with `invalidParams`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sent"
+    )]
+    #[ts(optional)]
+    pub inactive_worktree_days: Option<Option<u32>>,
+    /// The new `settledWorktreeDays`, behind the `worktreeRules` capability: 0 to 3650 days, or
+    /// null for off. Absent leaves it. Anything else fails with `invalidParams`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sent"
+    )]
+    #[ts(optional)]
+    pub settled_worktree_days: Option<Option<u32>>,
+    /// The new `unchangedWorktrees`, behind the `worktreeRules` capability. Absent leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unchanged_worktrees: Option<bool>,
+    /// The new `worktreeKeep`, behind the `worktreeRules` capability. Absent leaves it. A value
+    /// plxd doesn't know fails with `invalidParams`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worktree_keep: Option<WorktreeKeep>,
     /// The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
     /// thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch
     /// name with: letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`, at most 64 bytes.
@@ -370,13 +426,41 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
-    /// The days a thread goes without activity before plxd deletes its worktree, when the worktree
-    /// has no uncommitted changes (PLX-1524). 0, the default, is off. The local branch, the thread,
-    /// and its transcript stay, and a later message makes the worktree again. An older plxd,
-    /// without the `inactiveWorktrees` capability, leaves it out.
+    /// Whether deleting a thread deletes its worktree and branch, whatever they hold (PLX-1524).
+    /// On by default. Off, both stay on disk. This and the four settings after it are plxd's
+    /// worktree rules, which an older plxd, without the `worktreeRules` capability, leaves out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub inactive_worktree_days: Option<u32>,
+    pub deleted_thread_worktrees: Option<bool>,
+    /// The days a thread goes without activity before plxd deletes its worktree, or null, the
+    /// default, for off. The local branch, the thread, and its transcript stay, as they do for the
+    /// next two rules, and a later message makes the worktree again.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sent"
+    )]
+    #[ts(optional)]
+    pub inactive_worktree_days: Option<Option<u32>>,
+    /// The days after a thread settles before plxd deletes its worktree, where 0 is its next
+    /// sweep, or null, the default, for off.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sent"
+    )]
+    #[ts(optional)]
+    pub settled_worktree_days: Option<Option<u32>>,
+    /// Whether plxd deletes a worktree with no commits beyond the default branch, once its thread
+    /// has been idle for an hour. Off by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unchanged_worktrees: Option<bool>,
+    /// What a worktree must hold for the merged, inactive, settled, and unchanged rules to keep
+    /// it. `uncommittedChanges` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worktree_keep: Option<WorktreeKeep>,
     /// What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
     /// made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
