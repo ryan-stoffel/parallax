@@ -319,7 +319,7 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
   ].filter(Boolean);
   const bars = !leftOut && !instead;
   return (
-    <li className="border-border/40 px-4 py-3.5 not-last:border-b">
+    <li className="border-border/40 px-4 py-3 not-last:border-b">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div
           className={`flex min-w-[min(12rem,100%)] flex-1 items-center gap-3 ${offline || leftOut ? "opacity-55" : ""}`}
@@ -369,7 +369,8 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
         </div>
       </div>
       {bars && (
-        <div className="mt-3 ml-8 grid max-w-md grid-cols-2 gap-x-6">
+        // Side by side while there's room, one over the other on a narrow card.
+        <div className="mt-2 ml-8 grid max-w-md grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-x-6 gap-y-2">
           <Meter
             label="CPU"
             used={load?.cpu}

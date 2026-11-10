@@ -372,63 +372,21 @@ function ComputerCard({
           ? "1 route"
           : `${routes} routes`;
   return (
-    <li data-device={id} className={card}>
-      <div className="flex min-h-14 items-center gap-3 px-4 py-3">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <span
-            className={`mt-2 shrink-0 text-muted-foreground [&_svg]:size-5 ${dim ? "opacity-60" : ""}`}
-          >
-            {icon}
-          </span>
-          <div className="min-w-0 flex-1">
-            {renaming ?? (
-              <p className={`truncate text-body font-medium ${dim ? "opacity-60" : ""}`}>{name}</p>
-            )}
-            {/* One run of text, so a narrow card wraps it between words, with its dot on the first line. */}
-            <p className="mt-0.5 text-meta text-muted-foreground">
-              <span className="mr-1.5 inline-flex h-4 items-center align-top">
-                <StatusDot tone={status.tone} />
-              </span>
-              {status.text}
-              {count && (
-                <>
-                  <span aria-hidden> · </span>
-                  <button
-                    type="button"
-                    aria-label={routes ? `${count} to ${name}` : `${name} details`}
-                    aria-expanded={!!open}
-                    // Its routes are only there while open.
-                    aria-controls={open ? detailsId : undefined}
-                    onClick={onToggle}
-                    className="-mx-1 inline-flex items-center gap-0.5 rounded-sm px-1 align-top whitespace-nowrap hover:bg-hover hover:text-foreground"
-                  >
-                    {count}
-                    <ChevronDown
-                      aria-hidden
-                      className={`size-3.5 transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                </>
-              )}
-            </p>
-            {(status.problem || action) && (
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                {status.problem && (
-                  // Never cut short: it can hold a code to compare. Remounted as an alert, so it's read.
-                  <p
-                    key={alert ? "alert" : "problem"}
-                    role={alert ? "alert" : undefined}
-                    className={`min-w-0 text-meta ${problemTone[status.tone]}`}
-                  >
-                    {status.problem}
-                  </p>
-                )}
-                {action}
-              </div>
-            )}
-          </div>
+    <li data-device={id} className={`${card} @container`}>
+      {/* Wide: the name and summary, with the controls beside them. Narrow: the name and summary across
+          the card, so they wrap as sentences, and the controls under them. */}
+      <div className="grid min-h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3">
+        <span
+          className={`col-start-1 row-start-1 shrink-0 text-muted-foreground [&_svg]:size-5 ${dim ? "opacity-60" : ""}`}
+        >
+          {icon}
+        </span>
+        <div className="col-start-2 col-end-4 row-start-1 min-w-0 @md:col-end-3">
+          {renaming ?? (
+            <p className={`truncate text-body font-medium ${dim ? "opacity-60" : ""}`}>{name}</p>
+          )}
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="col-start-2 col-end-4 row-start-3 mt-2 flex items-center gap-2 @md:col-start-3 @md:row-start-1 @md:row-end-3 @md:mt-0">
           {toggle}
           <IconButton label={`${name} options`} popoverTarget={menu.state.id}>
             <Ellipsis aria-hidden />
@@ -445,9 +403,53 @@ function ComputerCard({
             {menu.items}
           </Menu>
         </div>
+        <div className="col-start-2 col-end-4 row-start-2 min-w-0 @md:col-end-3">
+          {/* One run of text, so a narrow card wraps it between words, with its dot on the first line. */}
+          <p className="mt-0.5 text-meta text-muted-foreground">
+            <span className="mr-1.5 inline-flex h-4 items-center align-top">
+              <StatusDot tone={status.tone} />
+            </span>
+            {status.text}
+            {count && (
+              <>
+                <span aria-hidden> · </span>
+                <button
+                  type="button"
+                  aria-label={routes ? `${count} to ${name}` : `${name} details`}
+                  aria-expanded={!!open}
+                  // Its routes are only there while open.
+                  aria-controls={open ? detailsId : undefined}
+                  onClick={onToggle}
+                  className="-mx-1 inline-flex items-center gap-0.5 rounded-sm px-1 align-top whitespace-nowrap hover:bg-hover hover:text-foreground"
+                >
+                  {count}
+                  <ChevronDown
+                    aria-hidden
+                    className={`size-3.5 transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
+                  />
+                </button>
+              </>
+            )}
+          </p>
+          {(status.problem || action) && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {status.problem && (
+                // Never cut short: it can hold a code to compare. Remounted as an alert, so it's read.
+                <p
+                  key={alert ? "alert" : "problem"}
+                  role={alert ? "alert" : undefined}
+                  className={`min-w-0 text-meta ${problemTone[status.tone]}`}
+                >
+                  {status.problem}
+                </p>
+              )}
+              {action}
+            </div>
+          )}
+        </div>
       </div>
       {count && open && (
-        <div id={detailsId} className="mr-4 ml-12 border-t border-border/40 py-2">
+        <div id={detailsId} className="mr-4 ml-12 border-t border-border/40 py-2 @max-md:ml-4">
           {children}
         </div>
       )}
@@ -460,7 +462,7 @@ function ComputerCard({
 function Facts({ facts, children }: { facts: string; children?: ReactNode }) {
   if (!facts && !children) return null;
   return (
-    <div className="mt-2 text-meta text-muted-foreground">
+    <div className="mt-3 border-t border-border/40 pt-2 text-meta text-muted-foreground">
       {facts && <p>{facts}</p>}
       {children}
     </div>
@@ -1271,7 +1273,7 @@ export function Computers({
             >
               {signedOut ? (
                 <AddItem
-                  icon={<ParallaxMark className="size-4" />}
+                  icon={<ParallaxMark className="size-[1.125rem]!" />}
                   title={signingIn ? "Waiting for your browser…" : "Sign in to Parallax Connect"}
                   description="Then add any computer on your account, from anywhere."
                   disabled={signingIn}
@@ -1279,7 +1281,7 @@ export function Computers({
                 />
               ) : (
                 <AddItem
-                  icon={<ParallaxMark className="size-4" />}
+                  icon={<ParallaxMark className="size-[1.125rem]!" />}
                   title="Parallax Connect"
                   description="For a computer signed in to your Parallax account. Works from anywhere."
                   disabled={!connect}

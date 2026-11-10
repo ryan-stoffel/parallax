@@ -133,13 +133,19 @@ export function editRoutes(
     if (list.some((route) => withPort(route) === parsed.route))
       return { error: "That route is already in the list." };
     const back = hidden.find((route) => withPort(route) === parsed.route);
-    if (back)
+    // Unhidden, it's listed again while the computer still reports it, and added if it doesn't.
+    if (back && choices.routes.includes(back))
       return {
         ...kept,
         hiddenRoutes: few(hidden.filter((route) => route !== back)),
         routeOrder: choices.routeOrder,
       };
-    return { ...kept, addedRoutes: [...added, parsed.route], routeOrder: choices.routeOrder };
+    return {
+      ...kept,
+      ...(back && { hiddenRoutes: few(hidden.filter((route) => route !== back)) }),
+      addedRoutes: [...added, parsed.route],
+      routeOrder: choices.routeOrder,
+    };
   }
   if ("remove" in edit) {
     const routeOrder = few(choices.routeOrder?.filter((route) => route !== edit.remove));

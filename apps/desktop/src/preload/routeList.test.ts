@@ -133,6 +133,11 @@ test("adding a hidden route's address brings it back, and reset brings back all 
   expect(back.hiddenRoutes).toBeUndefined();
   expect(back.addedRoutes).toBeUndefined();
   expect(routeList(id, back)).toContain(lan);
+  // One the computer no longer reports comes back as an added route, not as nothing.
+  const gone = applied({ ...hid, routes: [tailnet] }, { add: "192.168.1.20" });
+  expect(gone.hiddenRoutes).toBeUndefined();
+  expect(gone.addedRoutes).toEqual([lan]);
+  expect(routeList(id, gone)).toContain(lan);
   // Reset keeps added routes and drops the rest of what the user chose.
   const reset = applied({ ...hid, addedRoutes: [name] }, { reset: true });
   expect(reset.hiddenRoutes).toBeUndefined();

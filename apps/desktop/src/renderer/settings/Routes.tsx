@@ -74,19 +74,23 @@ function RouteRow({
       className={`group/route flex min-h-10 items-center gap-2 border-border/40 py-1.5 not-last:border-b ${dragged ? "opacity-40" : ""}`}
     >
       {handle}
-      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
-        <span className="shrink-0 text-body">{kind}</span>
+      {/* Kind, address and marks wrap as whole parts on a narrow card. */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
+        <span className="text-body">{kind}</span>
         {address && (
-          <span className="min-w-0 font-mono text-meta break-all text-muted-foreground">
-            {address}
+          <span className="min-w-0 font-mono text-meta [overflow-wrap:anywhere] text-muted-foreground">
+            {/* On a narrow card it breaks before its port, not inside a number. */}
+            {address.slice(0, address.lastIndexOf(":"))}
+            <wbr />
+            {address.slice(address.lastIndexOf(":"))}
           </span>
         )}
+        {marks.map((m) => (
+          <span key={m} className={`${badge} ml-auto text-muted-foreground`}>
+            {m}
+          </span>
+        ))}
       </div>
-      {marks.map((m) => (
-        <span key={m} className={`${badge} text-muted-foreground`}>
-          {m}
-        </span>
-      ))}
       {children}
     </li>
   );

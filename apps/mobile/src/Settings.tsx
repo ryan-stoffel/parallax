@@ -77,7 +77,7 @@ const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(
 
 /** An account computer's routes, best first, as 0091 tries them. */
 const routesOf = ({ machine: { account } }: Computer) =>
-  account ? ordered(account.hostId, account).map((r) => (isRelay(r) ? "Parallax Relay" : r)).join(" · ") : "";
+  account ? ordered(account.hostId, account).map((r) => (isRelay(r) ? "Parallax Connect" : r)).join(" · ") : "";
 
 function StatusDot({ m }: { m: Computer }) {
   const c = useColors();

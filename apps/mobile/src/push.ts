@@ -171,8 +171,8 @@ export async function registerWithRelay(
     headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
     body: JSON.stringify({ token: String(device.data) }),
   }).catch(() => undefined);
-  if (!answer) return "Parallax Relay isn't reachable, so notifications come only while the app is open.";
-  return answer.ok ? undefined : `Parallax Relay refused this phone (${answer.status}).`;
+  if (!answer) return "Parallax Connect isn't reachable, so notifications come only while the app is open.";
+  return answer.ok ? undefined : `Parallax Connect refused this phone (${answer.status}).`;
 }
 
 /** Calls `open` with the thread a tapped notification is about, including the one that launched the app. */

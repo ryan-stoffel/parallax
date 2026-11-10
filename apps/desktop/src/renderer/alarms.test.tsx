@@ -153,7 +153,7 @@ test("a computer's relay cap warns at 80%, says so again past it, and goes when 
   const text = () => document.body.textContent;
 
   await act(async () => listed([box(limit * 0.5)]));
-  expect(text()).not.toContain("relay limit");
+  expect(text()).not.toContain("daily Parallax Connect limit");
   await act(async () => listed([box(limit * 0.82)]));
   expect(text()).toContain("box is near its daily Parallax Connect limit");
   expect(text()).toContain("used 82%");
@@ -164,5 +164,5 @@ test("a computer's relay cap warns at 80%, says so again past it, and goes when 
   expect(text()).toContain("still works over the LAN");
   expect(text()).not.toContain("is near its");
   await act(async () => listed([box(0)]));
-  expect(text()).not.toContain("relay limit");
+  expect(text()).not.toContain("daily Parallax Connect limit");
 });
