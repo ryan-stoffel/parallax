@@ -665,6 +665,9 @@ pub struct ThreadStartParams {
     pub naming: Option<ThreadNaming>,
 }
 
+/// The most bytes of a [`ThreadNaming`]'s `titleInstructions` that plxd reads.
+pub const MAX_TITLE_INSTRUCTIONS_BYTES: usize = 2048;
+
 /// The model that names a new thread, as `thread/start`'s `naming` (0058). When its instance
 /// can't name threads on the host, plxd uses the default model of the thread's own instance:
 /// `claude-haiku-5-5` for Claude Code, `gpt-6-luna` for Codex.
@@ -680,6 +683,13 @@ pub struct ThreadNaming {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub effort: Option<AgentEffort>,
+    /// The user's own instructions for a new thread's title, behind `threadTitleInstructions`
+    /// (PLX-1523). plxd adds them to the model's prompt after its own rules, trimmed and cut to
+    /// their first 2048 bytes ([`MAX_TITLE_INSTRUCTIONS_BYTES`]). Absent or empty names the
+    /// thread by plxd's rules alone. `pr/guide` ignores them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title_instructions: Option<String>,
 }
 
 /// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),

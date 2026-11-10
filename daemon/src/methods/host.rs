@@ -163,6 +163,8 @@ pub(crate) fn initialize(
 /// older plxd would silently ignore, starting from `HEAD` or the branch the checkout has out.
 /// `repoClone` (PLX-905): `repo/clone`, `repo/cloneProgress`, and `repo/remote`, to clone a
 /// repository onto this host.
+/// `threadTitleInstructions` (PLX-1523): `thread/start`'s `naming` takes `titleInstructions`, the
+/// user's own instructions for a thread's title, which an older plxd would silently ignore.
 /// `peerGit` (0057): `bundle/*` and `git/startMerge`, for another plxd to move a run's commits
 /// to and from this one.
 /// `contextAndFast`: `agent/start`, `agent/send`, and `thread/start` take `contextWindow` and
@@ -427,6 +429,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "threadImportRemote",
     "threadLineage",
     "threadNaming",
+    "threadTitleInstructions",
     "threadTools",
     "threads",
     "worktreeCleanup",

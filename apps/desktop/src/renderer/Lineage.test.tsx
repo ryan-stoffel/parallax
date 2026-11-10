@@ -15,6 +15,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
+import { setNewThreadPrefs } from "./prefs";
 import { sectionsStore } from "./Sidebar";
 
 // A thread's lineage in the app (PLX-374, 0041): titles from plxd, and an agent's own subagents.
@@ -216,6 +217,43 @@ test("titles come from plxd: a new thread asks plxd to name it, and a title kept
   ]);
   expect(calls("thread/start")[0]).not.toHaveProperty("title");
   expect(Object.keys(localStorage).filter((k) => k.startsWith("parallax:title:"))).toEqual([]);
+});
+
+// PLX-1523: Settings' thread title instructions, which an older plxd would ignore.
+test.each([
+  ["a plxd with threadTitleInstructions gets them, trimmed", true],
+  ["a plxd without threadTitleInstructions isn't sent them", false],
+])("a new thread's title instructions: %s", async (_, takes) => {
+  capabilities = {
+    threadLineage: {},
+    threadNaming: {},
+    ...(takes && { threadTitleInstructions: {} }),
+  };
+  answers["thread/start"] = (p) => ({
+    result: { thread: thread(p["runId"] as string, 30), run: run(p["runId"] as string) },
+  });
+  setNewThreadPrefs({ namingInstructions: "  Start with the ticket id.\n" });
+  try {
+    await renderApp();
+    const box = document.querySelector<TiptapEditorHTMLElement>(
+      'main [role="textbox"][aria-label="Message"]',
+    )!;
+    act(() => void box.editor!.commands.setContent("the flaky test is flaky"));
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+    expect(calls("thread/start").map((p) => p["naming"])).toEqual([
+      {
+        backend: "codex",
+        model: "gpt-6-luna",
+        effort: "low",
+        ...(takes && { titleInstructions: "Start with the ticket id." }),
+      },
+    ]);
+  } finally {
+    setNewThreadPrefs({ namingInstructions: "" });
+  }
 });
 
 // The parent's agent's own subagents (PLX-382): two of Claude Code's Agent calls, one done.

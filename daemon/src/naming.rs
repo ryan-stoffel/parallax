@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use parallax_protocol::{
-    AgentEffort, AgentRun, MAX_THREAD_TITLE_BYTES, ParallaxEvent, ProviderKind, RunId, ThreadNaming,
+    AgentEffort, AgentRun, MAX_THREAD_TITLE_BYTES, MAX_TITLE_INSTRUCTIONS_BYTES, ParallaxEvent,
+    ProviderKind, RunId, ThreadNaming,
 };
 use parallax_store::ThreadUpdate;
 use tracing::{info, warn};
@@ -31,7 +32,7 @@ const LIMIT: Duration = Duration::from_secs(60);
 /// The most bytes of the user's message the model reads: the start and end, around a marker.
 const MAX_MESSAGE_BYTES: usize = 8000;
 
-/// What the model is told, before the user's message. T3 Code's rules for a new thread's title
+/// What the model is told first. T3 Code's rules for a new thread's title
 /// (`TextGenerationPrompts.ts`), without those for tools and attachments, which this call has
 /// none of, and its rules for a branch name.
 const INSTRUCTIONS: &str = "\
@@ -66,7 +67,18 @@ Branch rules:
 - Describe the requested work in 2-6 lowercase words joined by hyphens, such as \
 login-empty-password-crash.
 - No prefix, slash, or namespace: Parallax adds its own.
+";
 
+/// What goes over the user's own instructions for titles (`ThreadNaming`'s `titleInstructions`),
+/// after [`INSTRUCTIONS`]: they are the user's, for the title only, and the answer's shape stays.
+const PREFERENCES: &str = "
+The user's title preferences. For the title, follow them over the title rules above where they \
+differ. They don't change the branch rules, and the answer is still JSON with keys title and \
+branch:
+";
+
+/// What goes over the user's message, last in the prompt.
+const MESSAGE: &str = "
 User message:
 ";
 
@@ -77,7 +89,8 @@ pub(crate) fn start(daemon: &Arc<Daemon>, run: &AgentRun, naming: ThreadNaming) 
     if run.prompt.trim().is_empty() || std::env::var_os(fake::SCRIPT_ENV).is_some() {
         return;
     }
-    let (run_id, backend, prompt) = (run.id, run.backend.clone(), prompt(&run.prompt));
+    let prompt = prompt(&run.prompt, naming.title_instructions.as_deref());
+    let (run_id, backend) = (run.id, run.backend.clone());
     let owned = Arc::clone(daemon);
     daemon.agents.background(async move {
         let name = match ask(&owned, &prompt, naming, &backend).await {
@@ -93,9 +106,20 @@ pub(crate) fn start(daemon: &Arc<Daemon>, run: &AgentRun, naming: ThreadNaming) 
     });
 }
 
-/// The model's whole prompt for the user's message `message`.
-fn prompt(message: &str) -> String {
-    format!("{INSTRUCTIONS}{}", limit(message.trim()))
+/// The model's whole prompt for the user's message `message`: plxd's rules, then the user's own
+/// `instructions` for titles when there are any, trimmed and cut to
+/// [`MAX_TITLE_INSTRUCTIONS_BYTES`], then the message.
+fn prompt(message: &str, instructions: Option<&str>) -> String {
+    let mut prompt = INSTRUCTIONS.to_owned();
+    if let Some(text) = instructions.map(str::trim).filter(|text| !text.is_empty()) {
+        let cut = &text[..text.floor_char_boundary(MAX_TITLE_INSTRUCTIONS_BYTES)];
+        prompt.push_str(PREFERENCES);
+        prompt.push_str(cut.trim_end());
+        prompt.push('\n');
+    }
+    prompt.push_str(MESSAGE);
+    prompt.push_str(&limit(message.trim()));
+    prompt
 }
 
 /// `message`, or its start and end around a marker when it's longer than [`MAX_MESSAGE_BYTES`],
@@ -235,7 +259,37 @@ fn slug(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::slug;
+    use parallax_protocol::MAX_TITLE_INSTRUCTIONS_BYTES;
+
+    use super::{INSTRUCTIONS, prompt, slug};
+
+    /// PLX-1523: the user's title instructions go after plxd's rules and before the message,
+    /// cut to the cap, and a prompt without any is the one plxd has always sent.
+    #[test]
+    fn the_users_title_instructions_go_between_the_rules_and_the_message() {
+        let plain = format!("{INSTRUCTIONS}\nUser message:\nfix the login crash");
+        assert_eq!(prompt(" fix the login crash ", None), plain);
+        assert_eq!(prompt("fix the login crash", Some("  \n")), plain);
+
+        let asked = prompt("fix the login crash", Some("  Start with the ticket id.\n"));
+        let rest = asked.strip_prefix(INSTRUCTIONS).unwrap();
+        assert!(
+            rest.starts_with("\nThe user's title preferences."),
+            "{rest}"
+        );
+        assert!(
+            rest.ends_with(
+                "JSON with keys title and branch:\nStart with the ticket id.\n\nUser message:\nfix the login crash"
+            ),
+            "{rest}"
+        );
+
+        // Two-byte letters, so the cap falls inside one and the cut backs up to its start.
+        let long = "é".repeat(MAX_TITLE_INSTRUCTIONS_BYTES);
+        let cut = prompt("m", Some(&format!("x{long}")));
+        let kept = format!("x{}", "é".repeat((MAX_TITLE_INSTRUCTIONS_BYTES - 1) / 2));
+        assert!(cut.contains(&format!(":\n{kept}\n\nUser message:\nm")));
+    }
 
     #[test]
     fn a_models_branch_becomes_a_slug() {

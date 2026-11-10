@@ -15,7 +15,15 @@ import type {
 import { bindingOf, resetBindings, setWhen, whenOf } from "./keybindings";
 import type { SettingsSection } from "./App";
 import { Notifications } from "./notifications";
+import {
+  behaviorDefaults,
+  behaviorPrefs,
+  newThreadDefaults,
+  newThreadPrefs,
+  setBehaviorPrefs,
+} from "./prefs";
 import { Settings } from "./Settings";
+import { searchSettings } from "./settings/search";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.hidePopover = () => {};
@@ -286,6 +294,40 @@ test("search opens an orchestrator's pane for what only it has", async () => {
   await settle();
   expect(document.querySelector('[aria-label="Name"]')).not.toBeNull();
   act(() => root.unmount());
+});
+
+test("Threads' Text generation holds the naming model, title instructions, and response streaming, where search finds them (PLX-1523)", async () => {
+  await renderSettings("threads");
+  expect(section("New threads").textContent).not.toContain("Naming model");
+  const text = section("Text generation");
+  for (const title of ["Naming model", "Thread title instructions", "Response streaming"]) {
+    const found = searchSettings(title)[0]!;
+    expect(found).toMatchObject({ section: "threads", title, place: "Threads › Text generation" });
+    expect(text.querySelector(`[data-setting="${found.anchor}"]`)).not.toBeNull();
+  }
+
+  const box = text.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(box.value).toBe("");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box,
+      "Start with the ticket id.",
+    );
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(newThreadPrefs.get().namingInstructions).toBe("Start with the ticket id.");
+
+  expect(behaviorPrefs.get().responseStreaming).toBe("live");
+  await click(
+    [...text.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+      (o) => o.textContent === "Wait for the full response",
+    )!,
+  );
+  expect(behaviorPrefs.get().responseStreaming).toBe("full");
+  expect(text.textContent).toContain("A reply's text appears once the reply is complete.");
+
+  newThreadPrefs.set(newThreadDefaults);
+  setBehaviorPrefs(behaviorDefaults);
 });
 
 test("Worktrees starts on All computers, says where they differ, and sets them all", async () => {

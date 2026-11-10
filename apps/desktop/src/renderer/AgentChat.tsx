@@ -180,7 +180,7 @@ import type { PullRequests } from "./PullRequests";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 import { presentWaiting } from "./waiting";
 import { WaitingBar } from "./WaitingBar";
-import { clockOptions } from "./prefs";
+import { behaviorPrefs, clockOptions } from "./prefs";
 import { askSiteIcon, linkSite, siteIcons } from "./siteIcons";
 import { RemoteControlTab } from "./ClaudeRemoteControl";
 import {
@@ -1311,11 +1311,15 @@ export function TranscriptView({
   );
 
   const going = live && !stalled && !turnDone;
+  // When a reply's text shows while it arrives (Settings > Threads > Response streaming).
+  const streaming = behaviorPrefs.use().responseStreaming;
+  // The arriving reply's blocks at the last update, so the next parses only its end again.
+  const arriving = useRef<string[]>([]);
   // While a turn goes, as T3 Code shows one (PLX-584): a working line under its prompt with how
   // long it has gone, its work as steps, and a musing row at the end whenever the agent has
-  // nothing in flight, as after a message or a call that finished. A message on its way to the
-  // agent gets both too, even before the run goes again. The musing goes before any notices
-  // after the last row, where the work it stands for will be.
+  // nothing in flight, as after a message or a call that finished, or while a reply's text is
+  // held back. A message on its way to the agent gets both too, even before the run goes again.
+  // The musing goes before any notices after the last row, where the work it stands for will be.
   const view = useMemo(() => {
     const grouped: ViewRow[] = groupWork(withoutQuestionCalls(withPlanApprovals(withPlans(rows))));
     const tail = grouped.findLastIndex((r) => r.kind !== "notice");
@@ -1323,12 +1327,30 @@ export function TranscriptView({
     const shown = grouped.filter(
       (r, i) => r.kind !== "compaction" || r.done || (going && i === tail),
     );
+    // The reply still arriving in a turn that goes shows what Response streaming lets it
+    // (PLX-1523): by paragraphs, every block before its last, which may still grow, and until the
+    // full response, nothing. One with nothing to show yet has no row. It's the last message
+    // still arriving, wherever it sits, since a follow-up sent meanwhile lands after it. A
+    // finished reply shows whole, and so does one whose turn ended or stopped before it finished.
+    const where = shown.findLastIndex((r) => r.kind === "assistant" && !!r.partial);
+    const reply = shown[where];
+    const held =
+      going &&
+      streaming !== "live" &&
+      reply?.kind === "assistant" &&
+      where > shown.findLastIndex((r) => r.kind === "end");
+    if (held) {
+      arriving.current =
+        streaming === "paragraphs" ? markdownBlocks(reply.text, arriving.current) : [];
+      const text = arriving.current.slice(0, -1).join("");
+      shown.splice(where, 1, ...(text.trim() ? [{ ...reply, text }] : []));
+    }
     const at = shown.findLastIndex((r) => r.kind !== "notice");
     const last = shown[at];
     const pending = last?.kind === "pending";
     const busy =
       (last?.kind === "work" && !last.done && inFlight(last)) ||
-      (last?.kind === "assistant" && !!last.partial) ||
+      (last?.kind === "assistant" && !!last.partial && !held) ||
       (last?.kind === "approval" && !last.resolved) ||
       (last?.kind === "compaction" && !last.done) ||
       last?.kind === "end";
@@ -1338,7 +1360,7 @@ export function TranscriptView({
     const since = shown[prompt]?.kind === "user" ? (shown[prompt] as Item).at : undefined;
     if (prompt >= 0) shown.splice(prompt + 1, 0, { kind: "working", key: "working", since });
     return shown;
-  }, [rows, going, stalled]);
+  }, [rows, going, stalled, streaming]);
   // The work the agent is doing now: the last row's, while a call in it runs.
   const tail = view.findLastIndex((r) => r.kind !== "notice" && r.kind !== "musing");
   const tailRow = view[tail];

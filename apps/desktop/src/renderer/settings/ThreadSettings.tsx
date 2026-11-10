@@ -8,27 +8,35 @@ import { ImportButton } from "../ImportSessions";
 import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
 import { models, useCatalog, type Provider } from "../models";
-import { newThreadPrefs, setNewThreadPrefs } from "../prefs";
+import {
+  behaviorPrefs,
+  newThreadPrefs,
+  setBehaviorPrefs,
+  setNewThreadPrefs,
+  type BehaviorPrefs,
+} from "../prefs";
 import { RunTargetMenu } from "../RunTargetMenu";
 import { Picker } from "../ui";
 import { useHostSettings } from "./hostSettings";
-import { allHosts, HostPicker, hostsOf, PageTitle, Row, Section, Switch } from "./parts";
+import { allHosts, field, HostPicker, hostsOf, PageTitle, Row, Section, Switch } from "./parts";
 
 /** The composer's own menus are borderless; on a settings row they get a field's outline. */
 const pickerBox = "rounded-lg border border-border bg-background";
 
 /**
- * Settings > Threads: what a new thread starts with, whether a host's threads resume after a
- * usage limit or a restart, and importing past sessions (PLX-881) and exported chats (PLX-883).
+ * Settings > Threads: what a new thread starts with, how its title and a reply's text are written
+ * (PLX-1523), whether a host's threads resume after a usage limit or a restart, and importing past
+ * sessions (PLX-881) and exported chats (PLX-883).
  * How the sidebar lists threads is Appearance's (0094).
  */
 export function ThreadSettings() {
   return (
     <>
       <PageTitle title="Threads">
-        What a new thread starts with, and when threads pick up again.
+        What a new thread starts with, how text is written, and when threads pick up again.
       </PageTitle>
       <NewThreads />
+      <TextGeneration />
       <Resuming />
       <Section title="Import">
         <Row
@@ -51,8 +59,7 @@ export function ThreadSettings() {
 /**
  * What a new thread starts with, picked with the composer's own menus (`newThreadPrefs`), and the
  * computer with New Thread's own. The model list is this computer's; a thread on a host that lacks the model starts on that host's
- * first. The naming model is any Claude Code or Codex model; a host that lacks it names threads
- * with the thread's own provider's default (0058).
+ * first.
  */
 function NewThreads() {
   const hosts = useHosts();
@@ -74,16 +81,6 @@ function NewThreads() {
   const context =
     prefs.context !== undefined && contexts.includes(prefs.context) ? prefs.context : contexts[0];
   const hasFast = !!model?.fast;
-  const namers = catalog.instances.filter((i) => i.kind === "claude" || i.kind === "codex");
-  const namerCatalog = {
-    ...catalog,
-    instances: namers,
-    models: catalog.models.filter((m) => namers.some((i) => i.id === m.provider)),
-  };
-  const naming = prefs.naming;
-  const namer = [...namerCatalog.models, ...models].find(
-    (m) => m.provider === naming.provider && m.id === naming.id,
-  ) ?? { id: naming.id, name: naming.id, provider: naming.provider, contexts: [] };
 
   return (
     <Section title="New threads">
@@ -159,6 +156,51 @@ function NewThreads() {
           onChange={(next) => accessPrefs.set({ legacyPlan: next })}
         />
       </Row>
+    </Section>
+  );
+}
+
+/** Response streaming's choices, in the picker's order. */
+const streamingOptions: { value: BehaviorPrefs["responseStreaming"]; label: string }[] = [
+  { value: "live", label: "As it's written" },
+  { value: "paragraphs", label: "Show finished paragraphs" },
+  { value: "full", label: "Wait for the full response" },
+];
+
+/** What each of Response streaming's choices does, under the row's title. */
+const streamingDescriptions: Record<BehaviorPrefs["responseStreaming"], string> = {
+  live: "A reply's text appears as the agent writes it.",
+  paragraphs: "Each paragraph, list, or code block of a reply appears once it's complete.",
+  full: "A reply's text appears once the reply is complete.",
+};
+
+/**
+ * The text Parallax writes or shows for a thread (PLX-1523): the model that names a new thread and
+ * its branch, the user's own instructions for its title, and when a reply's text shows while it
+ * arrives. The naming model is any Claude Code or Codex model; a host that lacks it names threads
+ * with the thread's own provider's default (0058). All three are kept on this computer
+ * (`newThreadPrefs`, `behaviorPrefs`).
+ */
+function TextGeneration() {
+  const catalog = useCatalog(localId);
+  const prefs = newThreadPrefs.use();
+  const streaming = behaviorPrefs.use().responseStreaming;
+  const blocked: Partial<Record<Provider, string>> = {};
+  for (const i of catalog.instances)
+    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
+  const namers = catalog.instances.filter((i) => i.kind === "claude" || i.kind === "codex");
+  const namerCatalog = {
+    ...catalog,
+    instances: namers,
+    models: catalog.models.filter((m) => namers.some((i) => i.id === m.provider)),
+  };
+  const naming = prefs.naming;
+  const namer = [...namerCatalog.models, ...models].find(
+    (m) => m.provider === naming.provider && m.id === naming.id,
+  ) ?? { id: naming.id, name: naming.id, provider: naming.provider, contexts: [] };
+
+  return (
+    <Section title="Text generation">
       <Row
         title="Naming model"
         description="Names a new thread and its branch from its first message, after it starts."
@@ -179,6 +221,40 @@ function NewThreads() {
             />
           </span>
         </span>
+      </Row>
+      {/* A row of its own shape: the field takes the card's width, under its title. */}
+      <div
+        data-setting="thread-title-instructions"
+        className="border-border/40 px-4 py-3 not-last:border-b"
+      >
+        <span className="block text-body font-medium">Thread title instructions</span>
+        <span className="mt-0.5 block text-meta text-muted-foreground">
+          Added to the prompt that names a new thread. A computer on an older plxd names threads
+          without them.
+        </span>
+        <textarea
+          aria-label="Thread title instructions"
+          rows={4}
+          maxLength={2048}
+          placeholder="Keep titles to a few words. Lead with the main subject."
+          value={prefs.namingInstructions}
+          onChange={(e) => setNewThreadPrefs({ namingInstructions: e.target.value })}
+          className={`${field} mt-2`}
+        />
+      </div>
+      <Row title="Response streaming" description={streamingDescriptions[streaming]}>
+        <Picker
+          field
+          label="Response streaming"
+          value={streaming}
+          onChange={(value) =>
+            setBehaviorPrefs({ responseStreaming: value as BehaviorPrefs["responseStreaming"] })
+          }
+          options={streamingOptions}
+          align="end"
+          className="w-60"
+          panelClassName="min-w-60"
+        />
       </Row>
     </Section>
   );
