@@ -43,10 +43,11 @@ import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionS
 import { accessLabel, ConnectWizard } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, type Host } from "../hosts";
+import { ParallaxMark } from "../logos";
 import { notify } from "../notifications";
 import { hostIcon } from "../RunTargetMenu";
 import { ConfirmDialog, IconButton, Menu, menuItem } from "../ui";
-import { reachOf } from "./AgentsAcrossComputers";
+import { AgentWorkRow, reachOf } from "./AgentsAcrossComputers";
 import { AccessRow, card, NoticeRow } from "./connectionParts";
 import { PairDialog } from "./LanSettings";
 import {
@@ -664,41 +665,28 @@ export function ThisComputerHeading({
 }
 
 /**
- * A computer's plxd on Sharing & access: its version and what it says of itself, with whether it's
- * connected at the end of the row and why not under it. `here` is this computer, whose plxd comes
- * with the app.
+ * Sharing & access' last card: the installed Parallax version, which this computer's plxd comes
+ * with, and why that plxd failed, if it did.
  */
-export function VersionRow({ hostId, here }: { hostId: string; here?: boolean }) {
-  const state = useShownConnection(hostId);
-  const connected = state?.status === "connected";
-  const health = useHealth(hostId, connected);
-  const facts = [
-    runningPlxd(state) && `plxd ${runningPlxd(state)}`,
-    health?.os,
-    health?.arch,
-    ...healthFacts(health, here),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const failed = state?.status === "failed";
+export function VersionRow() {
+  const state = useShownConnection(localId);
+  const [version, setVersion] = useState<string>();
+  useEffect(() => void window.parallax.version().then(setVersion), []);
   return (
-    <AccessRow
-      title="Version"
-      description={facts || "plxd hasn't answered yet."}
-      status={
-        failed &&
-        state.error.message && (
-          <span role="alert" className="mt-1 block text-meta text-danger">
-            {state.error.message}
-          </span>
-        )
-      }
-    >
-      <span className="flex items-center gap-1.5 text-body text-muted-foreground">
-        <StatusDot tone={connected ? "on" : failed && !state.retrying ? "error" : "off"} />
-        {state ? statusLabel(state) : "Connecting…"}
-      </span>
-    </AccessRow>
+    <div className={`${card} mb-10`}>
+      <AccessRow
+        title="Version"
+        description={version ? `Parallax ${version}` : "Parallax"}
+        status={
+          state?.status === "failed" &&
+          state.error.message && (
+            <span role="alert" className="mt-1 block text-meta text-danger">
+              {state.error.message}
+            </span>
+          )
+        }
+      />
+    </div>
   );
 }
 
@@ -732,8 +720,7 @@ function DeviceCard({
     setReaching(true);
     const failed = await window.parallax.turnOnReach(device.id);
     setReaching(false);
-    if (failed)
-      notify({ tone: "error", title: `Couldn't turn on Reach from anywhere`, body: failed });
+    if (failed) notify({ tone: "error", title: `Couldn't turn on Parallax Connect`, body: failed });
     else setTailnetOnly(false);
   };
   const menu = useRowMenu();
@@ -777,12 +764,12 @@ function DeviceCard({
           <button
             type="button"
             disabled={reaching}
-            title="Parallax Connect is moving off Tailscale-only connections. Reach from anywhere keeps this computer connected through your Parallax account."
+            title="Parallax is moving off Tailscale-only connections. Parallax Connect keeps this computer connected through your Parallax account."
             onClick={() => void reach()}
             className={outlineButton}
           >
             <Globe aria-hidden />
-            {reaching ? "Turning on…" : "Reach from anywhere"}
+            {reaching ? "Turning on…" : "Turn on Parallax Connect"}
           </button>
         ) : status.need === "askAgain" ? (
           <button
@@ -828,6 +815,7 @@ function DeviceCard({
           routes={device.ip ? [{ kind: "Tailscale", address: device.ip, connected }] : []}
         />
       )}
+      {kind === "account" && <AgentWorkRow host={device} device={device} />}
       <Facts facts={factsOf([health?.os ?? device.os, health?.arch], state, health)} />
     </ComputerCard>
   );
@@ -1112,13 +1100,15 @@ function CapNotices({ hosts }: { hosts: RelayHost[] }) {
 }
 
 /**
- * What's wrong with how this computer is reached, at the top of its card on Sharing & access: it
+ * What's wrong with how this computer is reached, in a card at the top of Sharing & access: it
  * isn't on the account's list, with Set up again, or it's near its relay's daily cap (PLX-1357).
  */
 export function ThisComputerNotices() {
   const { notice, usage } = useNotices();
+  const capped = usage.filter((h) => h.thisComputer && relayCapOf(h));
+  if (notice !== "notListed" && !capped.length) return null;
   return (
-    <>
+    <div className={`${card} mb-6`}>
       {notice === "notListed" && (
         <NoticeRow {...CONNECT_NOTICE_TEXT.notListed}>
           <button type="button" onClick={() => void setUpAgain()} className={quietButton}>
@@ -1126,8 +1116,8 @@ export function ThisComputerNotices() {
           </button>
         </NoticeRow>
       )}
-      <CapNotices hosts={usage.filter((h) => h.thisComputer)} />
-    </>
+      <CapNotices hosts={capped} />
+    </div>
   );
 }
 
@@ -1259,21 +1249,21 @@ export function Computers({
               id={addMenu.id}
               label="Add computer"
               align="end"
-              className="w-72 p-1"
+              className="w-80 p-1"
             >
               {signedOut ? (
                 <AddItem
-                  icon={<Globe aria-hidden />}
-                  title={signingIn ? "Waiting for your browser…" : "Sign in to Parallax"}
-                  description="Reach every computer on your account, wherever it is."
+                  icon={<ParallaxMark className="size-4" />}
+                  title={signingIn ? "Waiting for your browser…" : "Sign in to Parallax Connect"}
+                  description="Then add any computer on your account, from anywhere."
                   disabled={signingIn}
                   onClick={addMenu.choose(onSignIn)}
                 />
               ) : (
                 <AddItem
-                  icon={<Globe aria-hidden />}
-                  title="With your Parallax account"
-                  description="Anywhere, through Parallax Relay."
+                  icon={<ParallaxMark className="size-4" />}
+                  title="Parallax Connect"
+                  description="For a computer signed in to your Parallax account. Works from anywhere."
                   disabled={!connect}
                   onClick={addMenu.choose(() => setAdding("account"))}
                 />
@@ -1281,13 +1271,13 @@ export function Computers({
               <AddItem
                 icon={<Wifi aria-hidden />}
                 title="On this network"
-                description="Pair with a one-time code."
+                description="For a computer on the same network, with no account. You pair it with a one-time code."
                 onClick={addMenu.choose(() => setAdding("lan"))}
               />
               <AddItem
                 icon={<Terminal aria-hidden />}
                 title="Over SSH"
-                description="A machine you reach with ssh."
+                description="For a server or VM you already reach with ssh. Parallax can install what it needs there."
                 onClick={addMenu.choose(() => setAdding("ssh"))}
               />
             </Menu>

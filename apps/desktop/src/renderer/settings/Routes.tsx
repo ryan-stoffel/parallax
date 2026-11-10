@@ -1,19 +1,29 @@
-import { ChevronDown, ChevronUp, Plus, Trash2, type LucideIcon } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { GripVertical, Plus, X, type LucideIcon } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type LiHTMLAttributes,
+  type ReactNode,
+} from "react";
 
 import type { DeviceHost } from "../../preload/bridge";
 import { isRelay, type RouteEdit } from "../../preload/routeList";
+import { badge } from "./connectionParts";
 import { primaryButton, quietButton, rowField } from "./parts";
 
 // A computer's routes, as its opened card in Settings > Computers lists them (PLX-1492).
 
 /**
- * What kind of route `route` is, for people: Parallax Relay, a Tailscale address (its 100.64/10 or
+ * What kind of route `route` is, for people: Parallax Connect, a Tailscale address (its 100.64/10 or
  * fd7a:115c:a1e0::/48 range, or a ts.net name), an address on a private network, or any other, which
  * is only Direct.
  */
 export function routeKind(route: string): string {
-  if (isRelay(route)) return "Parallax Relay";
+  if (isRelay(route)) return "Parallax Connect";
   const host = route.replace(/^\[|\](:\d+)?$/g, "").replace(/:\d+$/, "");
   if (
     /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
@@ -29,33 +39,54 @@ export function routeKind(route: string): string {
   return local ? "Same network" : "Direct";
 }
 
-/** One route: its kind, then its address and what's true of it, with `children`, its buttons. */
+/**
+ * One route on one line: `handle` first, its kind, its address, what's true of it as small marks,
+ * then `children`, its buttons. `rowProps` makes it a place to drop a dragged route.
+ */
 function RouteRow({
   route,
   kind,
   address,
   notes,
+  handle,
+  dragged,
+  rowProps,
   children,
 }: {
   route: string;
   kind: string;
   address?: string;
   notes?: (string | false | undefined)[];
+  handle?: ReactNode;
+  /** It's the one being dragged. */
+  dragged?: boolean;
+  rowProps?: Pick<
+    LiHTMLAttributes<HTMLLIElement>,
+    "draggable" | "onDragStart" | "onDragOver" | "onDrop" | "onDragEnd"
+  >;
   children?: ReactNode;
 }) {
-  const said = (notes ?? []).filter(Boolean).join(" · ");
+  const marks = (notes ?? []).filter((n): n is string => !!n);
   return (
-    <li data-route={route} className="flex min-h-10 items-center gap-1 py-1">
-      <div className="min-w-0 flex-1">
-        <p className="text-body">{kind}</p>
-        {(address || said) && (
-          <p className="text-meta text-muted-foreground">
-            {address && <span className="font-mono break-all">{address}</span>}
-            {address && said && " · "}
-            {said}
-          </p>
+    <li
+      data-route={route}
+      {...rowProps}
+      className={`group/route flex min-h-10 items-center gap-2 border-border/40 py-1.5 not-last:border-b ${dragged ? "opacity-40" : ""}`}
+    >
+      {handle}
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <span className="shrink-0 text-body">{kind}</span>
+        {address && (
+          <span className="min-w-0 font-mono text-meta break-all text-muted-foreground">
+            {address}
+          </span>
         )}
       </div>
+      {marks.map((m) => (
+        <span key={m} className={`${badge} text-muted-foreground`}>
+          {m}
+        </span>
+      ))}
       {children}
     </li>
   );
@@ -89,12 +120,10 @@ export function FixedRoutes({
 function RouteButton({
   icon: Icon,
   label,
-  disabled,
   onClick,
 }: {
   icon: LucideIcon;
   label: string;
-  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -102,19 +131,27 @@ function RouteButton({
       type="button"
       aria-label={label}
       title={label}
-      disabled={disabled}
       onClick={onClick}
-      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-30 [&_svg]:size-4"
+      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
     >
       <Icon aria-hidden />
     </button>
   );
 }
 
+/** `list` with `route` moved to where `over` is. */
+const moved = (list: string[], route: string, over: string) => {
+  const rest = list.filter((r) => r !== route);
+  rest.splice(list.indexOf(over), 0, route);
+  return rest;
+};
+
 /**
- * An account computer's routes in this app (0091): how they're tried, best first, moved with
- * arrows, and Add route for an address of its own. Only an added route has a remove button: the
- * computer reports its own again, and the relay is the route that works from anywhere.
+ * An account computer's routes in this app (0091), tried top to bottom. Each is dragged by its
+ * handle to a new place, or moved with the arrow keys while its handle has focus; either saves as
+ * the one-step moves `editRoutes` takes. Add route takes an address of its own. Only an added
+ * route can be removed: the computer reports its own again, and Parallax Connect is the route that
+ * works from anywhere.
  */
 export function AccountRoutes({
   device,
@@ -126,12 +163,69 @@ export function AccountRoutes({
   const [adding, setAdding] = useState(false);
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string>();
+  // The route being dragged and where it is now, from a press on its handle until the drop is saved.
+  const [drag, setDrag] = useState<{
+    route: string;
+    order: string[];
+    started?: boolean;
+    saving?: boolean;
+  }>();
+  // What the last keyboard move did, read out.
+  const [said, setSaid] = useState("");
+  // The handle to keep focus on once a keyboard move has re-rendered the list.
+  const focusing = useRef<string>(undefined);
+  const handles = useRef(new Map<string, HTMLButtonElement>());
   const routes = device.routes ?? [];
+  const shown = drag?.order ?? routes;
+  const nameOf = (route: string) => (isRelay(route) ? "Parallax Connect" : route);
+  useEffect(() => {
+    if (focusing.current) handles.current.get(focusing.current)?.focus();
+  });
   const edit = async (change: RouteEdit) => {
     const why = await window.parallax.editRoutes(device.id, change);
     setError(why);
     return why;
   };
+  // Moves `route` from where it is to `to`, one step at a time, stopping at a step that fails.
+  const moveTo = async (route: string, to: number) => {
+    const from = routes.indexOf(route);
+    const by = to > from ? 1 : -1;
+    for (let at = from; at !== to; at += by) if (await edit({ move: route, by })) return false;
+    return true;
+  };
+  const onKey = (event: KeyboardEvent, route: string, at: number) => {
+    const by = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    if (!by) return;
+    event.preventDefault();
+    const to = at + by;
+    if (to < 0 || to >= routes.length) return;
+    focusing.current = route;
+    void moveTo(route, to).then((done) => {
+      if (done) setSaid(`${nameOf(route)} moved to ${to + 1} of ${routes.length}.`);
+    });
+  };
+  const dragProps = (route: string) => ({
+    // Only the handle starts a drag, so an address can still be selected.
+    draggable: drag?.route === route,
+    onDragStart: (event: DragEvent) => {
+      setDrag((d) => d && { ...d, started: true });
+      event.dataTransfer?.setData("text/plain", route);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (event: DragEvent) => {
+      if (!drag) return;
+      event.preventDefault();
+      if (route !== drag.route) setDrag({ ...drag, order: moved(drag.order, drag.route, route) });
+    },
+    onDrop: (event: DragEvent) => {
+      event.preventDefault();
+      if (!drag) return;
+      setDrag({ ...drag, saving: true });
+      void moveTo(drag.route, drag.order.indexOf(drag.route)).finally(() => setDrag(undefined));
+    },
+    // Dropped anywhere else, it goes back.
+    onDragEnd: () => setDrag((d) => (d?.saving ? d : undefined)),
+  });
   const add = async (event: FormEvent) => {
     event.preventDefault();
     if (!(await edit({ add: typed }))) setTyped("");
@@ -139,48 +233,62 @@ export function AccountRoutes({
   return (
     <>
       <ul aria-label={`Routes to ${device.name}`}>
-        {routes.map((route, i) => {
-          const relay = isRelay(route);
-          const name = relay ? "Parallax Relay" : route;
+        {shown.map((route, i) => {
+          const name = nameOf(route);
           const added = device.addedRoutes?.includes(route);
           return (
             <RouteRow
               key={route}
               route={route}
               kind={routeKind(route)}
-              {...(!relay && { address: route })}
+              {...(!isRelay(route) && { address: route })}
               notes={[added && "Added", connected && device.route === route && "Connected"]}
+              dragged={drag?.route === route}
+              rowProps={dragProps(route)}
+              handle={
+                <button
+                  type="button"
+                  ref={(el) => {
+                    if (el) handles.current.set(route, el);
+                    else handles.current.delete(route);
+                  }}
+                  aria-label={`Move ${name}`}
+                  aria-description="Drag, or press the up and down arrow keys."
+                  title="Drag to reorder"
+                  onPointerDown={() => setDrag({ route, order: routes })}
+                  onPointerUp={() => setDrag((d) => (d?.started ? d : undefined))}
+                  onKeyDown={(event) => onKey(event, route, i)}
+                  // Moving its row blurs it with nowhere to go. Focus going elsewhere ends the hold.
+                  onBlur={(event) => {
+                    if (event.relatedTarget) focusing.current = undefined;
+                  }}
+                  className="-ml-1.5 grid h-7 w-5 shrink-0 cursor-grab place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground active:cursor-grabbing [&_svg]:size-4"
+                >
+                  <GripVertical aria-hidden />
+                </button>
+              }
             >
-              <RouteButton
-                icon={ChevronUp}
-                label={`Move ${name} up`}
-                disabled={i === 0}
-                onClick={() => void edit({ move: route, by: -1 })}
-              />
-              <RouteButton
-                icon={ChevronDown}
-                label={`Move ${name} down`}
-                disabled={i === routes.length - 1}
-                onClick={() => void edit({ move: route, by: 1 })}
-              />
               {added ? (
                 <RouteButton
-                  icon={Trash2}
+                  icon={X}
                   label={`Remove ${name}`}
                   onClick={() => void edit({ remove: route })}
                 />
               ) : (
-                // Keeps every row's arrows in one column, while a row has Remove.
+                // Keeps the marks in one column while another row has Remove.
                 !!device.addedRoutes?.length && <span aria-hidden className="size-7 shrink-0" />
               )}
             </RouteRow>
           );
         })}
       </ul>
+      <p role="status" className="sr-only">
+        {said}
+      </p>
       {adding ? (
         <form
           onSubmit={(event) => void add(event)}
-          className="mt-1 flex flex-wrap items-center gap-2"
+          className="mt-2 flex flex-wrap items-center gap-2"
         >
           <input
             aria-label="Address"
@@ -224,7 +332,7 @@ export function AccountRoutes({
       <p className="mt-2 text-meta text-faint-foreground">
         {adding
           ? "A DNS name or address of this computer, with a port if it isn't 7341. It must present this computer's key before anything is sent. plxd only accepts connections from private networks, so a port forward from the internet won't connect."
-          : "Tried in this order. Until you move one, direct routes start together and Parallax Relay 200 ms later. Saved on this device."}
+          : "Tried top to bottom. Saved on this device."}
       </p>
     </>
   );

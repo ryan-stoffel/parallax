@@ -47,7 +47,7 @@ test("a computer's card says how it's connected, and under that the one thing wr
     text: "Connected · Over your network",
   });
   expect(computerStatus({ kind: "account", state: up, route: "relay:abc" }).text).toBe(
-    "Connected · Over Parallax Relay",
+    "Connected · Over Parallax Connect",
   );
   expect(computerStatus({ kind: "lan", state: up }).text).toBe("Connected · Same network");
   expect(computerStatus({ kind: "ssh", state: up, destination: "ryan@devbox" }).text).toBe(
@@ -117,7 +117,7 @@ test("a computer's card says how it's connected, and under that the one thing wr
 });
 
 test("a route is named for the kind of address it is", () => {
-  expect(routeKind("relay:abc")).toBe("Parallax Relay");
+  expect(routeKind("relay:abc")).toBe("Parallax Connect");
   expect(routeKind("192.168.1.20:7341")).toBe("Same network");
   expect(routeKind("10.0.0.12")).toBe("Same network");
   expect(routeKind("studio.local:7341")).toBe("Same network");

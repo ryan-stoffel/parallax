@@ -527,13 +527,8 @@ export const settingsIndex: SettingEntry[] = [
   ...[
     [
       "Add computer",
-      "With your Parallax account, on this network, or over SSH",
+      "With Parallax Connect, on this network, or over SSH",
       "add computer devices hosts machines new",
-    ],
-    [
-      "Parallax Connect",
-      "Your computers, wherever they are",
-      "add computer relay remote devices account sync",
     ],
     [
       "Computers on this network",
@@ -541,7 +536,16 @@ export const settingsIndex: SettingEntry[] = [
       "lan nearby devices pair computer",
     ],
     ["SSH hosts", "Machines you reach over SSH", "ssh remote server add host install plxd"],
-    ["Routes", "How this app reaches a computer", "route address order relay tailscale network"],
+    [
+      "Routes",
+      "How this app reaches a computer",
+      "route address order reorder drag relay tailscale network",
+    ],
+    [
+      "Agents can work on a computer",
+      "In each computer's card, opened",
+      "agent work delegate remote peer other computer showing access for",
+    ],
   ].map(([title, description, keywords]) => ({
     section: "connections" as const,
     title: title!,
@@ -556,13 +560,25 @@ export const settingsIndex: SettingEntry[] = [
       "auto balance load busy cpu memory new thread computers weight prefer",
     ],
   ]),
-  // Sharing & access (PLX-1492): this computer's own settings, and the devices that reach it.
+  // Sharing & access (PLX-1492): how this computer is reached, and the devices that reach it.
   ...entries("sharing", undefined, [
     ["This computer", "Its name and icon", "rename computer name local icon"],
-    ["Version", "This computer's plxd", "daemon status version plxd uptime"],
-    ["Pair computers on this network", "With a one-time code", "lan pair wifi same network local"],
-    ["Tailscale", "Find computers on your Tailscale network", "tailnet vpn"],
-    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote check connection"],
+    [
+      "Parallax Connect",
+      "Reach this computer from anywhere",
+      "relay reach from anywhere internet remote account check connection",
+    ],
+    [
+      "Setup code",
+      "A code for another computer that's adding this one",
+      "show setup code add this computer account",
+    ],
+    ["SSH", "How another computer adds this one over SSH", "ssh remote login sshd server"],
+    [
+      "Pair on this network",
+      "With a one-time code, no account needed",
+      "lan pair wifi same network local pair computers",
+    ],
     [
       "Open in a browser",
       "Use Parallax from a browser on this network",
@@ -570,26 +586,29 @@ export const settingsIndex: SettingEntry[] = [
     ],
     [
       "Agents can work here",
-      "Agents on your other computers can run commands on the ones you turn on",
+      "Agents on your other computers can run commands on this one",
       "agent work delegate remote peer",
-    ],
-    [
-      "Setup code",
-      "A code for another computer that's adding this one",
-      "show setup code add this computer account",
     ],
     [
       "Devices with access",
       "What's paired with or signed in to this computer",
       "revoke read-only phone browser paired sessions",
     ],
+    ["Version", "The installed Parallax version", "daemon status version plxd update"],
   ]),
   {
     section: "sharing",
+    title: "Reach from anywhere",
+    description: "Parallax Connect",
+    keywords: "relay internet remote",
+    anchor: "parallax-connect",
+  },
+  {
+    section: "sharing",
     title: "Same network",
-    description: "Pair computers on this network",
+    description: "Pair on this network",
     keywords: "lan local network wifi",
-    anchor: "pair-computers-on-this-network",
+    anchor: "pair-on-this-network",
   },
   ...entries("sharing", "Devices with access", [
     ["Pair a device", "With a pairing code", "pairing code phone"],

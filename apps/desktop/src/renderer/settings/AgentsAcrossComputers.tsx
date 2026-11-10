@@ -21,30 +21,30 @@ import { notify } from "../notifications";
 import { newThreadPrefs } from "../prefs";
 import { hostIcon } from "../RunTargetMenu";
 import { Picker } from "../ui";
-import { AccessRow, badge, CollapsibleCard } from "./connectionParts";
-import { Switch } from "./parts";
+import { badge, CollapsibleCard } from "./connectionParts";
+import { StatusDot, Switch } from "./parts";
 
-// Agents across computers (0101) in Settings: whether agents on the user's other computers can
-// work on one, on Sharing & access, and the Load Balancer, on Computers (PLX-1492).
+// Agents across computers (0101) in Settings > Computers: whether agents on the user's other
+// computers can work on one, in its card, and the Load Balancer (PLX-1492).
 
 /** How an account computer is reached, in words: over the relay, or directly for another route. */
 export const reachOf = (route: string | undefined) =>
   route === undefined
     ? "Parallax Connect"
     : isRelay(route)
-      ? "Over Parallax Relay"
+      ? "Over Parallax Connect"
       : "Over your network";
 
 /**
- * `agentWork` on account computer `host`, on a plxd that has it, as its row on Sharing & access,
- * with why it can't take part under it: not connected, an older plxd, or added with Allow alone
- * (PLX-1402).
+ * `agentWork` on account computer `host`, on a plxd that has it, as a row in its opened card on
+ * Settings > Computers, with why it can't take part under it: not connected, an older plxd, or added
+ * with Allow alone (PLX-1402). Its `data-setting` is where a search for it lands.
  */
 export function AgentWorkRow({
   host,
   device,
 }: {
-  host: Host;
+  host: Pick<Host, "id" | "name">;
   device: Pick<DeviceHost, "addedWithAllow">;
 }) {
   const [state] = useRealConnections([host.id]);
@@ -84,20 +84,30 @@ export function AgentWorkRow({
         : device.addedWithAllow
           ? "Added with Allow, so agents can't work with it yet"
           : undefined;
-  const note = why ?? (read?.on && !read.relay ? "Needs Reach from anywhere" : undefined);
+  // Not connected, its card already says so above.
+  const note =
+    state?.status !== "connected"
+      ? undefined
+      : (why ?? (read?.on && !read.relay ? "Needs Parallax Connect" : undefined));
   return (
-    <AccessRow
-      title="Agents can work here"
-      description={`Agents on your other computers can run commands on ${host.name} as you. Turning this on also turns on pairing there.`}
-      status={note && <span className="mt-1 block text-meta text-warning">{note}</span>}
+    <div
+      data-setting="agents-can-work-on"
+      className="mt-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-border/40 pt-3"
     >
+      <div className="min-w-[min(14rem,100%)] flex-1">
+        <span className="block text-body font-medium">Agents can work on {host.name}</span>
+        <span className="mt-0.5 block text-meta text-muted-foreground">
+          Agents on your other computers can run commands there as you. Also turns on pairing there.
+        </span>
+        {note && <span className="mt-1 block text-meta text-warning">{note}</span>}
+      </div>
       <Switch
         label={`Let agents on my other computers work on ${host.name}`}
         checked={!why && !!read?.on}
         disabled={!!why || !read}
         onChange={(next) => void toggle(next)}
       />
-    </AccessRow>
+    </div>
   );
 }
 
@@ -159,28 +169,39 @@ function useReadings(ids: string[], active: boolean, seen: { current: Element | 
   return readings;
 }
 
-/** How much of something is in use: its name, a short thin bar, and the exact number. */
+/**
+ * How much of something is in use: its name and number over a bar that fills the column. Calm until
+ * it's near full: amber from 80 %, red once the Load Balancer counts it full.
+ */
 function Meter({ label, used, title }: { label: string; used?: number; title: string }) {
   const tone =
     used === undefined || used < 80
-      ? "bg-muted-foreground/60"
+      ? "bg-muted-foreground/70"
       : used < fullAt
         ? "bg-warning"
         : "bg-danger";
   return (
-    <span
-      title={title}
-      className={`inline-flex shrink-0 items-center gap-1.5 ${label === "CPU" ? "w-[6.25rem]" : "w-[8rem]"}`}
-    >
-      {label}
-      <span className="h-[3px] w-8 overflow-hidden rounded-full bg-foreground/15">
-        <span
-          className={`block h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none ${tone}`}
+    <div title={title} className="min-w-0">
+      <div className="flex items-baseline justify-between gap-2 text-meta text-muted-foreground">
+        <span>{label}</span>
+        <span className="text-foreground tabular-nums">
+          {used === undefined ? "–" : `${used}%`}
+        </span>
+      </div>
+      <div
+        role="meter"
+        aria-label={label}
+        aria-valuenow={used ?? 0}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        className="mt-1 h-1.5 overflow-hidden rounded-full bg-foreground/10"
+      >
+        <div
+          className={`h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none ${tone}`}
           style={{ width: `${used ?? 0}%` }}
         />
-      </span>
-      <span className="tabular-nums">{used === undefined ? "–" : `${used}%`}</span>
-    </span>
+      </div>
+    </div>
   );
 }
 
@@ -267,8 +288,10 @@ function balancerBadge(balancer: Balancer, hostId: string): ReactNode {
 }
 
 /**
- * One computer in the Load Balancer's card: its name and whether it's next, full or left out, what
- * it's doing now, and at the end how often it takes new threads and whether it takes part.
+ * One computer in the Load Balancer's card: its name and whether it's next, full or left out, with
+ * how often it takes new threads and whether it takes part at the end of that line. Under them, what
+ * it's running and its CPU and memory as two bars. A computer that can't take a thread says why in
+ * their place, and one that isn't connected is greyed.
  */
 function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
   const settings = loadBalancer.use();
@@ -280,78 +303,85 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
   const why = "why" in verdict ? verdict.why : undefined;
   const load = candidate.health?.load;
   const agents = candidate.health?.runningAgents;
-  // Anything but a load to show says so in place of its meters.
+  const offline = why === "offline";
+  // Anything but a load to show says so in place of its bars.
   const instead =
     !read || !why || why === "full"
       ? undefined
-      : why === "offline" && connection
+      : offline && connection
         ? statusLabel(connection)
         : whyText[why];
+  const facts = [
+    host.id === localId && "This computer",
+    // Left out, its mark by its name says so.
+    !leftOut && instead,
+    !leftOut && !instead && agents !== undefined && (agents === 1 ? "1 agent" : `${agents} agents`),
+  ].filter(Boolean);
+  const bars = !leftOut && !instead;
   return (
-    <li className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 border-border/40 px-4 py-3 not-last:border-b">
-      <div className="flex min-w-[min(14rem,100%)] flex-1 items-center gap-3">
-        <span className="shrink-0 text-muted-foreground [&_svg]:size-5">{hostIcon(host)}</span>
-        <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 text-body font-medium">
-            <span className="truncate">{host.name}</span>
-            {balancerBadge(balancer, host.id)}
-          </p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-meta text-muted-foreground">
-            {host.id === localId && <span>This computer</span>}
-            {/* Left out, its mark by its name says so. */}
-            {leftOut ? null : instead ? (
-              <span>{instead}</span>
-            ) : (
-              <>
-                <Meter
-                  label="CPU"
-                  used={load?.cpu}
-                  title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
-                />
-                <Meter
-                  label="Memory"
-                  used={load?.memory}
-                  title={load ? `Memory ${load.memory}% in use` : "Memory"}
-                />
-                {agents !== undefined && (
-                  <span>
-                    {agents} {agents === 1 ? "agent" : "agents"}
-                  </span>
-                )}
-              </>
+    <li className="border-border/40 px-4 py-3.5 not-last:border-b">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div
+          className={`flex min-w-[min(12rem,100%)] flex-1 items-center gap-3 ${offline || leftOut ? "opacity-55" : ""}`}
+        >
+          <span className="shrink-0 text-muted-foreground [&_svg]:size-5">{hostIcon(host)}</span>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-2 text-body font-medium">
+              <span className="truncate">{host.name}</span>
+              {balancerBadge(balancer, host.id)}
+            </p>
+            {facts.length > 0 && (
+              <p className="mt-0.5 flex items-center gap-1.5 text-meta text-muted-foreground">
+                {offline && !leftOut && <StatusDot tone="off" />}
+                {facts.join(" · ")}
+              </p>
             )}
-          </p>
+          </div>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-3">
+          <Picker
+            field
+            label={`How often ${host.name} takes new threads`}
+            options={preferences.map((p) => ({ value: p.value, label: p.name }))}
+            value={candidate.preference}
+            disabled={leftOut}
+            align="end"
+            className="w-28"
+            onChange={(value) =>
+              loadBalancer.set({
+                ...settings,
+                preferences: { ...settings.preferences, [host.id]: value as Preference },
+              })
+            }
+          />
+          <Switch
+            label={`Balance new threads onto ${host.name}`}
+            checked={!leftOut}
+            onChange={(on) =>
+              loadBalancer.set({
+                ...settings,
+                leftOut: on
+                  ? settings.leftOut.filter((id) => id !== host.id)
+                  : [...settings.leftOut, host.id],
+              })
+            }
+          />
         </div>
       </div>
-      <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
-        <Picker
-          field
-          label={`How often ${host.name} takes new threads`}
-          options={preferences.map((p) => ({ value: p.value, label: p.name }))}
-          value={candidate.preference}
-          disabled={leftOut}
-          align="end"
-          className="w-32"
-          onChange={(value) =>
-            loadBalancer.set({
-              ...settings,
-              preferences: { ...settings.preferences, [host.id]: value as Preference },
-            })
-          }
-        />
-        <Switch
-          label={`Balance new threads onto ${host.name}`}
-          checked={!leftOut}
-          onChange={(on) =>
-            loadBalancer.set({
-              ...settings,
-              leftOut: on
-                ? settings.leftOut.filter((id) => id !== host.id)
-                : [...settings.leftOut, host.id],
-            })
-          }
-        />
-      </div>
+      {bars && (
+        <div className="mt-3 ml-8 grid max-w-md grid-cols-2 gap-x-6">
+          <Meter
+            label="CPU"
+            used={load?.cpu}
+            title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
+          />
+          <Meter
+            label="Memory"
+            used={load?.memory}
+            title={load ? `Memory ${load.memory}% in use` : "Memory"}
+          />
+        </div>
+      )}
     </li>
   );
 }

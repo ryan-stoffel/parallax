@@ -1,4 +1,4 @@
-import { KeyRound, Plus } from "lucide-react";
+import { Activity, KeyRound, Plus, Terminal } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { ConnectState } from "../../preload/bridge";
@@ -14,14 +14,16 @@ import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { dismiss, notify } from "../notifications";
 import { useProfile } from "../profile";
+import { ParallaxMark } from "../logos";
 import { Dialog } from "../ui";
-import { AccessRow, badge, CollapsibleCard } from "./connectionParts";
+import { AccessRow, badge, card, CollapsibleCard } from "./connectionParts";
 import {
   ConfirmRemove,
   outlineButton,
   primaryButton,
   quietButton,
   rowField,
+  StatusDot,
   Switch,
 } from "./parts";
 
@@ -39,7 +41,7 @@ const READ_ONLY_FOR_GOOD =
 /** How the connection check names a part. */
 const CHECK_PARTS: Record<RelayCheckPart, string> = {
   signIn: "Sign-in",
-  relay: "Relay",
+  relay: "Parallax Connect",
   listener: "Listener",
   stream: "Stream",
 };
@@ -71,12 +73,12 @@ export function useAccountSignIn() {
 }
 
 /**
- * How computers reach this one, read from the local plxd, with what changes it: Reach from
- * anywhere, its `relay`, which registers it with Parallax Relay (PLX-652); pairing on the same
+ * How computers reach this one, read from the local plxd, with what changes it: Parallax Connect,
+ * its `relay`, which registers it with Parallax Relay (PLX-652); pairing on the same
  * network, its `remote` (PLX-641, 0065), and Open in a browser, its `remoteWeb` (PLX-651); and
  * `agentWork` (0101), which it and pairing change in each other. With them, the devices paired with
  * or signed in to this computer, which can be revoked or made read-only (PLX-1364), a pairing code
- * while one is on show, and the account's computers on the relay while Reach from anywhere is on.
+ * while one is on show, and the account's computers on the relay while Parallax Connect is on.
  *
  * Signing in registers this computer, and plxd then turns `relay` on, which nothing tells the app
  * (PLX-1146). So after a sign-in, seen here or by the page open just before, it reads the settings
@@ -217,7 +219,7 @@ export function useLocalAccess() {
     // On, it registers this computer under the signed-in account first: main sends the token to plxd.
     toggleRelay: async (next: boolean) => {
       retry();
-      const title = `Couldn't turn Reach from anywhere ${next ? "on" : "off"}`;
+      const title = `Couldn't turn Parallax Connect ${next ? "on" : "off"}`;
       const registered = next ? await window.parallax.registerRelay() : undefined;
       if (registered) return failed(title, registered);
       const answer = await window.parallax.request(localId, "host/settings/set", { relay: next });
@@ -265,23 +267,35 @@ export type LocalAccess = ReturnType<typeof useLocalAccess>;
 /** A line under a setting's description saying what it's doing now. */
 const statusLine = "mt-1 block text-meta text-foreground";
 
+/** Where SSH is turned on, on this computer's OS, for people. */
+const SSH_SETTING: Record<string, string> = {
+  darwin: "Remote Login in System Settings › General › Sharing",
+  win32: "OpenSSH Server in Windows' optional features",
+  linux: "the OpenSSH server (sshd)",
+};
+
 /**
- * Reach from anywhere, this computer's `relay`: its switch, whether it's connected, and how many of
- * the account's computers are on the relay. While it's on, Check connection (PLX-1356) opens a real
- * stream through the relay back to this computer, shows which part failed and what to do, and
- * copies a report with no secret in it. It runs only when asked, since each run counts against the
- * relay's streams a minute. Signed out, it can't turn on, so Sign in is in its switch's place.
+ * Sharing & access' first card, Parallax Connect: this computer's `relay`, which registers it with
+ * Parallax Relay so the phone and the account's computers reach it from anywhere (PLX-652, 0091).
+ * Its switch, or Sign in while signed out, since it can't turn on without the account; while it's
+ * on, whether it's connected and how many of the account's computers there are, and Check connection
+ * (PLX-1356), which opens a real stream back to this computer, says which part failed and what to
+ * do, and copies a report with no secret in it. It runs only when asked, since each run counts
+ * against the relay's streams a minute. Under it, the setup code another computer adds this one with.
  */
-function ReachRow({
+export function ConnectCard({
   access,
   signedOut,
   signingIn,
   onSignIn,
+  onShowCode,
 }: {
   access: LocalAccess;
   signedOut: boolean;
   signingIn: boolean;
   onSignIn: () => void;
+  /** Opens Show setup code. Absent while signed out, when there's no account to add it to. */
+  onShowCode?: () => void;
 }) {
   const { relay, status, relayHosts } = access;
   const [checking, setChecking] = useState(false);
@@ -293,23 +307,51 @@ function ReachRow({
     setChecking(false);
   };
   const report = typeof result === "object" ? result : undefined;
+  const linked = status?.relay?.connected;
   return (
-    <AccessRow
-      title="Reach from anywhere"
-      description="Your phone and signed-in devices reach this computer through Parallax Relay, which can't read your threads."
-      status={
-        relay && (
-          <>
-            <span role="status" className={statusLine}>
-              {status?.relay?.connected
-                ? "Connected to the relay."
-                : (status?.relay?.problem ?? "Connecting to the relay…")}
-              {!!relayHosts?.length && (
-                <span className="text-muted-foreground">
-                  {" "}
-                  {relayHosts.length} of {ACCOUNT_COMPUTERS} computers on your account.
-                </span>
-              )}
+    <section aria-label="Parallax Connect" className={`${card} mb-6`}>
+      <div
+        data-setting="parallax-connect"
+        className="flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4"
+      >
+        <div className="flex min-w-[min(16rem,100%)] flex-1 items-start gap-3.5">
+          <ParallaxMark className="mt-0.5 size-7 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-reading font-semibold">Parallax Connect</h2>
+            <p className="mt-0.5 text-meta text-muted-foreground">
+              Reach this computer from your phone and your other computers, wherever they are.
+              Parallax Connect can't read your threads.
+            </p>
+          </div>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {access.relay === undefined ? null : signedOut && !relay ? (
+            <button type="button" disabled={signingIn} onClick={onSignIn} className={primaryButton}>
+              {signingIn ? "Waiting for your browser…" : "Sign in"}
+            </button>
+          ) : (
+            <Switch
+              label="Parallax Connect"
+              checked={!!relay}
+              onChange={(next) => void access.toggleRelay(next)}
+            />
+          )}
+        </div>
+      </div>
+      {relay && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/40 px-4 py-3">
+          <div className="min-w-[min(14rem,100%)] flex-1">
+            <span role="status" className="flex items-center gap-2 text-body">
+              <StatusDot tone={linked ? "on" : status?.relay?.problem ? "error" : "off"} />
+              <span>
+                {linked ? "Connected" : (status?.relay?.problem ?? "Connecting…")}
+                {!!relayHosts?.length && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {relayHosts.length} of {ACCOUNT_COMPUTERS} computers on your account
+                  </span>
+                )}
+              </span>
             </span>
             {(checking || result !== undefined) && (
               <span role="status" className={statusLine}>
@@ -322,175 +364,190 @@ function ReachRow({
                       : `Working. The connection took ${report?.roundTripMs} ms.`}
               </span>
             )}
-          </>
-        )
-      }
-    >
-      {relay && report && !checking && (
-        <button type="button" className={quietButton} onClick={() => copy(report.diagnostics)}>
-          {copied ? "Copied" : "Copy diagnostics"}
-        </button>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {report && !checking && (
+              <button
+                type="button"
+                className={quietButton}
+                onClick={() => copy(report.diagnostics)}
+              >
+                {copied ? "Copied" : "Copy diagnostics"}
+              </button>
+            )}
+            <button
+              type="button"
+              className={outlineButton}
+              disabled={checking}
+              title="Opens a real connection through Parallax Connect back to this computer."
+              onClick={() => void check()}
+            >
+              <Activity aria-hidden />
+              Check connection
+            </button>
+          </div>
+        </div>
       )}
-      {relay && (
-        <button
-          type="button"
-          className={quietButton}
-          disabled={checking}
-          title="Opens a real connection through the relay back to this computer."
-          onClick={() => void check()}
+      <div className="border-t border-border/40">
+        <AccessRow
+          title="Setup code"
+          description={
+            onShowCode
+              ? "Adding this computer from another one? Show this code there."
+              : "Sign in first, then show this code on the computer adding this one."
+          }
         >
-          Check connection
-        </button>
-      )}
-      {signedOut && !relay ? (
-        <button type="button" disabled={signingIn} onClick={onSignIn} className={primaryButton}>
-          {signingIn ? "Waiting for your browser…" : "Sign in"}
-        </button>
-      ) : (
-        <Switch
-          label="Reach from anywhere"
-          checked={!!relay}
-          onChange={(next) => void access.toggleRelay(next)}
-        />
-      )}
-    </AccessRow>
+          <button
+            type="button"
+            disabled={!onShowCode}
+            onClick={onShowCode}
+            className={outlineButton}
+          >
+            <KeyRound aria-hidden />
+            Show setup code
+          </button>
+        </AccessRow>
+      </div>
+    </section>
   );
 }
 
 /**
- * This computer's rows on Sharing & access, under its version: pairing on the same network;
- * Tailscale, which also finds the tailnet's devices (0056) until Tailscale is only a route; Reach
- * from anywhere; Open in a browser, which serves the app from this computer's listener for a browser
- * to pair with (PLX-651) and so needs pairing on; whether agents on the user's other computers can
- * work here; and, signed in, the setup code another computer adds this one with (0091).
+ * Sharing & access' SSH card: how another computer adds this one over SSH. Parallax can't see or
+ * change whether SSH is on here, so it says where that is, and what Add computer does.
  */
-export function SharingRows({
+export function SshCard() {
+  const where = SSH_SETTING[window.parallax.platform] ?? "an SSH server";
+  return (
+    <section aria-label="SSH" data-setting="ssh" className={`${card} mb-10`}>
+      <div className="flex items-start gap-3.5 px-4 py-4">
+        <span className="mt-0.5 grid size-7 shrink-0 place-items-center text-muted-foreground [&_svg]:size-5">
+          <Terminal aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-reading font-semibold">SSH</h2>
+          <p className="mt-0.5 text-meta text-muted-foreground">
+            Add this computer from another one: there, choose Add computer, then Over SSH, and enter
+            your user and this computer's address. Parallax installs plxd here if it's missing.
+          </p>
+          <p className="mt-1 text-meta text-muted-foreground">Turn on {where} first.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Sharing & access' less common ways in, under their own quiet heading: pairing on the same network
+ * (PLX-641, 0065), Open in a browser, which serves the app from this computer's listener for a
+ * browser to pair with and so needs pairing on (PLX-651), whether agents on the user's other
+ * computers can work here (0101), and Tailscale (0056), only while it's on, so it can be turned off.
+ * Each says what it's for, so a new user can tell them apart.
+ */
+export function MoreWaysIn({
   access,
   connect,
-  onShowCode,
-  ...account
 }: {
   access: LocalAccess;
   connect: ConnectState | undefined;
-  signedOut: boolean;
-  signingIn: boolean;
-  onSignIn: () => void;
-  /** Opens Show setup code. Absent while signed out, when there's no account to add it to. */
-  onShowCode?: () => void;
 }) {
   const { web, on, status, showing } = access;
   const addresses = (showing?.addresses ?? ["this computer's address"])
     .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
     .join(", ");
   return (
-    <>
-      <AccessRow
-        title="Pair computers on this network"
-        description="Computers and browsers on your network pair with this one using a one-time code."
-        status={
-          on &&
-          status?.problem && (
-            <span role="alert" className="mt-1 block text-meta text-danger">
-              {status.problem}
-            </span>
-          )
-        }
-      >
-        <Switch
-          label="Pair computers on this network"
-          checked={!!on}
-          disabled={on === undefined}
-          onChange={(next) => void access.toggle(next)}
-        />
-      </AccessRow>
-      <AccessRow
-        title="Tailscale"
-        description="Also find the computers on your Tailscale network that run Parallax Connect."
-      >
-        {connect ? (
-          <Switch
-            label="Tailscale"
-            checked={!!connect.on}
-            disabled={connect.on === undefined}
-            onChange={(next) => void access.toggleTailscale(next)}
-          />
-        ) : (
-          <span className="text-body text-muted-foreground">Checking…</span>
-        )}
-      </AccessRow>
-      {access.relay !== undefined && <ReachRow access={access} {...account} />}
-      {web !== undefined && (
+    <section aria-label="More ways in" className="mb-10">
+      <h2 className="mb-3 text-body font-medium text-muted-foreground">More ways in</h2>
+      <div className={card}>
         <AccessRow
-          title="Open in a browser"
-          description={
-            !on ? (
-              "Use Parallax from a browser on this network. Needs pairing on."
-            ) : !web ? (
-              "Use Parallax from a browser on this network."
-            ) : (
-              <>
-                Open <span className="font-mono text-foreground">{addresses}</span> and pair with a
-                code from Pair a device. Use the Tailscale address where you can. On this network
-                the browser warns about this computer's certificate: continue only if it shows this
-                SHA-256 fingerprint, or trust the certificate in your OS first. Otherwise someone on
-                the network could pose as this computer. Turning this off disconnects paired
-                browsers.
-              </>
-            )
-          }
+          title="Pair on this network"
+          description="Let a computer, phone or browser on the same network pair with a one-time code. Use it without a Parallax account."
           status={
             on &&
-            web &&
-            status?.fingerprint && (
-              <span
-                aria-label="Certificate fingerprint"
-                className="mt-1 block font-mono text-meta break-all text-foreground"
-              >
-                {fingerprint(status.fingerprint)}
+            status?.problem && (
+              <span role="alert" className="mt-1 block text-meta text-danger">
+                {status.problem}
               </span>
             )
           }
         >
           <Switch
-            label="Open in a browser"
-            checked={!!on && web}
-            disabled={!on}
-            onChange={(next) => void access.toggleWeb(next)}
+            label="Pair on this network"
+            checked={!!on}
+            disabled={on === undefined}
+            onChange={(next) => void access.toggle(next)}
           />
         </AccessRow>
-      )}
-      {access.canAgentWork && (
-        <AccessRow
-          title="Agents can work here"
-          description="Agents on your other computers can run commands here as you. Turning this on also turns on pairing."
-          status={
-            access.agentWork &&
-            !access.relay && (
-              <span className="mt-1 block text-meta text-warning">Needs Reach from anywhere</span>
-            )
-          }
-        >
-          <Switch
-            label="Let agents on my other computers work here"
-            checked={!!access.agentWork}
-            onChange={(next) => void access.toggleAgentWork(next)}
-          />
-        </AccessRow>
-      )}
-      <AccessRow
-        title="Setup code"
-        description={
-          onShowCode
-            ? "A one-time code to type on another computer that's adding this one to your account."
-            : "A one-time code for another computer that's adding this one to your account. Sign in first."
-        }
-      >
-        <button type="button" disabled={!onShowCode} onClick={onShowCode} className={outlineButton}>
-          <KeyRound aria-hidden />
-          Show setup code
-        </button>
-      </AccessRow>
-    </>
+        {web !== undefined && (
+          <AccessRow
+            title="Open in a browser"
+            description={
+              !on || !web ? (
+                "Use Parallax from a web browser on another device on this network. It pairs like a computer, so it needs Pair on this network."
+              ) : (
+                <>
+                  Open <span className="font-mono text-foreground">{addresses}</span> and pair with
+                  a code from Pair a device. Use the Tailscale address where you can. On this
+                  network the browser warns about this computer's certificate: continue only if it
+                  shows this SHA-256 fingerprint, or trust the certificate in your OS first.
+                  Otherwise someone on the network could pose as this computer. Turning this off
+                  disconnects paired browsers.
+                </>
+              )
+            }
+            status={
+              on &&
+              web &&
+              status?.fingerprint && (
+                <span
+                  aria-label="Certificate fingerprint"
+                  className="mt-1 block font-mono text-meta break-all text-foreground"
+                >
+                  {fingerprint(status.fingerprint)}
+                </span>
+              )
+            }
+          >
+            <Switch
+              label="Open in a browser"
+              checked={!!on && web}
+              disabled={!on}
+              onChange={(next) => void access.toggleWeb(next)}
+            />
+          </AccessRow>
+        )}
+        {access.canAgentWork && (
+          <AccessRow
+            title="Agents can work here"
+            description="Let agents on your other computers run commands on this one, as you. Use it to hand work to this computer. Needs Parallax Connect, and turns on pairing."
+            status={
+              access.agentWork &&
+              !access.relay && (
+                <span className="mt-1 block text-meta text-warning">Needs Parallax Connect</span>
+              )
+            }
+          >
+            <Switch
+              label="Let agents on my other computers work here"
+              checked={!!access.agentWork}
+              onChange={(next) => void access.toggleAgentWork(next)}
+            />
+          </AccessRow>
+        )}
+        {connect?.on && (
+          <AccessRow
+            title="Tailscale"
+            description="On from an older setup. Parallax Connect and SSH reach this computer without it. Turn it off unless you use Tailscale devices in Parallax."
+          >
+            <Switch
+              label="Tailscale"
+              checked
+              onChange={(next) => void access.toggleTailscale(next)}
+            />
+          </AccessRow>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -613,7 +670,7 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
         {!sessions.length && !showing && (
           <p className="px-4 py-3 text-body text-muted-foreground">
             Nothing has access yet.
-            {!canPair && " Turn on Pair computers on this network to pair a device."}
+            {!canPair && " Turn on Pair on this network to pair a device."}
           </p>
         )}
       </div>
@@ -670,8 +727,8 @@ export function PairDialog({ onDone }: { onDone: () => void }) {
             Add a computer on this network
           </h2>
           <p className="mt-1.5 text-body text-muted-foreground">
-            On the other computer, turn on pairing in Settings › Sharing & access and choose Pair a
-            device. Then enter the code it shows. Pair only your own computers.
+            On the other computer, turn on Pair on this network in Settings › Sharing & access and
+            choose Pair a device. Then enter the code it shows. Pair only your own computers.
           </p>
         </div>
         {typing ? (

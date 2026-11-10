@@ -221,16 +221,6 @@ async function show(Page: ComponentType) {
 const cardOf = (id: string) => document.querySelector(`li[data-device="${id}"]`);
 const inCard = (id: string, name: string) =>
   [...cardOf(id)!.querySelectorAll("button")].find((b) => b.textContent === name)!;
-/** Picks `name` in Sharing & access' Showing access for. */
-const showAccessFor = (name: string) =>
-  click(
-    [
-      ...document.querySelectorAll(
-        '[role="menu"][aria-label="Showing access for"] [role^="menuitem"]',
-      ),
-    ].find((option) => option.textContent === name)!,
-  );
-
 test("making a device read-only asks first, says it's for good, and a failure says why", async () => {
   const session = { id: "s1", name: "phone", createdAt: "2026-11-04T00:00:00Z" };
   const makeDeviceReadOnly = vi.fn(async (): Promise<RemoteSessionsResult | string> => ({
@@ -306,10 +296,10 @@ test("Check connection names the part that failed and copies the report", async 
   expect(button("Copy diagnostics")).toBeUndefined();
 });
 
-test("Reach from anywhere registers this computer with the relay before turning it on", async () => {
+test("Parallax Connect registers this computer with the relay before turning it on", async () => {
   remote = true;
   await show(SharingSettings);
-  const toggle = document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
+  const toggle = document.querySelector('[role="switch"][aria-label="Parallax Connect"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("false");
 
   // Signed out: nothing changes, and a notification says why.
@@ -317,17 +307,17 @@ test("Reach from anywhere registers this computer with the relay before turning 
   await click(toggle);
   expect(request).not.toHaveBeenCalledWith("local", "host/settings/set", { relay: true });
   expect(document.querySelector('[aria-label="Notifications"]')?.textContent).toBe(
-    "Couldn't turn Reach from anywhere onSign in to Parallax from Profile in the sidebar first.",
+    "Couldn't turn Parallax Connect onSign in to Parallax from Profile in the sidebar first.",
   );
 
   await click(toggle);
   expect(registerRelay).toHaveBeenCalledTimes(2);
   expect(request).toHaveBeenCalledWith("local", "host/settings/set", { relay: true });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
-  expect(document.body.textContent).toContain("Connected to the relay.");
+  expect(document.body.textContent).toContain("Connected");
 
   // How many of the account's computers are on the relay.
-  expect(document.body.textContent).toContain("2 of 10 computers on your account.");
+  expect(document.body.textContent).toContain("2 of 10 computers on your account");
 });
 
 test("an account computer this app has no device for has a card, and its Remove asks first", async () => {
@@ -352,45 +342,42 @@ test("an account computer this app has no device for has a card, and its Remove 
   expect(document.querySelector('li[data-device="relay:a"]')).toBeNull();
 });
 
-test("signed out, Reach from anywhere offers Sign in where its switch can't turn on", async () => {
+test("signed out, Parallax Connect offers Sign in where its switch can't turn on", async () => {
   profile = null;
   await show(SharingSettings);
-  expect(document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')).toBeNull();
+  expect(document.querySelector('[role="switch"][aria-label="Parallax Connect"]')).toBeNull();
   await click(button("Sign in"));
   expect(signIn).toHaveBeenCalledWith(false);
   expect(registerRelay).not.toHaveBeenCalled();
 });
 
-test("a computer that can't take agent work says why, with its switch off", async () => {
+test("a computer that can't take agent work says why in its card, with its switch off", async () => {
   devices = [
-    device("account:old", "old-box"),
-    device("account:allow", "allow-box", { addedWithAllow: true }),
-    device("account:fine", "fine-box"),
+    device("account:old", "old-box", { routes: ["relay:old"] }),
+    device("account:allow", "allow-box", { addedWithAllow: true, routes: ["relay:allow"] }),
+    device("account:fine", "fine-box", { routes: ["relay:fine"] }),
   ];
   window.parallax.connectionState = async (id) =>
     id === "account:old" ? connected : { ...connected, capabilities: { agentWork: {} } };
-  await show(SharingSettings);
-  // Showing access for picks whose settings the page shows: this computer's at first.
-  expect(document.querySelector('[data-setting="pair-computers-on-this-network"]')).not.toBeNull();
+  await show(ConnectionSettings);
+  // Each computer's own switch is in its card, once it's opened.
+  const open = async (id: string, name: string) => {
+    await click(cardOf(id)!.querySelector(`[aria-label="1 route to ${name}"]`)!);
+    return cardOf(id)!.querySelector('[data-setting="agents-can-work-on"]')!;
+  };
   const toggle = (name: string) =>
     document.querySelector<HTMLButtonElement>(
       `[role="switch"][aria-label="Let agents on my other computers work on ${name}"]`,
     )!;
-  const row = () => document.querySelector('[data-setting="agents-can-work-here"]')!;
-  await showAccessFor("old-box");
-  expect(row().textContent).toContain("Needs updating");
+  expect((await open("account:old", "old-box")).textContent).toContain("Needs updating");
   expect(toggle("old-box").disabled).toBe(true);
-  await showAccessFor("allow-box");
-  expect(row().textContent).toContain("Added with Allow");
+  expect((await open("account:allow", "allow-box")).textContent).toContain("Added with Allow");
   expect(toggle("allow-box").disabled).toBe(true);
-  await showAccessFor("fine-box");
-  expect(toggle("fine-box").disabled).toBe(false);
   // One that can says what turning it on allows, at the switch.
-  expect(row().textContent).toContain(
-    "Agents on your other computers can run commands on fine-box as you. Turning this on also turns on pairing there.",
+  expect((await open("account:fine", "fine-box")).textContent).toContain(
+    "Agents on your other computers can run commands there as you. Also turns on pairing there.",
   );
-  // Another computer's page has none of this computer's own switches.
-  expect(document.querySelector('[data-setting="pair-computers-on-this-network"]')).toBeNull();
+  expect(toggle("fine-box").disabled).toBe(false);
 });
 
 test("every setting a search finds on Computers or Sharing & access is on that page", async () => {
@@ -414,7 +401,16 @@ test("every setting a search finds on Computers or Sharing & access is on that p
         expect.arrayContaining(
           section === "connections"
             ? ["SSH hosts", "Add computer", "Load Balancer"]
-            : ["Same network", "Devices with access", "Pair a device", "Setup code", "Tailscale"],
+            : [
+                "Parallax Connect",
+                "Reach from anywhere",
+                "SSH",
+                "Same network",
+                "Devices with access",
+                "Pair a device",
+                "Setup code",
+                "Version",
+              ],
         ),
       );
       for (const { title, anchor } of found)
@@ -471,7 +467,7 @@ test("the code dialog a card opens follows the computer to its next step", async
   expect(dialog()).toBeUndefined();
 });
 
-test("signing in from Reach from anywhere shows it on once plxd turns it on", async () => {
+test("signing in from Parallax Connect shows it on once plxd turns it on", async () => {
   profile = null;
   // Signing in registers this computer, which turns its relay on, and tells the windows who it is.
   signIn.mockImplementation(async () => {
@@ -482,9 +478,9 @@ test("signing in from Reach from anywhere shows it on once plxd turns it on", as
   });
   await show(SharingSettings);
   await click(button("Sign in"));
-  const toggle = document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
+  const toggle = document.querySelector('[role="switch"][aria-label="Parallax Connect"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("true");
-  expect(document.body.textContent).toContain("Connected to the relay.");
+  expect(document.body.textContent).toContain("Connected · 2 of 10");
   expect(button("Check connection")).toBeDefined();
 });
 
@@ -506,12 +502,12 @@ const pass = async (ms: number) => {
     await act(async () => void (await vi.advanceTimersByTimeAsync(500)));
 };
 
-test("after a sign-in, the page reads the settings until Reach from anywhere is on, then stops", async () => {
+test("after a sign-in, the page reads the settings until Parallax Connect is on, then stops", async () => {
   vi.useFakeTimers();
   profile = null;
   await show(SharingSettings);
   await signInSlowly(2000);
-  const toggle = () => document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
+  const toggle = () => document.querySelector('[role="switch"][aria-label="Parallax Connect"]')!;
   // The read at the sign-in and the one 1.5 s later are both too early.
   await pass(1500);
   expect(toggle().getAttribute("aria-checked")).toBe("false");
@@ -610,7 +606,7 @@ test("this computer's failure is printed in its Version row, not left to a toolt
   );
 });
 
-test("Sharing & access opened just after a sign-in on Computers still waits for Reach from anywhere", async () => {
+test("Sharing & access opened just after a sign-in on Computers still waits for Parallax Connect", async () => {
   vi.useFakeTimers();
   profile = null;
   await show(ConnectionSettings);
@@ -628,7 +624,7 @@ test("Sharing & access opened just after a sign-in on Computers still waits for 
   );
   act(() => unmount());
   await show(SharingSettings);
-  const toggle = () => document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
+  const toggle = () => document.querySelector('[role="switch"][aria-label="Parallax Connect"]')!;
   expect(toggle().getAttribute("aria-checked")).toBe("false");
   await pass(3000);
   expect(toggle().getAttribute("aria-checked")).toBe("true");
@@ -649,16 +645,14 @@ test("a card opens to its routes, and an account computer's can be moved, added 
   expect(routes("account:b")).toEqual([]);
   await click(cardOf("account:b")!.querySelector('[aria-label="3 routes to build-box"]')!);
   expect(routes("account:b")).toEqual([
-    "Same network192.168.1.20:7341 · Connected",
-    "Directbox.example.com:7400 · Added",
-    "Parallax Relay",
+    "Same network192.168.1.20:7341Connected",
+    "Directbox.example.com:7400Added",
+    "Parallax Connect",
   ]);
   const labelled = (label: string) =>
     cardOf("account:b")!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  await click(labelled("Move Parallax Relay up")!);
-  expect(editRoutes).toHaveBeenCalledWith("account:b", { move: "relay:b", by: -1 });
   // Only a route the user added can be removed.
-  expect(labelled("Remove Parallax Relay")).toBeNull();
+  expect(labelled("Remove Parallax Connect")).toBeNull();
   await click(labelled("Remove box.example.com:7400")!);
   expect(editRoutes).toHaveBeenCalledWith("account:b", { remove: "box.example.com:7400" });
   // Add route asks for an address, and says why one won't do.
@@ -673,6 +667,80 @@ test("a card opens to its routes, and an account computer's can be moved, added 
   // A paired computer's routes are only listed.
   const studio = hosts[0]!.id;
   await click(cardOf(studio)!.querySelector('[aria-label="1 route to studio"]')!);
-  expect(routes(studio)).toEqual(["Same network192.168.1.20 · Connected"]);
+  expect(routes(studio)).toEqual(["Same network192.168.1.20Connected"]);
   expect(cardOf(studio)!.querySelector('button[aria-label^="Move"]')).toBeNull();
+});
+
+test("a route moves by dragging its handle, or with the arrow keys while the handle has focus", async () => {
+  const order = ["192.168.1.20:7341", "100.101.12.9:7341", "relay:b"];
+  devices = [device("account:b", "build-box", { routes: order })];
+  // Main saves each one-step move and sends the new order, as it does.
+  editRoutes.mockImplementation(async (...args: unknown[]) => {
+    const { move, by } = args[1] as { move: string; by: -1 | 1 };
+    const list = [...devices[0]!.routes!];
+    const at = list.indexOf(move);
+    [list[at], list[at + by]] = [list[at + by]!, list[at]!];
+    showDevices([{ ...devices[0]!, routes: list }]);
+    return undefined;
+  });
+  await show(ConnectionSettings);
+  await click(cardOf("account:b")!.querySelector('[aria-label="3 routes to build-box"]')!);
+  const shown = () =>
+    [...cardOf("account:b")!.querySelectorAll("li[data-route]")].map((li) =>
+      li.getAttribute("data-route"),
+    );
+  const row = (route: string) => cardOf("account:b")!.querySelector(`li[data-route="${route}"]`)!;
+  const handle = (name: string) =>
+    cardOf("account:b")!.querySelector<HTMLButtonElement>(`button[aria-label="Move ${name}"]`)!;
+  const fire = (target: Element, type: string) =>
+    act(() => {
+      target.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+    });
+
+  // Dragged from the bottom to the top: it shows there while held, then saves as two moves up.
+  fire(handle("Parallax Connect"), "pointerdown");
+  expect(row("relay:b").getAttribute("draggable")).toBe("true");
+  fire(row("relay:b"), "dragstart");
+  fire(row("192.168.1.20:7341"), "dragover");
+  expect(shown()).toEqual(["relay:b", "192.168.1.20:7341", "100.101.12.9:7341"]);
+  expect(editRoutes).not.toHaveBeenCalled();
+  fire(row("192.168.1.20:7341"), "drop");
+  await settle();
+  expect(editRoutes.mock.calls).toEqual([
+    ["account:b", { move: "relay:b", by: -1 }],
+    ["account:b", { move: "relay:b", by: -1 }],
+  ]);
+  expect(shown()).toEqual(["relay:b", "192.168.1.20:7341", "100.101.12.9:7341"]);
+
+  // A drag let go anywhere else puts it back and saves nothing.
+  editRoutes.mockClear();
+  fire(handle("192.168.1.20:7341"), "pointerdown");
+  fire(row("192.168.1.20:7341"), "dragstart");
+  fire(row("relay:b"), "dragover");
+  fire(row("192.168.1.20:7341"), "dragend");
+  expect(shown()).toEqual(["relay:b", "192.168.1.20:7341", "100.101.12.9:7341"]);
+  expect(editRoutes).not.toHaveBeenCalled();
+
+  // From the keyboard: Down moves it a step, keeps the focus on its handle, and says where it is.
+  handle("Parallax Connect").focus();
+  const key = async (name: string) => {
+    await act(async () => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
+      );
+    });
+    await settle();
+  };
+  await key("ArrowDown");
+  expect(editRoutes).toHaveBeenCalledWith("account:b", { move: "relay:b", by: 1 });
+  expect(shown()).toEqual(["192.168.1.20:7341", "relay:b", "100.101.12.9:7341"]);
+  expect(document.activeElement).toBe(handle("Parallax Connect"));
+  expect(cardOf("account:b")!.querySelector('[role="status"]')!.textContent).toBe(
+    "Parallax Connect moved to 2 of 3.",
+  );
+  // Up at the top does nothing.
+  await key("ArrowUp");
+  editRoutes.mockClear();
+  await key("ArrowUp");
+  expect(editRoutes).not.toHaveBeenCalled();
 });

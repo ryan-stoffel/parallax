@@ -221,8 +221,8 @@ test("an added route reaches a computer, a reorder moves it, and another key get
   await expect(card.getByRole("alert")).toHaveText(/Enter an address/);
   await add("https://build-box.example.com");
   await expect(card.getByRole("alert")).toHaveText(/no https:\/\/ or path/);
-  await expect(row(`relay:${box.hostId}`)).toContainText("Parallax Relay");
-  await expect(card.getByRole("button", { name: "Remove Parallax Relay" })).toHaveCount(0);
+  await expect(row(`relay:${box.hostId}`)).toContainText("Parallax Connect");
+  await expect(card.getByRole("button", { name: "Remove Parallax Connect" })).toHaveCount(0);
   await shot("routes-bad-input");
 
   // A DNS name is what first reaches it: its code is asked for, and it connects over that.
@@ -254,7 +254,10 @@ test("an added route reaches a computer, a reorder moves it, and another key get
   const moveToTop = (route: string) =>
     expect(async () => {
       if ((await routes.first().getAttribute("data-route")) === route) return;
-      await row(route).getByRole("button", { name: /up$/ }).click({ timeout: 1000 });
+      // Its handle, moved one step with the keyboard.
+      await row(route)
+        .getByRole("button", { name: /^Move / })
+        .press("ArrowUp", { timeout: 1000 });
       throw new Error("one step up");
     }).toPass();
   await moveToTop(named);
@@ -388,10 +391,10 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   await page.getByRole("button", { name: "Computers", exact: true }).click();
   // The fake tailscale kept the tailnet's real computers out.
   await expect(page.locator("li[data-device]")).toHaveCount(1);
-  // Each computer's own setting is on Sharing & access.
+  // This computer's is on Sharing & access, and another's is in its card on Computers.
   await page.getByRole("button", { name: "Sharing & access" }).click();
   const here = page.getByRole("switch", { name: "Let agents on my other computers work here" });
-  const pairing = page.getByRole("switch", { name: "Pair computers on this network" });
+  const pairing = page.getByRole("switch", { name: "Pair on this network" });
   await expect(here).not.toBeChecked();
   await here.click();
   await expect(here).toBeChecked();
@@ -399,12 +402,9 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   await pairing.click();
   await expect(pairing).not.toBeChecked();
   await expect(here).not.toBeChecked();
-  // build-box's is there once it's picked.
-  await page.getByRole("button", { name: /^Showing access for/ }).click();
-  await page
-    .getByRole("menu", { name: "Showing access for" })
-    .getByRole("menuitemradio", { name: "build-box" })
-    .click();
+  // build-box's is in its card, opened.
+  await page.getByRole("button", { name: "Computers", exact: true }).click();
+  await page.getByRole("button", { name: /routes? to build-box$/ }).click();
   const there = page.getByRole("switch", {
     name: "Let agents on my other computers work on build-box",
   });
