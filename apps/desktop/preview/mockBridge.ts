@@ -62,13 +62,13 @@ const worktreeRules: Pick<
   HostSettings,
   | "deletedThreadWorktrees"
   | "inactiveWorktreeDays"
-  | "settledWorktreeDays"
+  | "archivedWorktreeDays"
   | "unchangedWorktrees"
   | "worktreeKeep"
 > = {
   deletedThreadWorktrees: true,
   inactiveWorktreeDays: null,
-  settledWorktreeDays: null,
+  archivedWorktreeDays: null,
   unchangedWorktrees: false,
   worktreeKeep: "uncommittedChanges",
 };

@@ -235,7 +235,7 @@ async fn the_branch_prefix_is_saved_and_a_bad_one_is_refused() {
 }
 
 /// PLX-1524: the worktree rules start as plxd always behaved, each is saved alone, null turns a
-/// days rule off where 0 settled days is the next sweep, and what's out of range is refused.
+/// days rule off where 0 archived days is the next sweep, and what's out of range is refused.
 #[tokio::test]
 async fn the_worktree_rules_are_saved_and_what_is_out_of_range_is_refused() {
     let dir = temp_dir();
@@ -246,7 +246,7 @@ async fn the_worktree_rules_are_saved_and_what_is_out_of_range_is_refused() {
         (
             settings.deleted_thread_worktrees,
             settings.inactive_worktree_days,
-            settings.settled_worktree_days,
+            settings.archived_worktree_days,
             settings.unchanged_worktrees,
             settings.worktree_keep,
         )
@@ -271,7 +271,7 @@ async fn the_worktree_rules_are_saved_and_what_is_out_of_range_is_refused() {
     let saved = set(HostSettingsSetParams {
         deleted_thread_worktrees: Some(false),
         inactive_worktree_days: Some(Some(30)),
-        settled_worktree_days: Some(Some(0)),
+        archived_worktree_days: Some(Some(0)),
         unchanged_worktrees: Some(true),
         worktree_keep: Some(WorktreeKeep::TrackedChanges),
         ..HostSettingsSetParams::default()
@@ -297,7 +297,7 @@ async fn the_worktree_rules_are_saved_and_what_is_out_of_range_is_refused() {
     .await
     .unwrap();
     assert_eq!(off.inactive_worktree_days, Some(None));
-    assert_eq!(off.settled_worktree_days, Some(Some(0)));
+    assert_eq!(off.archived_worktree_days, Some(Some(0)));
     assert_eq!(off.clean_worktrees, Some(true));
 
     for refused in [
@@ -306,7 +306,7 @@ async fn the_worktree_rules_are_saved_and_what_is_out_of_range_is_refused() {
             ..HostSettingsSetParams::default()
         },
         HostSettingsSetParams {
-            settled_worktree_days: Some(Some(3651)),
+            archived_worktree_days: Some(Some(3651)),
             ..HostSettingsSetParams::default()
         },
         HostSettingsSetParams {

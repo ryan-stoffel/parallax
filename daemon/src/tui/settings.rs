@@ -1264,7 +1264,7 @@ mod tests {
                 clean_worktrees: None,
                 deleted_thread_worktrees: None,
                 inactive_worktree_days: None,
-                settled_worktree_days: None,
+                archived_worktree_days: None,
                 unchanged_worktrees: None,
                 worktree_keep: None,
                 branch_prefix: None,

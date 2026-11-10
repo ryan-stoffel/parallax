@@ -43,7 +43,7 @@ const keeps: (PickerOption & { value: WorktreeKeep })[] = [
 const even = (text: ReactNode) => <span className="block text-balance">{text}</span>;
 
 /** The rows under Advanced, which a search for one opens. */
-const advanced = ["Delete settled worktrees", "Delete unchanged worktrees", "Keep worktrees with"];
+const advanced = ["Delete unchanged worktrees", "Keep worktrees with"];
 
 /**
  * Settings > Worktrees: where a new thread works and what it starts from, on this computer, then
@@ -142,7 +142,7 @@ function HostWorktrees({ focus }: { focus?: { anchor: string } }) {
   const ruled = able("worktreeRules").length > 0;
   const deleted = shared("worktreeRules", (s) => s.deletedThreadWorktrees ?? true);
   const inactive = shared("worktreeRules", (s) => s.inactiveWorktreeDays ?? null);
-  const settled = shared("worktreeRules", (s) => s.settledWorktreeDays ?? null);
+  const archived = shared("worktreeRules", (s) => s.archivedWorktreeDays ?? null);
   const unchanged = shared("worktreeRules", (s) => s.unchangedWorktrees ?? false);
   const keep = shared("worktreeRules", (s) => s.worktreeKeep ?? "uncommittedChanges");
   /** A rule's description: why it can't be set here, or what it does, after a note that it differs. */
@@ -239,7 +239,7 @@ function HostWorktrees({ focus }: { focus?: { anchor: string } }) {
             ) : connected && !cleanup ? (
               "This plxd can't clean up worktrees."
             ) : (
-              `${merged.mixed ? differs : ""}When a settled or archived thread's pull request merges, its worktree and branch go. The thread stays.`
+              `${merged.mixed ? differs : ""}When a thread's pull request merges, the thread is archived unless you've messaged it since. Once a merged thread is done or archived, its worktree and branch go.`
             ),
           )}
         >
@@ -265,6 +265,20 @@ function HostWorktrees({ focus }: { focus?: { anchor: string } }) {
             onChange={(inactiveWorktreeDays) => rule({ inactiveWorktreeDays })}
           />
         </Row>
+        <Row
+          title="Delete archived worktrees"
+          description={says(
+            archived,
+            "When a thread has been archived for this long, its worktree folder goes. The thread and its branch stay, and a new message brings the folder back.",
+          )}
+        >
+          <DaysPicker
+            label="Delete archived worktrees"
+            days={archived}
+            zero="At the next cleanup"
+            onChange={(archivedWorktreeDays) => rule({ archivedWorktreeDays })}
+          />
+        </Row>
         <details
           open={open}
           onToggle={(e) => setOpen(e.currentTarget.open)}
@@ -275,20 +289,6 @@ function HostWorktrees({ focus }: { focus?: { anchor: string } }) {
             Advanced
           </summary>
           <div className="border-t border-border/40">
-            <Row
-              title="Delete settled worktrees"
-              description={says(
-                settled,
-                "When a thread has been settled for this long, its worktree goes. The branch and the thread stay.",
-              )}
-            >
-              <DaysPicker
-                label="Delete settled worktrees"
-                days={settled}
-                zero="At the next cleanup"
-                onChange={(settledWorktreeDays) => rule({ settledWorktreeDays })}
-              />
-            </Row>
             <Row
               title="Delete unchanged worktrees"
               description={says(

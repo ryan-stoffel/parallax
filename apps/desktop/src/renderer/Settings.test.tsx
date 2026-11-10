@@ -427,7 +427,7 @@ test("Worktrees sets each cleanup rule as its picker or switch, where plxd has t
     autoResume: false,
     deletedThreadWorktrees: true,
     inactiveWorktreeDays: null,
-    settledWorktreeDays: 45,
+    archivedWorktreeDays: 45,
     unchangedWorktrees: false,
     worktreeKeep: "uncommittedChanges",
   };
@@ -442,12 +442,15 @@ test("Worktrees sets each cleanup rule as its picker or switch, where plxd has t
   expect(document.querySelector("details")!.open).toBe(true);
   expect(trigger("delete-inactive-worktrees").textContent).toBe("Off");
   // Days that aren't a preset are their own option.
-  expect(trigger("delete-settled-worktrees").textContent).toBe("45 days");
+  expect(trigger("delete-archived-worktrees").textContent).toBe("45 days");
+  // The archived rule is in the main list, not under Advanced, and nothing says settled.
+  expect(row("delete-archived-worktrees").closest("details")).toBeNull();
+  expect(document.body.textContent).not.toMatch(/settled/i);
 
   await pick("delete-inactive-worktrees", "30 days");
   expect(trigger("delete-inactive-worktrees").textContent).toBe("30 days");
   await pick("delete-inactive-worktrees", "Off");
-  await pick("delete-settled-worktrees", "At the next cleanup");
+  await pick("delete-archived-worktrees", "At the next cleanup");
   await pick("keep-worktrees-with", "Edited tracked files");
   await click(
     row("delete-worktrees-with-deleted-threads").querySelector<HTMLElement>('[role="switch"]')!,
@@ -456,7 +459,7 @@ test("Worktrees sets each cleanup rule as its picker or switch, where plxd has t
   expect(calls("host/settings/set").map((c) => c.params)).toEqual([
     { inactiveWorktreeDays: 30 },
     { inactiveWorktreeDays: null },
-    { settledWorktreeDays: 0 },
+    { archivedWorktreeDays: 0 },
     { worktreeKeep: "trackedChanges" },
     { deletedThreadWorktrees: false },
     { unchangedWorktrees: true },

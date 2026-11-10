@@ -348,7 +348,7 @@ pub struct HostSettingsSetParams {
     )]
     #[ts(optional)]
     pub inactive_worktree_days: Option<Option<u32>>,
-    /// The new `settledWorktreeDays`, behind the `worktreeRules` capability: 0 to 3650 days, or
+    /// The new `archivedWorktreeDays`, behind the `worktreeRules` capability: 0 to 3650 days, or
     /// null for off. Absent leaves it. Anything else fails with `invalidParams`.
     #[serde(
         default,
@@ -356,7 +356,7 @@ pub struct HostSettingsSetParams {
         deserialize_with = "sent"
     )]
     #[ts(optional)]
-    pub settled_worktree_days: Option<Option<u32>>,
+    pub archived_worktree_days: Option<Option<u32>>,
     /// The new `unchangedWorktrees`, behind the `worktreeRules` capability. Absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -443,7 +443,7 @@ pub struct HostSettings {
     )]
     #[ts(optional)]
     pub inactive_worktree_days: Option<Option<u32>>,
-    /// The days after a thread settles before plxd deletes its worktree, where 0 is its next
+    /// The days after a thread is archived before plxd deletes its worktree, where 0 is its next
     /// sweep, or null, the default, for off.
     #[serde(
         default,
@@ -451,13 +451,13 @@ pub struct HostSettings {
         deserialize_with = "sent"
     )]
     #[ts(optional)]
-    pub settled_worktree_days: Option<Option<u32>>,
+    pub archived_worktree_days: Option<Option<u32>>,
     /// Whether plxd deletes a worktree with no commits beyond the default branch, once its thread
     /// has been idle for an hour. Off by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub unchanged_worktrees: Option<bool>,
-    /// What a worktree must hold for the merged, inactive, settled, and unchanged rules to keep
+    /// What a worktree must hold for the merged, inactive, archived, and unchanged rules to keep
     /// it. `uncommittedChanges` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

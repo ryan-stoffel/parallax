@@ -19,13 +19,15 @@
 //! Every [`RECHECK_EVERY`] sweeps also apply the host's worktree rules, each off by default,
 //! behind the `worktreeRules` capability (PLX-1524), whatever a thread's pull requests. They are
 //! T3 Code's. A worktree goes when its thread has had no activity for `inactiveWorktreeDays`, has
-//! been settled for `settledWorktreeDays`, or, with `unchangedWorktrees`, has been idle for
+//! been archived for `archivedWorktreeDays`, or, with `unchangedWorktrees`, has been idle for
 //! [`UNCHANGED_AFTER`] with no commits beyond the default branch. A thread's activity is its
 //! run's `updated_at`, which plxd writes each time it saves the run's state: a turn starting or
-//! ending, a stop, a linked pull request, changed options. Settled time counts from the later of
-//! that and when the thread was settled. Under every rule the run isn't running or waiting and
-//! isn't in its repository's own checkout, no other thread works in the worktree (0063), its
-//! thread has no terminal open, and the worktree is on its stored branch. Its local branch
+//! ending, a stop, a linked pull request, changed options. Archived time counts from the later of
+//! that and when the thread was archived, and a thread brought back isn't archived. Archiving
+//! isn't deleting: the thread, its transcript, and its worktree row stay. Under every rule the
+//! run isn't running or waiting and isn't in its repository's own checkout, no other thread works
+//! in the worktree (0063), its thread has no terminal open, and the worktree is on its stored
+//! branch. Its local branch
 //! stays, since its commits may exist nowhere else, and a later message checks it out again at
 //! the same path. A worktree git can't read stays.
 //!
@@ -67,10 +69,6 @@ const RECHECK_EVERY: u32 = 15;
 /// same from sweeping once an hour.
 const UNCHANGED_AFTER: SignedDuration = SignedDuration::from_hours(1);
 
-/// How long a thread is settled before the settled rule takes its worktree, whatever its days, so
-/// its settle script has opened the terminal that then keeps it. T3 Code's.
-const SETTLE_GRACE: SignedDuration = SignedDuration::from_mins(1);
-
 /// Sweeps once, then every [`SWEEP_PERIOD`] and on `daemon.merged` until `stop`. Every
 /// [`RECHECK_EVERY`] sweeps also removes abandoned chunked uploads (0074) and applies the host's
 /// worktree rules (PLX-1524).
@@ -111,8 +109,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 enum Rule {
     /// `inactiveWorktreeDays`.
     Inactive,
-    /// `settledWorktreeDays`.
-    Settled,
+    /// `archivedWorktreeDays`.
+    Archived,
     /// `unchangedWorktrees`, which also needs git to find no commits beyond the default branch.
     Unchanged,
 }
@@ -120,7 +118,7 @@ enum Rule {
 /// A run a rule is due for, with its worktree and the rule.
 type Due = (Run, Worktree, Rule);
 
-/// Removes, through `worktrees`, the worktree of every thread the host's inactive, settled, and
+/// Removes, through `worktrees`, the worktree of every thread the host's inactive, archived, and
 /// unchanged rules are due for at `now` (PLX-1524), and keeps its branch, stopping early for
 /// `stop`. A worktree that fails a check, or that a check can't read, stays.
 async fn sweep_rules(
@@ -192,10 +190,10 @@ fn due(db: &Store, now: Timestamp) -> Result<(WorktreeKeep, Vec<Due>), ErrorObje
     let error = |error| store_error(&error);
     let keep = crate::methods::host::worktree_keep(db)?;
     let inactive = db.inactive_worktree_days().map_err(error)?;
-    let settled = db.settled_worktree_days().map_err(error)?;
+    let archived = db.archived_worktree_days().map_err(error)?;
     let unchanged = db.unchanged_worktrees().map_err(error)?;
     let mut found = Vec::new();
-    if inactive.is_none() && settled.is_none() && !unchanged {
+    if inactive.is_none() && archived.is_none() && !unchanged {
         return Ok((keep, found));
     }
     for thread in db.list_threads().map_err(error)? {
@@ -208,8 +206,8 @@ fn due(db: &Store, now: Timestamp) -> Result<(WorktreeKeep, Vec<Due>), ErrorObje
         let quiet = |wait| quiet_for(run.updated_at, wait, now);
         let rule = if inactive.is_some_and(|days| quiet(day(days))) {
             Rule::Inactive
-        } else if settled.is_some_and(|days| settled_for(&thread, &run, days, now)) {
-            Rule::Settled
+        } else if archived.is_some_and(|days| archived_for(&thread, &run, days, now)) {
+            Rule::Archived
         } else if unchanged && quiet(UNCHANGED_AFTER) {
             Rule::Unchanged
         } else {
@@ -239,13 +237,13 @@ fn quiet_for(since: Timestamp, wait: SignedDuration, now: Timestamp) -> bool {
     now.checked_sub(wait).is_ok_and(|limit| since <= limit)
 }
 
-/// Whether `thread` has been settled for `days` days at `now`, counted from the later of when it
-/// was settled and its `run`'s last change, and for [`SETTLE_GRACE`] at least.
-fn settled_for(thread: &Thread, run: &Run, days: u32, now: Timestamp) -> bool {
+/// Whether `thread` has been archived for `days` days at `now`, counted from the later of when it
+/// was archived and its `run`'s last change.
+fn archived_for(thread: &Thread, run: &Run, days: u32, now: Timestamp) -> bool {
     thread
-        .settled_at
-        .filter(|_| thread.settled)
-        .is_some_and(|at| quiet_for(at.max(run.updated_at), day(days).max(SETTLE_GRACE), now))
+        .archived_at
+        .filter(|_| thread.archived)
+        .is_some_and(|at| quiet_for(at.max(run.updated_at), day(days), now))
 }
 
 /// Whether the worktree `folder` of repository `repo` may go under `rule`: it is on `branch`, its
@@ -265,7 +263,7 @@ async fn may_go(
     }
     match rule {
         Rule::Unchanged => worktrees.in_default_branch(repo, folder).await,
-        Rule::Inactive | Rule::Settled => Ok(true),
+        Rule::Inactive | Rule::Archived => Ok(true),
     }
 }
 
@@ -705,7 +703,7 @@ mod tests {
             project_id: None,
             orchestrator_id: None,
             wake_reason: None,
-            settled_at: None,
+            archived_at: None,
         };
         let pulls = [Pull {
             merged_at: Some(at("2026-10-27T20:56:36Z")),
@@ -729,9 +727,7 @@ mod tests {
 
         use jiff::{SignedDuration, Timestamp};
         use parallax_protocol::RunId;
-        use parallax_store::{
-            Lineage, RunState, Store, StoreError, ThreadFields, ThreadUpdate, WorktreeFields,
-        };
+        use parallax_store::{Lineage, RunState, Store, StoreError, ThreadFields, WorktreeFields};
         use tokio_util::sync::CancellationToken;
         use uuid::Uuid;
 
@@ -961,37 +957,41 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn the_settled_rule_counts_days_from_when_a_thread_was_settled() {
+        async fn the_archived_rule_counts_days_from_when_a_thread_was_archived() {
             let f = Fixture::new();
-            let settle = |made: &Made| {
+            let archive = |made: &Made, archived| {
                 let id = made.id;
-                f.set(move |db| {
-                    let update = ThreadUpdate {
-                        settled: Some(true),
-                        ..ThreadUpdate::default()
-                    };
-                    db.update_thread(id, &update).map(drop)
-                })
+                f.set(move |db| db.set_thread_archived(id, archived).map(drop))
             };
-            let (settled, open) = (f.idle().await, f.idle().await);
-            settle(&settled).await;
-            let commit = f.branch(&settled);
+            let (archived, open, back) = (f.idle().await, f.idle().await, f.idle().await);
+            archive(&archived, true).await;
+            // Brought back, it isn't archived, whenever it was.
+            archive(&back, true).await;
+            archive(&back, false).await;
+            let commit = f.branch(&archived);
 
-            f.set(|db| db.set_settled_worktree_days(Some(3))).await;
+            f.set(|db| db.set_archived_worktree_days(Some(3))).await;
             f.sweep(days(2)).await;
-            assert!(settled.path.is_dir());
+            assert!(archived.path.is_dir());
             f.sweep(days(4)).await;
-            assert!(!settled.path.exists());
-            assert!(open.path.is_dir(), "a thread that isn't settled stays");
-            assert_eq!(f.branch(&settled), commit);
+            assert!(!archived.path.exists());
+            assert!(open.path.is_dir(), "a thread that isn't archived stays");
+            assert!(back.path.is_dir(), "an unarchived thread stays");
+            assert_eq!(f.branch(&archived), commit);
 
-            // 0 days is the next sweep, once the settle script has had its minute.
-            f.set(|db| db.set_settled_worktree_days(Some(0))).await;
-            settle(&open).await;
+            // 0 days is the next sweep. The thread stays, still archived.
+            f.set(|db| db.set_archived_worktree_days(Some(0))).await;
+            archive(&open, true).await;
             f.sweep(SignedDuration::ZERO).await;
-            assert!(open.path.is_dir());
-            f.sweep(SignedDuration::from_mins(2)).await;
             assert!(!open.path.exists());
+            assert!(back.path.is_dir());
+            let id = open.id;
+            let thread = store(&f.daemon, move |db| {
+                db.get_thread(id).map_err(|e| store_error(&e))
+            })
+            .await
+            .unwrap();
+            assert!(thread.is_some_and(|thread| thread.archived));
         }
 
         #[tokio::test]

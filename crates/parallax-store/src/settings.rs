@@ -29,9 +29,9 @@ const DELETED_THREAD_WORKTREES: &str = "deleted_thread_worktrees";
 /// worktree (PLX-1524).
 const INACTIVE_WORKTREE_DAYS: &str = "inactive_worktree_days";
 
-/// The `host_settings` key for the days after a thread settles after which plxd removes its
+/// The `host_settings` key for the days after a thread is archived after which plxd removes its
 /// worktree (PLX-1524).
-const SETTLED_WORKTREE_DAYS: &str = "settled_worktree_days";
+const ARCHIVED_WORKTREE_DAYS: &str = "archived_worktree_days";
 
 /// The `host_settings` key for whether plxd removes a worktree with no commits beyond the default
 /// branch (PLX-1524).
@@ -251,25 +251,25 @@ impl Store {
         )
     }
 
-    /// The days after a thread settles before plxd removes its worktree, where 0 is the next
+    /// The days after a thread is archived before plxd removes its worktree, where 0 is the next
     /// sweep (PLX-1524). `None`, off, when never set or unreadable.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn settled_worktree_days(&self) -> Result<Option<u32>, StoreError> {
-        self.days(SETTLED_WORKTREE_DAYS)
+    pub fn archived_worktree_days(&self) -> Result<Option<u32>, StoreError> {
+        self.days(ARCHIVED_WORKTREE_DAYS)
     }
 
-    /// Sets the days after a thread settles after which plxd removes its worktree, or turns the
-    /// rule off with `None`. The caller checks the range.
+    /// Sets the days after a thread is archived after which plxd removes its worktree, or turns
+    /// the rule off with `None`. The caller checks the range.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn set_settled_worktree_days(&self, days: Option<u32>) -> Result<(), StoreError> {
+    pub fn set_archived_worktree_days(&self, days: Option<u32>) -> Result<(), StoreError> {
         self.set_text(
-            SETTLED_WORKTREE_DAYS,
+            ARCHIVED_WORKTREE_DAYS,
             days.map(|d| d.to_string()).as_deref(),
         )
     }
@@ -745,7 +745,7 @@ mod tests {
     use crate::Store;
 
     /// A fresh install has auto-resume (0060), continuing after a restart, remote access,
-    /// Parallax Connect, and the inactive, settled, and unchanged worktree rules off, and merged
+    /// Parallax Connect, and the inactive, archived, and unchanged worktree rules off, and merged
     /// worktree cleanup and removing a deleted thread's worktree on. Each setting changes alone.
     #[test]
     fn host_settings_start_safe_and_change_independently() {
@@ -758,7 +758,7 @@ mod tests {
         assert!(store.clean_worktrees().unwrap());
         assert!(store.deleted_thread_worktrees().unwrap());
         assert_eq!(store.inactive_worktree_days().unwrap(), None);
-        assert_eq!(store.settled_worktree_days().unwrap(), None);
+        assert_eq!(store.archived_worktree_days().unwrap(), None);
         assert!(!store.unchanged_worktrees().unwrap());
         assert_eq!(store.worktree_keep().unwrap(), None);
 
@@ -776,9 +776,9 @@ mod tests {
 
         // The worktree rules: off differs from 0 days, and each changes alone.
         store.set_inactive_worktree_days(Some(30)).unwrap();
-        store.set_settled_worktree_days(Some(0)).unwrap();
+        store.set_archived_worktree_days(Some(0)).unwrap();
         assert_eq!(store.inactive_worktree_days().unwrap(), Some(30));
-        assert_eq!(store.settled_worktree_days().unwrap(), Some(0));
+        assert_eq!(store.archived_worktree_days().unwrap(), Some(0));
         assert!(store.clean_worktrees().unwrap());
         assert!(store.deleted_thread_worktrees().unwrap());
         assert!(!store.unchanged_worktrees().unwrap());
@@ -787,7 +787,7 @@ mod tests {
         store.set_unchanged_worktrees(true).unwrap();
         store.set_worktree_keep("trackedChanges").unwrap();
         assert_eq!(store.inactive_worktree_days().unwrap(), None);
-        assert_eq!(store.settled_worktree_days().unwrap(), Some(0));
+        assert_eq!(store.archived_worktree_days().unwrap(), Some(0));
         assert!(!store.deleted_thread_worktrees().unwrap());
         assert!(store.unchanged_worktrees().unwrap());
         assert_eq!(

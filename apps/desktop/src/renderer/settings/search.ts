@@ -422,9 +422,9 @@ export const settingsIndex: SettingEntry[] = [
       "remove old stale unused idle days retention disk space",
     ],
     [
-      "Delete settled worktrees",
-      "Delete a worktree a number of days after its thread is settled",
-      "remove done finished days retention advanced",
+      "Delete archived worktrees",
+      "Delete an archived thread's worktree folder, keeping the thread and branch",
+      "remove archive days retention disk space",
     ],
     [
       "Delete unchanged worktrees",

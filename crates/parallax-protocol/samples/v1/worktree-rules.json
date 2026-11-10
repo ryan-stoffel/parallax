@@ -13,7 +13,7 @@
       "cleanWorktrees": true,
       "deletedThreadWorktrees": true,
       "inactiveWorktreeDays": null,
-      "settledWorktreeDays": null,
+      "archivedWorktreeDays": null,
       "unchangedWorktrees": false,
       "worktreeKeep": "uncommittedChanges"
     }
@@ -25,7 +25,7 @@
     "params": {
       "deletedThreadWorktrees": false,
       "inactiveWorktreeDays": 30,
-      "settledWorktreeDays": 0,
+      "archivedWorktreeDays": 0,
       "unchangedWorktrees": true,
       "worktreeKeep": "anyLocalFiles"
     }
@@ -38,7 +38,7 @@
       "cleanWorktrees": true,
       "deletedThreadWorktrees": false,
       "inactiveWorktreeDays": 30,
-      "settledWorktreeDays": 0,
+      "archivedWorktreeDays": 0,
       "unchangedWorktrees": true,
       "worktreeKeep": "anyLocalFiles"
     }
@@ -57,7 +57,7 @@
       "cleanWorktrees": true,
       "deletedThreadWorktrees": false,
       "inactiveWorktreeDays": null,
-      "settledWorktreeDays": 0,
+      "archivedWorktreeDays": 0,
       "unchangedWorktrees": true,
       "worktreeKeep": "trackedChanges"
     }

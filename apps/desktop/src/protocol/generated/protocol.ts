@@ -8472,17 +8472,17 @@ export type HostSettings = {
 	 */
 	inactiveWorktreeDays?: number | null,
 	/**
-	 * The days after a thread settles before plxd deletes its worktree, where 0 is its next
+	 * The days after a thread is archived before plxd deletes its worktree, where 0 is its next
 	 * sweep, or null, the default, for off.
 	 */
-	settledWorktreeDays?: number | null,
+	archivedWorktreeDays?: number | null,
 	/**
 	 * Whether plxd deletes a worktree with no commits beyond the default branch, once its thread
 	 * has been idle for an hour. Off by default.
 	 */
 	unchangedWorktrees?: boolean,
 	/**
-	 * What a worktree must hold for the merged, inactive, settled, and unchanged rules to keep
+	 * What a worktree must hold for the merged, inactive, archived, and unchanged rules to keep
 	 * it. `uncommittedChanges` by default.
 	 */
 	worktreeKeep?: WorktreeKeep,
@@ -8564,10 +8564,10 @@ export type HostSettingsSetParams = {
 	 */
 	inactiveWorktreeDays?: number | null,
 	/**
-	 * The new `settledWorktreeDays`, behind the `worktreeRules` capability: 0 to 3650 days, or
+	 * The new `archivedWorktreeDays`, behind the `worktreeRules` capability: 0 to 3650 days, or
 	 * null for off. Absent leaves it. Anything else fails with `invalidParams`.
 	 */
-	settledWorktreeDays?: number | null,
+	archivedWorktreeDays?: number | null,
 	/**
 	 * The new `unchangedWorktrees`, behind the `worktreeRules` capability. Absent leaves it.
 	 */

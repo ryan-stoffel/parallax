@@ -983,12 +983,12 @@ const MIGRATIONS: &[Migration] = &[
         version: 62,
         sql: "ALTER TABLE repos ADD COLUMN icon_at TEXT;",
     },
-    // When a thread was settled (PLX-1524), for removing its worktree a number of days later. A
-    // thread already settled counts from this migration, since nothing kept when it was.
+    // When a thread was archived (PLX-1524), for removing its worktree a number of days later. A
+    // thread already archived counts from this migration, since nothing kept when it was.
     Migration {
         version: 63,
-        sql: "ALTER TABLE threads ADD COLUMN settled_at TEXT;
-        UPDATE threads SET settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE settled;",
+        sql: "ALTER TABLE threads ADD COLUMN archived_at TEXT;
+        UPDATE threads SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE archived;",
     },
 ];
 

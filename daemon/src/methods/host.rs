@@ -227,9 +227,9 @@ pub(crate) fn initialize(
 /// silently ignore, and the sweep that removes a settled thread's merged worktree. `branchPrefix`
 /// (PLX-1249): `branchPrefix` in `host/settings`, which an older plxd would silently ignore.
 /// `worktreeRules` (PLX-1524): `deletedThreadWorktrees`, `inactiveWorktreeDays`,
-/// `settledWorktreeDays`, `unchangedWorktrees`, and `worktreeKeep` in `host/settings`, which an
+/// `archivedWorktreeDays`, `unchangedWorktrees`, and `worktreeKeep` in `host/settings`, which an
 /// older plxd would silently ignore, and the rules they set: whether a deleted thread's worktree
-/// goes with it, and the sweep that removes an inactive, settled, or unchanged thread's worktree.
+/// goes with it, and the sweep that removes an inactive, archived, or unchanged thread's worktree.
 /// `connect`
 /// (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which an older
 /// plxd would silently ignore, `connect/devices`, and the tailnet listener. `terminals` (PLX-637):
@@ -850,7 +850,7 @@ pub(crate) async fn set_settings(
         clean_worktrees,
         deleted_thread_worktrees,
         inactive_worktree_days,
-        settled_worktree_days,
+        archived_worktree_days,
         unchanged_worktrees,
         worktree_keep,
         branch_prefix,
@@ -867,9 +867,9 @@ pub(crate) async fn set_settings(
             "inactiveWorktreeDays: use null for off, or 1 to 3650 days",
         ));
     }
-    if settled_worktree_days.is_some_and(|days| !days_in(days, 0)) {
+    if archived_worktree_days.is_some_and(|days| !days_in(days, 0)) {
         return Err(ErrorObject::invalid_params(
-            "settledWorktreeDays: use null for off, or 0 to 3650 days",
+            "archivedWorktreeDays: use null for off, or 0 to 3650 days",
         ));
     }
     let worktree_keep = worktree_keep.map(keep_name).transpose()?;
@@ -932,12 +932,12 @@ pub(crate) async fn set_settings(
                     "changed when the host deletes inactive worktrees"
                 );
             }
-            if let Some(days) = settled_worktree_days {
-                db.set_settled_worktree_days(days)
+            if let Some(days) = archived_worktree_days {
+                db.set_archived_worktree_days(days)
                     .map_err(|e| store_error(&e))?;
                 info!(
-                    settled_worktree_days = ?days,
-                    "changed when the host deletes settled worktrees"
+                    archived_worktree_days = ?days,
+                    "changed when the host deletes archived worktrees"
                 );
             }
             if let Some(on) = unchanged_worktrees {
@@ -1011,7 +1011,7 @@ pub(crate) async fn set_settings(
     Ok(settings)
 }
 
-/// The most days `inactiveWorktreeDays` and `settledWorktreeDays` take: ten years, as T3 Code's.
+/// The most days `inactiveWorktreeDays` and `archivedWorktreeDays` take: ten years, as T3 Code's.
 const MAX_WORKTREE_DAYS: u32 = 3650;
 
 /// Whether a days setting is off or from `least` to [`MAX_WORKTREE_DAYS`].
@@ -1069,7 +1069,7 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
         deleted_thread_worktrees: Some(db.deleted_thread_worktrees().map_err(|e| store_error(&e))?),
         inactive_worktree_days: Some(db.inactive_worktree_days().map_err(|e| store_error(&e))?),
-        settled_worktree_days: Some(db.settled_worktree_days().map_err(|e| store_error(&e))?),
+        archived_worktree_days: Some(db.archived_worktree_days().map_err(|e| store_error(&e))?),
         unchanged_worktrees: Some(db.unchanged_worktrees().map_err(|e| store_error(&e))?),
         worktree_keep: Some(worktree_keep(db)?),
         branch_prefix: Some(
