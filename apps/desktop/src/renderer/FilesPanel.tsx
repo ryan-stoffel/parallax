@@ -1,26 +1,54 @@
 import {
-  ChevronLeft,
   ChevronRight,
+  ListCollapse,
   Ellipsis,
   File,
   FilePlus,
   FileSymlink,
   Folder,
-  FolderOpen,
   FolderPlus,
+  PanelLeft,
+  Search,
+  X,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AgentEntry } from "../protocol/generated/protocol";
+import type { AgentEntry, GrepMatch } from "../protocol/generated/protocol";
+import { Marked } from "./CommandMenu";
+import { rank } from "./commandSearch";
 import { useConnectedNow } from "./ConnectionStatus";
-import { chunksOf, failure, progressFrom, readWorking } from "./documents";
 import { describeError } from "./errors";
-import { DownloadButton } from "./FileCards";
-import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
+import { FileEditor } from "./FileEditor";
+import { useShortcutLabel } from "./keybindings";
+import { CHECK_EVERY_MS, openFilesOf } from "./openFiles";
+import { FileIcon } from "./TurnChanges";
+import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu, searchField } from "./ui";
+
+/** From this wide, the tree sits beside the file, and a split Markdown view has room. */
+const TREE_BESIDE_WIDTH = 720;
+const TREE_WIDTH = 256;
+const TREE_MIN_WIDTH = 170;
+/** What the file keeps however wide the tree is dragged. */
+const FILE_MIN_WIDTH = 360;
+const TREE_WIDTH_KEY = "parallax.files.treeWidth";
+/** How often the open folders are listed again, for what the agent changes. */
+const RELIST_EVERY_MS = 5000;
+/** How far a tree's level indents. */
+const INDENT = 12;
+/** How long a search waits after typing before it asks plxd about file contents. */
+const GREP_AFTER_MS = 250;
 
 /** A folder's entries once listed, or why they couldn't be. */
-type Listing = { entries: AgentEntry[]; truncated: boolean } | { error: string };
+type Listing = { entries: AgentEntry[]; truncated: boolean; folder?: string } | { error: string };
 
 /** A name being typed in the tree: a new entry in `folder`, or a new name for `path`. */
 type Draft = { folder: string; isFolder: boolean } | { path: string };
@@ -53,11 +81,13 @@ async function listFolder(hostId: string, runId: string, folder: string): Promis
 }
 
 /**
- * The side panel's Files view (PLX-296): a run's folder on its host, its worktree or a Current
- * checkout thread's checkout, as a tree. A folder lists its entries from `agent/files` each time
- * it opens, so closing and opening it again shows the agent's latest files. A file opens in the
- * view, read-only, from `agent/file`'s `working` side. `unavailable` says why it can't load, such
- * as a plxd without the `files` capability.
+ * The side panel's Files view (PLX-296, PLX-1428): a run's folder on its host, its worktree or a
+ * Current checkout thread's checkout, as a tree beside an editor, or taking turns with it when
+ * narrow. A folder lists from `agent/files`, and open folders list again every few seconds, so the
+ * agent's new files show. Files open in tabs, which `openFiles` keeps and saves: on a plxd with
+ * `fileWrite`, `writable` edits them. A single click opens a file in a preview tab, which the next
+ * one replaces, and a double-click or an edit keeps it, as in VS Code and Zed. `unavailable` says why
+ * it can't load, such as a plxd without the `files` capability.
  *
  * `editable`, on a plxd with `fileEdit` (PLX-590), adds New file and New folder above the tree
  * and a menu on each entry, on right-click or its `…`: New file, New folder, Rename, and Delete.
@@ -65,30 +95,116 @@ async function listFolder(hostId: string, runId: string, folder: string): Promis
  * renames the focused entry and Delete deletes it, after asking.
  *
  * Each new `reveal` opens its file in the view, as the command menu's file picks do (PLX-993).
+ * `folder` is the run's folder on the host, which the open file's path starts from.
  */
 export function FilesPanel({
   hostId,
   runId,
+  folder,
   unavailable,
   editable,
+  writable,
+  grep,
   reveal,
 }: {
   hostId: string;
   runId: string;
+  folder?: string;
   unavailable?: string;
   editable?: boolean;
+  writable?: boolean;
+  /** Whether this plxd searches file contents (`repoGrep`). */
+  grep?: boolean;
   reveal?: { path: string };
 }) {
   // Each listed folder by path, the root's as "".
   const connectedNow = useConnectedNow(hostId);
+  const store = openFilesOf(hostId, runId);
+  store.writable = !!writable;
+  const {
+    tabs,
+    active: activeId,
+    home,
+    closing,
+  } = useSyncExternalStore(store.subscribe, store.get);
+  const file = tabs.find((f) => f.id === activeId);
   const [listings, setListings] = useState<Record<string, Listing>>({});
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [openPath, setOpenPath] = useState(reveal?.path);
-  const [revealed, setRevealed] = useState(reveal);
-  if (reveal !== revealed) {
-    setRevealed(reveal);
-    if (reveal) setOpenPath(reveal.path);
-  }
+  const [expanded, setExpandedNow] = useState(store.expanded);
+  const setExpanded = (next: (prev: ReadonlySet<string>) => ReadonlySet<string>) =>
+    setExpandedNow((prev) => (store.expanded = next(prev)));
+  // How wide the view is, which decides whether the tree sits beside the file.
+  const root = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const element = root.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry!.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [!unavailable]);
+  const beside = width >= TREE_BESIDE_WIDTH;
+  const [treeBeside, setTreeBeside] = useState(true);
+  const [treeWidth, setTreeWidth] = useState(
+    () => Number(localStorage.getItem(TREE_WIDTH_KEY)) || TREE_WIDTH,
+  );
+  const treeMax = Math.max(TREE_MIN_WIDTH, width - FILE_MIN_WIDTH);
+  const shownTreeWidth = Math.min(treeWidth, treeMax);
+  const setWidthOfTree = (next: number) => {
+    const clamped = Math.min(Math.max(next, TREE_MIN_WIDTH), treeMax);
+    setTreeWidth(clamped);
+    localStorage.setItem(TREE_WIDTH_KEY, String(clamped));
+  };
+  const dragSash = (e: PointerEvent<HTMLElement>) => {
+    const start = e.clientX - shownTreeWidth;
+    const sash = e.currentTarget;
+    sash.setPointerCapture(e.pointerId);
+    const move = (event: globalThis.PointerEvent) => setWidthOfTree(event.clientX - start);
+    sash.addEventListener("pointermove", move);
+    sash.addEventListener(
+      "lostpointercapture",
+      () => sash.removeEventListener("pointermove", move),
+      {
+        once: true,
+      },
+    );
+  };
+  // A tab whose edits can't land asks before it closes (OpenFiles.askClose).
+  const closeDialog = useRef<HTMLDialogElement>(null);
+  const closingFile = tabs.find((f) => f.id === closing);
+  useEffect(() => {
+    const dialog = closeDialog.current;
+    if (!dialog || !closingFile) return;
+    dialog.showModal();
+    const cancel = () => store.settleClose(false);
+    dialog.addEventListener("close", cancel);
+    return () => dialog.removeEventListener("close", cancel);
+  }, [store, closingFile]);
+
+  /** Opens `path` from the tree or a search, which shows it in place of the tree when narrow. */
+  const openFile = (path: string, options?: Parameters<typeof store.open>[1]) =>
+    store.open(path, options);
+  const treeRef = useRef<HTMLDivElement>(null);
+  /** Opens the folders above `path` and scrolls its row into view. */
+  const revealInTree = (path: string) => {
+    const folders = path
+      .split("/")
+      .slice(0, -1)
+      .map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+    setExpanded((prev) => new Set([...prev, ...folders]));
+    void relist(...folders).then(() =>
+      requestAnimationFrame(() =>
+        treeRef.current
+          ?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+          ?.scrollIntoView?.({ block: "nearest" }),
+      ),
+    );
+  };
+  const showInFiles = (path: string) => {
+    if (beside) setTreeBeside(true);
+    else store.showHome(true);
+    revealInTree(path);
+  };
+
   const [draft, setDraft] = useState<Draft>();
   const [draftError, setDraftError] = useState<string>();
   // The draft on screen, and the one being saved, so Enter and the blur after it save once and a
@@ -104,16 +220,49 @@ export function FilesPanel({
 
   const show = (folder: string) => (listing: Listing) =>
     setListings((prev) => ({ ...prev, [folder]: listing }));
-  useEffect(() => {
-    if (!unavailable && connectedNow) void listFolder(hostId, runId, "").then(show(""));
-  }, [hostId, runId, unavailable, connectedNow]);
   const relist = (...folders: string[]) =>
     Promise.all([...new Set(folders)].map((f) => listFolder(hostId, runId, f).then(show(f))));
+  const shownFolders = useRef<string[]>([]);
+  shownFolders.current = ["", ...expanded];
+  useEffect(() => {
+    if (unavailable || !connectedNow) return;
+    void relist(...shownFolders.current);
+    const timer = setInterval(() => {
+      if (!document.hidden) void relist(...shownFolders.current);
+    }, RELIST_EVERY_MS);
+    return () => clearInterval(timer);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `relist` reads only these
+  }, [hostId, runId, unavailable, connectedNow]);
+
+  // The file on screen is checked for changes on disk, and saves that failed try again.
+  useEffect(() => {
+    if (unavailable || !connectedNow || activeId === undefined) return;
+    const timer = setInterval(() => {
+      if (!document.hidden) void store.check(activeId);
+    }, CHECK_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [store, activeId, unavailable, connectedNow]);
+
+  // A new `reveal` opens its file, kept, with the folders above it open in the tree.
+  useEffect(() => {
+    if (!reveal || store.revealed === reveal) return;
+    store.revealed = reveal;
+    openFile(reveal.path);
+    revealInTree(reveal.path);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- on a new reveal only
+  }, [reveal, store]);
+
+  // The tree follows the tab on screen when it sits beside it, as VS Code's Explorer does.
+  const activePath = file?.path;
+  useEffect(() => {
+    if (activePath && beside && treeBeside) revealInTree(activePath);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- on another file only
+  }, [activePath, beside, treeBeside]);
 
   const toggle = (folder: string) => {
-    const next = new Set(expanded);
-    if (next.delete(folder)) return setExpanded(next);
-    setExpanded(next.add(folder));
+    if (expanded.has(folder))
+      return setExpanded((prev) => new Set([...prev].filter((f) => f !== folder)));
+    setExpanded((prev) => new Set(prev).add(folder));
     void listFolder(hostId, runId, folder).then(show(folder));
   };
 
@@ -136,6 +285,8 @@ export function FilesPanel({
     if (!name || (from !== undefined && name === nameOf(from))) return cancelDraft();
     const path = join(folder, name);
     saving.current = d;
+    // An open file's edits land under its old name.
+    if (from !== undefined) await store.flush(from);
     const answer =
       from === undefined
         ? await window.parallax.request(hostId, "agent/fileCreate", {
@@ -151,6 +302,7 @@ export function FilesPanel({
     }
     if (active.current === d) cancelDraft();
     if (from !== undefined) {
+      store.moved(from, path);
       setExpanded((prev) => new Set([...prev].map((p) => moved(p, from, path))));
       setListings((prev) =>
         Object.fromEntries(Object.entries(prev).map(([k, v]) => [moved(k, from, path), v])),
@@ -172,6 +324,7 @@ export function FilesPanel({
     setDeleting(false);
     if ("error" in answer) return setDeleteError(reason(answer.error));
     deleteDialog.current?.close();
+    store.removed(path);
     setExpanded((prev) => new Set([...prev].filter((p) => !inside(p, path))));
     await relist(parentOf(path));
   };
@@ -186,34 +339,18 @@ export function FilesPanel({
   };
 
   if (unavailable) return <Empty title="Files aren't available" hint={unavailable} />;
-  if (openPath)
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <button
-          type="button"
-          onClick={() => setOpenPath(undefined)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          <ChevronLeft aria-hidden className="size-4 shrink-0" />
-          <span className="truncate">{openPath}</span>
-        </button>
-        <FileView key={openPath} hostId={hostId} runId={runId} path={openPath} />
-      </div>
-    );
-
-  const root = listings[""];
-  const empty = root && "entries" in root && root.entries.length === 0 && !draft;
-  if (empty && !editable) return <Empty title="No files" hint="This thread's folder is empty." />;
+  const top = listings[""];
+  const empty = top && "entries" in top && top.entries.length === 0 && !draft;
 
   /** The field a name is typed in, in place of a row, with why the last save failed under it. */
   const nameField = (d: Draft, depth: number, isFolder: boolean, initial = "") => {
-    const indent = { paddingLeft: `${10 + depth * 14}px` };
+    const indent = { paddingLeft: `${4 + depth * INDENT}px` };
     const Icon = isFolder ? Folder : File;
     return (
       <div>
         <div style={indent} className="flex items-center gap-1.5 py-0.5 pr-2">
           <ChevronRight aria-hidden className="invisible size-3.5 shrink-0" />
-          <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           <input
             aria-label={"path" in d ? `Rename ${initial}` : isFolder ? "Folder name" : "File name"}
             aria-invalid={draftError ? true : undefined}
@@ -250,7 +387,7 @@ export function FilesPanel({
   const tree = (folder: string, depth: number) => {
     const listing = listings[folder];
     if (!listing) return null;
-    const indent = { paddingLeft: `${10 + depth * 14}px` };
+    const indent = { paddingLeft: `${4 + depth * INDENT}px` };
     if ("error" in listing)
       return (
         <p role="alert" style={indent} className="py-1 pr-2 text-body text-danger">
@@ -258,7 +395,16 @@ export function FilesPanel({
         </p>
       );
     return (
-      <ul role="group">
+      // A guide runs down each open folder's entries, under its chevron.
+      <ul
+        role="group"
+        style={{ "--guide": `${depth * INDENT - 6}px` } as CSSProperties}
+        className={
+          depth
+            ? "relative before:absolute before:inset-y-0 before:left-[var(--guide)] before:w-px before:bg-border/50"
+            : ""
+        }
+      >
         {draft && "folder" in draft && draft.folder === folder && (
           <li>{nameField(draft, depth, draft.isFolder)}</li>
         )}
@@ -266,16 +412,15 @@ export function FilesPanel({
           const path = join(folder, entry.name);
           const isFolder = entry.kind === "dir";
           const open = expanded.has(path);
-          const Icon = isFolder
-            ? open
-              ? FolderOpen
-              : Folder
-            : entry.kind === "symlink"
-              ? FileSymlink
-              : File;
+          const link = entry.kind === "symlink";
           const renaming = draft && "path" in draft && draft.path === path;
           return (
-            <li key={entry.name} role="treeitem" aria-expanded={isFolder ? open : undefined}>
+            <li
+              key={entry.name}
+              role="treeitem"
+              aria-expanded={isFolder ? open : undefined}
+              data-path={path}
+            >
               {renaming ? (
                 nameField(draft, depth, isFolder, entry.name)
               ) : (
@@ -285,8 +430,22 @@ export function FilesPanel({
                   <button
                     type="button"
                     style={indent}
-                    onClick={() => (isFolder ? toggle(path) : setOpenPath(path))}
-                    onKeyDown={(e) => onRowKey(e, { path, isFolder })}
+                    data-row
+                    onClick={() =>
+                      isFolder ? toggle(path) : openFile(path, { link, transient: true })
+                    }
+                    onDoubleClick={() => {
+                      if (!isFolder) openFile(path, { link });
+                    }}
+                    onKeyDown={(e) => {
+                      onRowKey(e, { path, isFolder });
+                      // Right opens a folder, then Left closes it or goes up, as in any tree.
+                      if (e.key === "ArrowRight" && isFolder && !open) toggle(path);
+                      if (e.key === "ArrowLeft" && isFolder && open) {
+                        e.stopPropagation();
+                        toggle(path);
+                      }
+                    }}
                     onContextMenu={
                       editable
                         ? (e) =>
@@ -296,13 +455,22 @@ export function FilesPanel({
                             )
                         : undefined
                     }
-                    className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-body hover:bg-hover ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
+                    aria-current={file?.path === path ? "true" : undefined}
+                    className={`flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-body text-foreground/90 transition-colors hover:bg-hover aria-[current]:bg-selected aria-[current]:text-foreground ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
                   >
-                    <ChevronRight
-                      aria-hidden
-                      className={`size-3.5 shrink-0 text-faint-foreground ${isFolder ? "" : "invisible"} ${open ? "rotate-90" : ""}`}
-                    />
-                    <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    {/* As Pierre's and T3 Code's trees: a folder is its chevron and name, and a file its icon. */}
+                    {isFolder ? (
+                      <ChevronRight
+                        aria-hidden
+                        className={`size-4 shrink-0 text-faint-foreground transition-transform duration-fast ${open ? "rotate-90" : ""}`}
+                      />
+                    ) : link ? (
+                      <FileSymlink aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    ) : entry.kind === "file" ? (
+                      <FileIcon path={path} />
+                    ) : (
+                      <File aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    )}
                     <span className="min-w-0 truncate">{entry.name}</span>
                   </button>
                   {editable && (
@@ -343,25 +511,142 @@ export function FilesPanel({
     menu.current?.hidePopover();
     action();
   };
+  // Narrow, the Files tab shows the tree and a file's tab the file. Wide, the tree sits beside.
+  const fileOnScreen = !!file && !home;
+  const treeOnScreen = beside ? treeBeside || !fileOnScreen : !fileOnScreen;
+  /** Down and Up move through the tree's visible rows, and Left from a closed row goes to its folder. */
+  const onTreeKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-row]")];
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown") rows[at + 1]?.focus();
+    else if (e.key === "ArrowUp") rows[Math.max(at - 1, 0)]?.focus();
+    else if (e.key === "ArrowLeft") {
+      const parent = (document.activeElement as HTMLElement | null)
+        ?.closest('[role="group"]')
+        ?.closest('[role="treeitem"]')
+        ?.querySelector<HTMLElement>("button[data-row]");
+      parent?.focus();
+    } else return;
+    e.preventDefault();
+  };
+  const explorer = (
+    <section
+      aria-label="Explorer"
+      style={beside ? { width: shownTreeWidth } : undefined}
+      className={`flex min-h-0 flex-col ${beside ? "relative shrink-0 border-r border-border/60" : "min-w-0 flex-1"}`}
+    >
+      <FileSearch
+        hostId={hostId}
+        runId={runId}
+        enabled={connectedNow}
+        grep={!!grep}
+        onOpen={(path, line) => openFile(path, { transient: true, ...(line && { line }) })}
+        actions={
+          <>
+            {editable && (
+              <>
+                <IconButton
+                  size="sm"
+                  label="New file"
+                  onClick={() => startDraft({ folder: "", isFolder: false })}
+                >
+                  <FilePlus aria-hidden />
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  label="New folder"
+                  onClick={() => startDraft({ folder: "", isFolder: true })}
+                >
+                  <FolderPlus aria-hidden />
+                </IconButton>
+              </>
+            )}
+            <IconButton
+              size="sm"
+              label="Collapse folders"
+              disabled={expanded.size === 0}
+              onClick={() => setExpanded(() => new Set())}
+            >
+              <ListCollapse aria-hidden />
+            </IconButton>
+          </>
+        }
+      >
+        {empty ? (
+          <Empty title="No files" hint="This thread's folder is empty." />
+        ) : (
+          <div
+            ref={treeRef}
+            role="tree"
+            aria-label="Files"
+            onKeyDown={onTreeKey}
+            className="min-h-0 flex-1 overflow-y-auto px-2 pt-1.5 pb-3"
+          >
+            {tree("", 0)}
+          </div>
+        )}
+      </FileSearch>
+      {beside && (
+        <div
+          role="separator"
+          aria-label="Resize files"
+          aria-orientation="vertical"
+          aria-valuenow={shownTreeWidth}
+          aria-valuemin={TREE_MIN_WIDTH}
+          aria-valuemax={treeMax}
+          tabIndex={0}
+          onPointerDown={dragSash}
+          onDoubleClick={() => setWidthOfTree(TREE_WIDTH)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") setWidthOfTree(shownTreeWidth - 16);
+            else if (e.key === "ArrowRight") setWidthOfTree(shownTreeWidth + 16);
+          }}
+          className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize transition-colors hover:bg-border focus-visible:bg-border focus-visible:outline-none active:bg-border"
+        />
+      )}
+    </section>
+  );
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {editable && (
-        <div className="flex shrink-0 justify-end gap-0.5 px-2 pb-1">
-          <IconButton label="New file" onClick={() => startDraft({ folder: "", isFolder: false })}>
-            <FilePlus />
-          </IconButton>
-          <IconButton label="New folder" onClick={() => startDraft({ folder: "", isFolder: true })}>
-            <FolderPlus />
-          </IconButton>
-        </div>
-      )}
-      {empty ? (
-        <Empty title="No files" hint="This thread's folder is empty." />
+    <div ref={root} className="relative flex min-h-0 flex-1 overflow-hidden">
+      {treeOnScreen && explorer}
+      {fileOnScreen ? (
+        <FileEditor
+          store={store}
+          file={file}
+          folder={folder}
+          wide={beside}
+          treeOpen={treeOnScreen}
+          onToggleTree={() => setTreeBeside(!treeBeside)}
+          onReveal={showInFiles}
+          onClose={(tab) => void store.askClose(tab.id)}
+          hostId={hostId}
+          runId={runId}
+        />
       ) : (
-        <div role="tree" aria-label="Files" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {tree("", 0)}
-        </div>
+        beside && (
+          <NoFile
+            treeButton={
+              !treeBeside && (
+                <IconButton size="sm" label="Show files" onClick={() => setTreeBeside(true)}>
+                  <PanelLeft aria-hidden />
+                </IconButton>
+              )
+            }
+          />
+        )
       )}
+      <ConfirmDialog
+        ref={closeDialog}
+        title={<>Close “{closingFile && nameOf(closingFile.path)}” without saving?</>}
+        titleClass="break-all"
+        action="Close without saving"
+        onConfirm={() => {
+          store.settleClose(true);
+          closeDialog.current?.close();
+        }}
+      >
+        Your edits to this file aren't on disk, and closing drops them.
+      </ConfirmDialog>
       {editable && (
         <>
           <Menu
@@ -432,6 +717,183 @@ export function FilesPanel({
   );
 }
 
+/**
+ * A search over the thread's folder above `children`, the tree, which its results stand in for while
+ * there's a query: files by name from `repo/files`, then lines from `repo/grep`, as VS Code's Quick
+ * Open and Search are, in one box. Enter opens the first result.
+ */
+function FileSearch({
+  hostId,
+  runId,
+  onOpen,
+  enabled,
+  grep,
+  actions,
+  children,
+}: {
+  hostId: string;
+  runId: string;
+  onOpen: (path: string, line?: number) => void;
+  enabled: boolean;
+  grep: boolean;
+  /** Buttons beside the box, such as New file. */
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [query, setQuery] = useState("");
+  const [paths, setPaths] = useState<string[] | { error: string }>();
+  const [lines, setLines] = useState<{ query: string; matches: GrepMatch[]; error?: string }>();
+  const load = async () => {
+    const answer = await window.parallax.request(hostId, "repo/files", { runId });
+    setPaths("error" in answer ? { error: describeError(answer.error) } : answer.result.files);
+  };
+  const trimmed = query.trim();
+  useEffect(() => {
+    if (!grep || trimmed.length < 2) return setLines(undefined);
+    let stopped = false;
+    const timer = setTimeout(() => {
+      void window.parallax
+        .request(hostId, "repo/grep", { runId, query: trimmed })
+        .then((answer) => {
+          if (stopped) return;
+          setLines(
+            "error" in answer
+              ? { query: trimmed, matches: [], error: describeError(answer.error) }
+              : { query: trimmed, matches: answer.result.matches },
+          );
+        });
+    }, GREP_AFTER_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [hostId, runId, grep, trimmed]);
+  const words = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
+  const found =
+    Array.isArray(paths) && words.length
+      ? rank(paths, words, (path) => [
+          [nameOf(path), 1],
+          [path, 0.7],
+        ]).slice(0, 50)
+      : [];
+  const clear = () => setQuery("");
+  const open = (path: string, line?: number) => {
+    onOpen(path, line);
+    clear();
+  };
+  // Only the query in the box: an older one's lines aren't what Enter should open.
+  const current = lines?.query === trimmed ? lines : undefined;
+  const matches = current?.matches ?? [];
+  const byFile = Map.groupBy(matches, (m) => m.path);
+  const heading = "px-2 pt-2 pb-1 text-meta font-medium text-faint-foreground";
+  const row =
+    "flex h-6.5 w-full items-center gap-1.5 rounded-md px-2 text-left text-body hover:bg-hover";
+  return (
+    <>
+      {/* As tall as the file's path row beside it, so their lines meet. */}
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/60 px-1.5">
+        <label className={`${searchField} h-7! min-w-0 flex-1`}>
+          <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+          <input
+            type="search"
+            aria-label="Search files"
+            placeholder="Search files"
+            value={query}
+            disabled={!enabled}
+            onFocus={() => void load()}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") clear();
+              if (e.key !== "Enter") return;
+              const first = found[0]?.item ?? matches[0]?.path;
+              if (first) open(first, found[0] ? undefined : matches[0]?.line);
+            }}
+            className="min-w-0 flex-1 bg-transparent text-meta outline-none placeholder:text-faint-foreground [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={clear}
+              className="text-faint-foreground hover:text-foreground"
+            >
+              <X aria-hidden className="size-3.5" />
+            </button>
+          )}
+        </label>
+        {actions}
+      </div>
+      {words.length === 0 ? (
+        children
+      ) : (
+        <div
+          role="group"
+          aria-label="Search results"
+          className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
+        >
+          {paths && "error" in paths && (
+            <p role="alert" className="px-2 py-1 text-body text-danger">
+              {paths.error}
+            </p>
+          )}
+          {current?.error && (
+            <p role="alert" className="px-2 py-1 text-body text-danger">
+              {current.error}
+            </p>
+          )}
+          {found.length > 0 && <h3 className={heading}>Files</h3>}
+          {found.map(({ item: path }) => (
+            <button
+              key={path}
+              type="button"
+              title={path}
+              onClick={() => open(path)}
+              className={row}
+            >
+              <FileIcon path={path} />
+              <span className="shrink-0">{nameOf(path)}</span>
+              <span className="min-w-0 truncate text-meta text-faint-foreground">
+                {parentOf(path)}
+              </span>
+            </button>
+          ))}
+          {byFile.size > 0 && <h3 className={heading}>In files</h3>}
+          {[...byFile].map(([path, inFile]) => (
+            <div key={path}>
+              <div title={path} className="flex h-6.5 items-center gap-1.5 px-2 text-body">
+                <FileIcon path={path} />
+                <span className="shrink-0">{nameOf(path)}</span>
+                <span className="min-w-0 flex-1 truncate text-meta text-faint-foreground">
+                  {parentOf(path)}
+                </span>
+                <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
+                  {inFile.length}
+                </span>
+              </div>
+              {inFile.map((match) => (
+                <button
+                  key={match.line}
+                  type="button"
+                  onClick={() => open(path, match.line)}
+                  className="flex h-6 w-full items-center gap-2 rounded-md pr-2 pl-7 text-left text-meta hover:bg-hover"
+                >
+                  <span className="shrink-0 text-faint-foreground tabular-nums">{match.line}</span>
+                  <span className="min-w-0 truncate font-mono text-muted-foreground">
+                    <Marked text={match.text.trim()} words={[trimmed.toLowerCase()]} />
+                  </span>
+                </button>
+              ))}
+            </div>
+          ))}
+          {Array.isArray(paths) && found.length === 0 && byFile.size === 0 && (
+            <p className="px-2 py-2 text-body text-muted-foreground">No results.</p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function Empty({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
@@ -442,99 +904,28 @@ function Empty({ title, hint }: { title: string; hint: string }) {
   );
 }
 
-/** A file's text, or a note when it's binary. */
-function fileText(bytes: Uint8Array): { text: string } | { note: string } {
-  if (bytes.includes(0)) return { note: "This is a binary file." };
-  try {
-    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
-  } catch {
-    return { note: "This is a binary file." };
-  }
-}
-
-/**
- * What the view shows of a file: its text, or a note on why not, with its bytes for Download, or
- * `large` for one only Download reads, or why it couldn't be read.
- */
-type Shown =
-  | { text: string }
-  | { note: string; bytes?: Uint8Array; large?: boolean }
-  | { error: string };
-
-/**
- * File `path` as the view shows it. Its size comes first, so a file over `progressFrom` is read
- * only when it's downloaded, which takes a plxd that reads slices (PLX-835).
- */
-async function readShown(hostId: string, runId: string, path: string): Promise<Shown> {
-  const stat = await window.parallax.request(hostId, "agent/file", {
-    runId,
-    path,
-    side: "working",
-    sizeOnly: true,
-  });
-  if ("error" in stat) return { error: await failure(hostId, stat.error) };
-  if (!stat.result.exists) return { note: "This file isn't there anymore." };
-  if ((stat.result.size ?? 0) > progressFrom)
-    return { note: "This file is too large to show.", large: !!(await chunksOf(hostId)) };
-  try {
-    const bytes = await readWorking(hostId, runId, path);
-    const shown = fileText(bytes);
-    return "text" in shown ? shown : { ...shown, bytes };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/**
- * One file as it is on disk now, as plain monospace text. A binary file offers Download instead
- * (PLX-834), and so does one too large to show, read in slices with its progress (PLX-835).
- */
-function FileView({ hostId, runId, path }: { hostId: string; runId: string; path: string }) {
-  const [read, setRead] = useState<Shown>();
-  // The share of a large file read so far, while Download reads it.
-  const [share, setShare] = useState<number>();
-  useEffect(() => {
-    let stopped = false;
-    void readShown(hostId, runId, path).then((next) => !stopped && setRead(next));
-    return () => {
-      stopped = true;
-    };
-  }, [hostId, runId, path]);
-
-  if (!read) return null;
-  if ("text" in read)
-    return (
-      <pre
-        aria-label={path}
-        className="code-lines min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-meta leading-[1.6] text-foreground"
-      >
-        {read.text}
-      </pre>
-    );
-  const bytes = "bytes" in read ? read.bytes : undefined;
-  const save = bytes
-    ? async () => bytes
-    : "large" in read && read.large
-      ? () => readWorking(hostId, runId, path, setShare).finally(() => setShare(undefined))
-      : undefined;
+/** The full view with no file open: what you can do from here, with its keys, as VS Code shows. */
+function NoFile({ treeButton }: { treeButton: React.ReactNode }) {
+  const goToFile = useShortcutLabel("goToFile");
+  const contents = useShortcutLabel("searchContents");
+  const menu = useShortcutLabel("commandMenu");
   return (
-    <div className="px-4 pt-2">
-      <p
-        role={"error" in read ? "alert" : undefined}
-        className={`text-body ${"error" in read ? "text-danger" : "text-muted-foreground"}`}
-      >
-        {"error" in read ? read.error : read.note}
-      </p>
-      {save && (
-        <div className="-ml-2 flex items-center gap-2 pt-1">
-          <DownloadButton name={nameOf(path)} read={save} />
-          {share !== undefined && (
-            <span className="text-body text-muted-foreground tabular-nums">
-              {Math.round(share * 100)}%
-            </span>
-          )}
-        </div>
-      )}
+    <div className="relative flex min-w-0 flex-1 flex-col items-center justify-center pb-16">
+      {treeButton && <div className="absolute top-1.5 left-2">{treeButton}</div>}
+      <dl className="grid grid-cols-[auto_auto] gap-x-6 gap-y-2.5 text-body">
+        {(
+          [
+            ["Go to file", goToFile],
+            ["Search contents", contents],
+            ["Command menu", menu],
+          ] as const
+        ).map(([name, keys]) => (
+          <div key={name} className="contents">
+            <dt className="text-right text-muted-foreground">{name}</dt>
+            <dd className="text-faint-foreground">{keys}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

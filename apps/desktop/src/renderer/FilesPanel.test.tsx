@@ -5,7 +5,16 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentEntry } from "../protocol/generated/protocol";
+import { Folder } from "lucide-react";
+
+import { FileTabs } from "./FileEditor";
 import { FilesPanel } from "./FilesPanel";
+import { openFilesOf, resetOpenFiles } from "./openFiles";
+
+// CodeMirror needs layout that happy-dom doesn't have. Its saving is `openFiles`', tested there.
+vi.mock("./CodeEditor", () => ({
+  default: ({ file }: { file: { path: string } }) => <div data-testid="editor">{file.path}</div>,
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The entry menu is in the DOM either way.
@@ -29,10 +38,23 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
           truncated: false,
         },
       }
-    : { logId: "log-1", result: {} },
+    : method === "agent/file"
+      ? {
+          logId: "log-1",
+          result: {
+            path: params["path"],
+            exists: true,
+            size: 6,
+            tooLarge: false,
+            content: btoa("hello\n"),
+            sha256: "sha",
+          },
+        }
+      : { logId: "log-1", result: {} },
 );
 
 beforeEach(() => {
+  resetOpenFiles();
   request.mockClear();
   window.parallax = {
     platform: "darwin",
@@ -112,11 +134,147 @@ test("Enter then leaving the field saves once, and a blank name closes it withou
   await act(async () => answer());
   await settle();
   expect(request.mock.calls.filter(([, m]) => m === "agent/fileCreate")).toHaveLength(1);
-  expect(document.querySelector("input")).toBeNull();
+  expect(document.querySelector('input[aria-label="File name"]')).toBeNull();
 
   await click(button("New folder"));
   request.mockClear();
   await type("  ", "Enter");
-  expect(document.querySelector("input")).toBeNull();
+  expect(document.querySelector('input[aria-label="Folder name"]')).toBeNull();
   expect(request).not.toHaveBeenCalled();
+});
+
+const row = (name: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="treeitem"] button')].find(
+    (b) => b.textContent === name,
+  );
+/** The view with its tabs as the side panel draws them, in front. */
+const withTabs = (panel: ReactNode) => (
+  <>
+    <ul aria-label="Open views">
+      <FileTabs
+        store={openFilesOf("local", "run-1")}
+        id="side-panel-tab-F"
+        current
+        show={() => {}}
+        close={() => {}}
+        icon={Folder}
+      />
+    </ul>
+    {panel}
+  </>
+);
+const tabButtons = () =>
+  [...document.querySelectorAll<HTMLElement>('ul[aria-label="Open views"] button[title]')].filter(
+    (b) => !b.title.startsWith("Close"),
+  );
+const openTabs = () => tabButtons().map((t) => t.textContent);
+const shownTab = () =>
+  tabButtons().find((b) => b.getAttribute("aria-current") === "true")?.textContent;
+const filesTab = () => document.getElementById("side-panel-tab-F");
+
+test("a click opens a preview tab that the next click replaces, and a double-click keeps it", async () => {
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" writable />));
+  await click(row("README.md"));
+  await vi.dynamicImportSettled();
+  await settle();
+  expect(openTabs()).toEqual(["README.md"]);
+  expect(document.querySelector('[data-testid="editor"]')?.textContent).toBe("README.md");
+
+  // Narrow, the Files tab shows the tree, and a file's tab the file.
+  expect(row("src")).toBeUndefined();
+  await click(filesTab());
+  await click(row("src"));
+  await click(row("main.rs"));
+  expect(openTabs()).toEqual(["main.rs"]);
+
+  await click(filesTab());
+  const readme = row("README.md")!;
+  await act(async () => readme.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  await settle();
+  expect(openTabs()).toEqual(["main.rs", "README.md"]);
+  expect(shownTab()).toBe("README.md");
+
+  await click(button("Close README.md"));
+  await settle();
+  expect(openTabs()).toEqual(["main.rs"]);
+  expect(shownTab()).toBe("main.rs");
+});
+
+test("a file renamed in the tree stays open under its new name", async () => {
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" editable writable />));
+  await click(row("README.md"));
+  await click(filesTab());
+  await click(button("Actions for README.md"));
+  await click(menuItem("Rename"));
+  await type("INTRO.md", "Enter");
+  expect(request).toHaveBeenCalledWith("local", "agent/fileRename", {
+    runId: "run-1",
+    from: "README.md",
+    to: "INTRO.md",
+  });
+  expect(openTabs()).toEqual(["INTRO.md"]);
+});
+
+test("a command menu reveal opens its file once, and coming back doesn't open it again", async () => {
+  const reveal = { path: "src/main.rs" };
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" reveal={reveal} />));
+  expect(openTabs()).toEqual(["main.rs"]);
+  expect(request).toHaveBeenCalledWith("local", "agent/files", { runId: "run-1", path: "src" });
+  await click(button("Close main.rs"));
+  unmount();
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" reveal={reveal} />));
+  expect(openTabs()).toEqual([]);
+});
+
+test("a search finds files anywhere in the folder and opens one", async () => {
+  request.mockImplementationOnce(async () => ({
+    logId: "log-1",
+    result: { entries: folders[""], truncated: false },
+  }));
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" />));
+  request.mockImplementationOnce(
+    async () =>
+      ({
+        logId: "log-1",
+        result: { files: ["README.md", "src/main.rs"], truncated: false },
+      }) as never,
+  );
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Search files"]')!;
+  await act(async () => input.focus());
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "main");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+  const found = [...document.querySelectorAll('[aria-label="Search results"] button')];
+  expect(found.map((b) => b.getAttribute("title"))).toEqual(["src/main.rs"]);
+  await click(found[0]);
+  expect(openTabs()).toEqual(["main.rs"]);
+});
+
+test("closing a tab whose edits can't land brings the Files view to the front to ask", async () => {
+  const store = openFilesOf("local", "run-1");
+  store.writable = true;
+  const id = store.open("README.md");
+  const show = vi.fn();
+  await render(
+    <ul aria-label="Open views">
+      <FileTabs
+        store={store}
+        id="side-panel-tab-F"
+        current={false}
+        show={show}
+        close={() => {}}
+        icon={Folder}
+      />
+    </ul>,
+  );
+  request.mockImplementationOnce(
+    async () => ({ logId: "log-1", error: { code: -32603, message: "disk full" } }) as never,
+  );
+  store.edited(id, () => "mine\n");
+  await act(() => store.askClose(id));
+  await settle();
+  expect(store.get().closing).toBe(id);
+  expect(show).toHaveBeenCalled();
 });

@@ -51,7 +51,9 @@ import {
   useForgetRemoved,
   useShownConnection,
 } from "./ConnectionStatus";
+import { FileTabs } from "./FileEditor";
 import { FilesPanel } from "./FilesPanel";
+import { openFilesOf } from "./openFiles";
 import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { NewThread } from "./NewThread";
@@ -2234,6 +2236,11 @@ export function App() {
           showDevice={showDevice}
           showOrchestrator={showHome}
           showFiles={showFiles}
+          filesTabs={
+            filesRunId
+              ? (tab) => <FileTabs store={openFilesOf(host.id, filesRunId)} {...tab} />
+              : undefined
+          }
           device={(shown) => (
             <DevicePanel
               hostId={host.id}
@@ -2343,6 +2350,9 @@ export function App() {
                 key={`${host.id}/${filesRunId}`}
                 hostId={host.id}
                 runId={filesRunId}
+                folder={
+                  selection.kind === "thread" && folder?.path !== "~" ? folder?.path : undefined
+                }
                 unavailable={
                   offline ??
                   (connected && "files" in connection.capabilities
@@ -2350,6 +2360,8 @@ export function App() {
                     : "Update Parallax on this host to browse a thread's files.")
                 }
                 editable={connected && "fileEdit" in connection.capabilities}
+                writable={connected && "fileWrite" in connection.capabilities}
+                grep={connected && "repoGrep" in connection.capabilities}
                 reveal={revealFile?.runId === filesRunId ? revealFile : undefined}
               />
             )

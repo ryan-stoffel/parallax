@@ -72,7 +72,7 @@ async function panel() {
 
 const strip = () =>
   [...document.querySelectorAll<HTMLElement>('ul[aria-label="Open views"] li')].map(
-    (li) => li.querySelector("span")?.textContent,
+    (li) => li.querySelector("[id^=side-panel-tab-] span")?.textContent,
   );
 const click = (name: string) =>
   act(() =>

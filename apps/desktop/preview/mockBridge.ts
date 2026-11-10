@@ -24,6 +24,7 @@ import {
   type WatchParams,
 } from "../src/preload/bridge";
 import {
+  type AgentEntry,
   PROTOCOL_VERSION,
   type AgentBackgroundTask,
   type AgentOutputItem,
@@ -75,6 +76,90 @@ const devices: DeviceStateResult = {
 };
 
 /** What plxd's `capabilities_advertised` lists (daemon/src/methods/host.rs), with the same caps. */
+/** The thread's folder in the preview, which saves change for as long as the page stays open. */
+const mockFiles = new Map<string, string>([
+  [
+    "AGENTS.md",
+    "# Parallax\n\n`plxd` and an Electron app.\n\n## Branches\n\n- **develop:** the default branch.\n- `feature/<ID>-<slug>`: new functionality.\n\n> Read `docs/PLAN.md` before planning any work.\n",
+  ],
+  [
+    "Cargo.toml",
+    '[workspace]\nmembers = ["crates/*", "daemon"]\nresolver = "2"\n\n[workspace.package]\nversion = "0.1.0"\nedition = "2024"\n',
+  ],
+  ["README.md", "# Parallax\n\nA host daemon and a desktop app for running agents.\n"],
+  [
+    "apps/desktop/electron-builder.yml",
+    "appId: codes.parallax.app\npublish:\n  provider: github\n  releaseType: ${env.RELEASE_TYPE}\n  channel: ${env.CHANNEL}\n",
+  ],
+  [
+    "apps/desktop/src/main/updater.ts",
+    `import { app } from "electron";
+import { autoUpdater } from "electron-updater";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/** Where electron-builder wrote the build's update metadata. */
+export function feedPath(): string {
+  return join(app.getPath("userData"), "app-update.yml");
+}
+
+/** The channel a build follows, from its own metadata. */
+export const channelOf = (feed: string) =>
+  /channel:\\s*(\\w+)/.exec(readFileSync(feed, "utf8"))?.[1] ?? "latest";
+
+// A nightly build follows nightlies, and a stable build follows Latest (0028).
+export function startUpdater() {
+  const channel = channelOf(feedPath());
+  autoUpdater.channel = channel;
+  autoUpdater.allowPrerelease = channel === "nightly";
+  autoUpdater.autoDownload = true;
+  void autoUpdater.checkForUpdates();
+}
+`,
+  ],
+  [
+    "apps/desktop/src/main/updater.test.ts",
+    `import { expect, test } from "vitest";
+
+import { channelOf } from "./updater";
+
+test("a nightly build follows nightlies", () => {
+  expect(channelOf("fixtures/nightly.yml")).toBe("nightly");
+});
+`,
+  ],
+  [
+    "daemon/src/main.rs",
+    `use std::process::ExitCode;
+
+/// Runs \`plxd\`, the host daemon.
+#[tokio::main]
+async fn main() -> ExitCode {
+    match plxd::run(std::env::args().skip(1).collect()).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("plxd: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+`,
+  ],
+  [
+    "docs/decisions/0028-release-channels.md",
+    "# Release channels\n\nA build's channel is in its own metadata, not a setting.\n",
+  ],
+]);
+// So a preview session can change a file "on disk", as an agent would.
+Object.assign(window, { previewFiles: mockFiles });
+/** Not SHA-256, which is only for telling content apart here. */
+const mockHash = (text: string) => {
+  let hash = 7;
+  for (let at = 0; at < text.length; at++) hash = (Math.imul(hash, 31) + text.charCodeAt(at)) | 0;
+  return hash.toString(16);
+};
+const encodeUtf8 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
 const capabilities: Capabilities = Object.fromEntries(
   [
     "accountHomes",
@@ -100,6 +185,8 @@ const capabilities: Capabilities = Object.fromEntries(
     "orchestrator",
     "orchestratorEpochs",
     "eventFilters",
+    "fileEdit",
+    "fileWrite",
     "files",
     "git",
     "repoGitStatus",
@@ -1155,12 +1242,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
       { name: "origin/main", remote: true },
     ],
   }),
-  "repo/files": () => ({ files: db.repoFiles, truncated: false }),
-  // The fixtures hold no file contents, so every file's path is its one line.
+  "repo/files": () => ({ files: [...mockFiles.keys()], truncated: false }),
   "repo/grep": (p) => ({
-    matches: db.repoFiles
-      .filter((path) => path.toLowerCase().includes(p.query.toLowerCase()))
-      .map((path) => ({ path, line: 1, text: path })),
+    matches: [...mockFiles].flatMap(([path, text]) =>
+      text
+        .split("\n")
+        .flatMap((line, i) =>
+          line.toLowerCase().includes(p.query.toLowerCase())
+            ? [{ path, line: i + 1, text: line }]
+            : [],
+        ),
+    ),
     truncated: false,
   }),
 
@@ -1330,32 +1422,60 @@ const handlers: { [M in Method]?: Handler<M> } = {
     origin: true,
   }),
   "agent/files": (p) => {
-    if (p.path)
-      return { entries: [{ name: "index.ts", kind: "file", size: 2_310 }], truncated: false };
+    const under = p.path ? `${p.path}/` : "";
+    const seen = new Map<string, AgentEntry>();
+    for (const [path, text] of mockFiles) {
+      if (!path.startsWith(under)) continue;
+      const [name, ...rest] = path.slice(under.length).split("/");
+      if (rest.length) seen.set(name!, { name: name!, kind: "dir" });
+      else seen.set(name!, { name: name!, kind: "file", size: text.length });
+    }
+    return { entries: [...seen.values()], truncated: false, folder: "/Users/ryan/parallax" };
+  },
+  "agent/file": (p) => {
+    const text = mockFiles.get(p.path);
+    if (text === undefined && p.path.includes("/")) {
+      if (![...mockFiles.keys()].some((k) => k.startsWith(`${p.path}/`)))
+        return { path: p.path, side: p.side, exists: false, tooLarge: false };
+    }
+    const content =
+      text ?? `# ${p.path}\n\nPreview content: plxd isn't running, so this isn't read from disk.\n`;
     return {
-      entries: [
-        { name: "apps", kind: "dir" },
-        { name: "crates", kind: "dir" },
-        { name: "daemon", kind: "dir" },
-        { name: "docs", kind: "dir" },
-        { name: "AGENTS.md", kind: "file", size: 6_412 },
-        { name: "Cargo.toml", kind: "file", size: 812 },
-        { name: "README.md", kind: "file", size: 2_904 },
-      ],
-      truncated: false,
+      path: p.path,
+      side: p.side,
+      exists: true,
+      size: content.length,
+      // Base64, as plxd sends it.
+      ...(!p.sizeOnly && { content: encodeUtf8(content) }),
+      ...(p.hash && { sha256: mockHash(content) }),
+      tooLarge: false,
     };
   },
-  "agent/file": (p) => ({
-    path: p.path,
-    side: p.side,
-    exists: true,
-    size: 120,
-    // Base64, as plxd sends it.
-    content: btoa(
-      `# ${p.path}\n\nPreview content: plxd isn't running, so this file isn't read from disk.\n`,
-    ),
-    tooLarge: false,
-  }),
+  "agent/fileCreate": (p) => {
+    mockFiles.set(p.folder ? `${p.path}/.keep` : p.path, "");
+    return {};
+  },
+  "agent/fileRename": (p) => {
+    for (const [path, text] of Array.from(mockFiles))
+      if (path === p.from || path.startsWith(`${p.from}/`)) {
+        mockFiles.delete(path);
+        mockFiles.set(p.to + path.slice(p.from.length), text);
+      }
+    return {};
+  },
+  "agent/fileDelete": (p) => {
+    for (const path of mockFiles.keys())
+      if (path === p.path || path.startsWith(`${p.path}/`)) mockFiles.delete(path);
+    return {};
+  },
+  "agent/fileWrite": (p) => {
+    const before = mockFiles.get(p.path);
+    const now = before === undefined ? undefined : mockHash(before);
+    if (now !== p.expectedSha256) return { conflict: true, ...(now && { sha256: now }) };
+    const text = new TextDecoder().decode(Uint8Array.from(atob(p.content), (c) => c.charCodeAt(0)));
+    mockFiles.set(p.path, text);
+    return { conflict: false, sha256: mockHash(text) };
+  },
 
   "accounts/list": () => ({ clis: db.clis, checkedAt: now() }),
   "accounts/refresh": () => ({ clis: db.clis, checkedAt: now() }),

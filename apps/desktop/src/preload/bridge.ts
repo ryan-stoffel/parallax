@@ -572,7 +572,8 @@ export interface ParallaxBridge {
    */
   openTargets(hostId: string): Promise<OpenApp[]>;
   /**
-   * Opens a host's folder with `target`, on another computer over ssh. For `terminal`, `terminal`
+   * Opens a host's folder with `target`, on another computer over ssh. An editor opens a file in
+   * it too, as the Files view's Open in does. For `terminal`, `terminal`
    * names one of `terminalApps` to use instead of the chosen one. Main shows a dialog when it
    * can't, and resolves to `noDestination` when it needs the user to say where the computer is.
    */

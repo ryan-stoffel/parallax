@@ -150,6 +150,10 @@ export const isFolderPath = (value: unknown): value is string =>
 export const isDirectory = (folder: string): boolean =>
   statSync(folder, { throwIfNoEntry: false })?.isDirectory() ?? false;
 
+/** Whether `file` is a regular file on this computer, which an editor opens to edit. */
+export const isFile = (file: string): boolean =>
+  statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
+
 /**
  * Starts `command` on its own, in `cwd` if given, without a shell. Resolves to an error for
  * people, or undefined.
