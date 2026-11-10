@@ -658,6 +658,31 @@ test("Storage deletes only a host's archived threads, after asking", async () =>
   expect(calls("thread/delete")).toEqual([{ host: "local", params: { runId: "t-old" } }]);
 });
 
+test("Storage says a deleted thread's worktree stays where the host keeps them", async () => {
+  window.parallax.storage = async () => [];
+  answers["thread/list"] = () => ({
+    result: { repos: [], threads: [{ id: "t-old", repo: "r", archived: true, createdAt: "" }] },
+  });
+  // A plxd with no such setting deletes them, as one with it on does.
+  for (const [settings, idle, asking] of [
+    [{}, "transcript and worktree from the host", "transcripts, worktrees, and branches go too"],
+    [{ deletedThreadWorktrees: true }, "transcript and worktree from the host", "worktrees, and"],
+    [
+      { deletedThreadWorktrees: false },
+      "Its worktree and branch stay on disk.",
+      "Their worktrees and branches stay on disk.",
+    ],
+  ] as const) {
+    answers["host/settings/get"] = () => ({ result: { autoResume: false, ...settings } });
+    await renderSettings("storage");
+    const archived = section("Archived threads");
+    expect(archived.textContent).toContain(idle);
+    await click(button(archived, "Delete all"));
+    expect(archived.textContent).toContain(asking);
+    act(() => unmount());
+  }
+});
+
 test("Providers opens on the host the window has open, not always this computer", async () => {
   const failed = states[mini.id]!;
   states[mini.id] = { ...states["local"]!, capabilities: { providers: {} } } as ConnectionState;

@@ -7,6 +7,16 @@ import type { Host } from "../hosts";
 import { notify } from "../notifications";
 
 /**
+ * Whether `hostId`'s plxd keeps a deleted thread's worktree and branch on disk, for a delete's
+ * warning: its `deletedThreadWorktrees` is off. False for a plxd without the setting, and for one
+ * that doesn't answer, since deleting them is what plxd does unless told otherwise.
+ */
+export async function keepsDeletedWorktrees(hostId: string): Promise<boolean> {
+  const answer = await window.parallax.request(hostId, "host/settings/get", {});
+  return "result" in answer && answer.result.deletedThreadWorktrees === false;
+}
+
+/**
  * `host/settings` on each of `targets` that's connected, for a page that changes them on one
  * computer or on all of them. `able` names those whose plxd has a capability, `shared` reads a
  * setting across them, and `set` changes it on each, saying which one refused.

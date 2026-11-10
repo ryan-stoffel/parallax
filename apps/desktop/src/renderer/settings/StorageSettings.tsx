@@ -5,6 +5,7 @@ import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
+import { keepsDeletedWorktrees } from "./hostSettings";
 import {
   allHosts,
   dangerButton,
@@ -20,7 +21,7 @@ import {
 /**
  * Settings > Storage: what Parallax keeps on this computer and its size, each folder openable,
  * Clear for the cache, whether a host cleans up merged worktrees, and a host's archived threads,
- * which Delete removes with their worktrees.
+ * which Delete removes, with their worktrees unless the host keeps a deleted thread's.
  */
 export function StorageSettings() {
   const platform = window.parallax.platform;
@@ -116,6 +117,8 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
   const connected = useShownConnection(host.id)?.status === "connected";
   const connectedNow = useConnectedNow(host.id);
   const [archived, setArchived] = useState<string[]>();
+  // Whether the host keeps a deleted thread's worktree and branch on disk.
+  const [kept, setKept] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
@@ -128,6 +131,7 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
     setArchived(
       answer.result.threads.filter((t) => t.archived && !t.orchestrator).map((t) => t.id),
     );
+    setKept(await keepsDeletedWorktrees(host.id));
   }, [host.id]);
   useEffect(() => {
     if (connectedNow) void load();
@@ -167,7 +171,13 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
             {error}
           </span>
         ) : confirming ? (
-          "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
+          kept ? (
+            "Delete them? Their transcripts go too. Their worktrees and branches stay on disk. This can't be undone."
+          ) : (
+            "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
+          )
+        ) : kept ? (
+          "Deleting removes each one's transcript from the host. Its worktree and branch stay on disk."
         ) : (
           "Deleting removes each one's transcript and worktree from the host."
         )
