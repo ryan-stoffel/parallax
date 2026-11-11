@@ -665,8 +665,12 @@ ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) =>
 });
 // The `parallax` command (PLX-750, command.ts).
 const commandRecordFile = () => path.join(app.getPath("userData"), "command.json");
-/** Where the command goes on this computer, or none where this app can't offer it. */
+/**
+ * Where the command goes on this computer, or none where this app can't offer it. A dev build has
+ * none: run from a terminal, its plxd wouldn't get the dev build's data folder (0103).
+ */
 function commandLayout(): Layout | undefined {
+  if (dev) return undefined;
   const plxd = commandSource({
     packaged: app.isPackaged,
     env: process.env,

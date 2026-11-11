@@ -18,6 +18,7 @@ T3 Code's "T3 Code (Dev)" is its local development build, with its own data fold
 - **Identity.** "Parallax (Dev)", appId `dev.parallax.desktop.dev`, so it installs and runs beside Stable and Nightly. Its icon is the mark in white on blueprint paper with dimension lines (`design/icon/`), and its sidebar top and send buttons wear blueprint paper where Nightly's wear a night sky. The renderer's `.stage` class is either.
 - **Its own data.** Before anything reads them, the app sets `PLXD_DATA_DIR=~/.parallax-dev` and `PLXD_SERVICE_LABEL=io.github.ryan-stoffel.parallax.plxd.dev`, and every plxd it runs inherits them. Its userData is `~/.parallax-dev/desktop` and its plxd copy `~/.parallax-dev-plxd` (0072). plxd already serves another data folder under another label, and `attach` starts only the default label's service for the default folder. A first launch starts empty and onboards.
 - **Other computers.** A dev build doesn't update other computers' plxd: they serve Stable and Nightly too, and public releases have no plxd of a `-dev` version.
+- **No `parallax` command.** A dev build doesn't install the `parallax` command (PLX-750): run from a terminal, its plxd wouldn't get the dev data folder.
 
 ## Consequences
 
@@ -26,3 +27,5 @@ T3 Code's "T3 Code (Dev)" is its local development build, with its own data fold
 - Installing plxd on an SSH host from Dev fails: that install downloads the app's own version from public releases.
 - Connect's LAN listener (port 7341, 0065) belongs to whichever plxd binds it first; the other reports the port in use.
 - An update check without gh signed in shows "Dev updates need the GitHub CLI signed in".
+- On Windows arm64 a Dev update installs the x64 build: the private provider names each file by its asset id, so electron-updater's NSIS updater can't match the arch and takes the first file. Windows runs it under emulation.
+- New Repository still makes repositories in `~/.parallax/projects`, which Nightly shares: they are the user's repositories, not plxd's data.
