@@ -293,7 +293,7 @@ function QuestionPanel({
       tabIndex={-1}
       aria-label="Question from the agent"
       onKeyDown={onKey}
-      className="flex max-h-[min(60vh,32rem)] min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface px-4 py-3 focus-visible:outline-none"
+      className="composer-card flex max-h-[min(60vh,32rem)] min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface px-4 py-3 focus-visible:outline-none"
     >
       <form
         ref={formRef}

@@ -1702,6 +1702,14 @@ body {
 :root.translucent .composer-tabs {
   border-color: var(--composer-edge);
 }
+/* The cards over the box, pinned or opened from its tabs (a secret, an approval, a question, the
+   plan), are the same glass: the transcript scrolls under them, and a pane's light fill alone
+   would leave its text sharp through theirs. */
+:root.translucent .composer-card.bg-surface {
+  background-color: var(--composer-glass);
+  backdrop-filter: var(--composer-blur);
+  border-color: var(--composer-edge);
+}
 /* The box's own menu is solid: inside the box's backdrop-filter, its own can't reach the page, so
    the transcript would stay sharp through it. */
 :root.translucent .composer-shell > .shadow-composer.bg-surface {

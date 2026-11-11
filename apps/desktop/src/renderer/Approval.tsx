@@ -770,7 +770,7 @@ function ApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className="composer-card flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
     >
       <div className="flex items-center gap-2 px-4 pt-3 text-body">
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />

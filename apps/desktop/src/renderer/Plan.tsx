@@ -85,7 +85,7 @@ export const PlanCard = memo(function PlanCard({ items }: { items: readonly Agen
     <div
       role="group"
       aria-labelledby={id}
-      className="rounded-xl border border-border bg-surface px-4 pt-3 pb-2.5"
+      className="composer-card rounded-xl border border-border bg-surface px-4 pt-3 pb-2.5"
     >
       <div className="flex items-center gap-2 text-body">
         <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />

@@ -278,7 +278,7 @@ export function SecretCard({
         }}
         onDrop={drop}
         autoComplete="off"
-        className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4"
+        className="composer-card flex flex-col gap-3 rounded-xl border border-border bg-surface p-4"
       >
         <div className="flex min-w-0 flex-col gap-1">
           <label
