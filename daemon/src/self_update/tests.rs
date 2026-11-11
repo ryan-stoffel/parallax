@@ -137,7 +137,11 @@ async fn a_dev_plxd_refuses_host_update() {
     );
 
     let error = update.install(NEW, 0, false).await.unwrap_err();
-    assert!(error.message.contains("Parallax (Dev)"), "{}", error.message);
+    assert!(
+        error.message.contains("Parallax (Dev)"),
+        "{}",
+        error.message
+    );
     assert_eq!(fs::read_to_string(&program).unwrap(), "copy");
     assert!(!home.join(".parallax-plxd").exists());
 }
