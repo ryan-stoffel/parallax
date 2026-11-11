@@ -904,6 +904,36 @@ test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar 
   expect([...document.querySelectorAll("dialog")].some((d) => d.open)).toBe(true);
 });
 
+test("a hidden sidebar peeks from the window's left edge until the pointer leaves it, and docks from its toggle", async () => {
+  await renderApp();
+  await click(document.querySelector('button[aria-label="Hide sidebar"]'));
+  const sidebar = document.getElementById("sidebar")!;
+  const workspace = document.querySelector("[data-sidebar-open]")!;
+  // React's enter and leave come from mouseover and mouseout.
+  const pointer = (type: string, target: Element) =>
+    act(
+      () =>
+        void target.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, relatedTarget: document.body }),
+        ),
+    );
+
+  pointer("mouseover", document.querySelector(".sidebar-peek-edge")!);
+  expect(sidebar.hidden).toBe(false);
+  expect(sidebar.dataset["peek"]).toBe("true");
+  expect(workspace.getAttribute("data-sidebar-open")).toBe("false");
+
+  pointer("mouseout", sidebar);
+  expect(sidebar.hidden).toBe(true);
+
+  pointer("mouseover", document.querySelector(".sidebar-peek-edge")!);
+  await click(sidebar.querySelector('button[aria-label="Show sidebar"]'));
+  expect(sidebar.hidden).toBe(false);
+  expect(sidebar.dataset["peek"]).toBeUndefined();
+  expect(workspace.getAttribute("data-sidebar-open")).toBe("true");
+  expect(document.querySelector(".sidebar-peek-edge")).toBeNull();
+});
+
 test("without orchestratorDelete there's no Delete…, and another client's orchestrator.deleted removes the open orchestrator's row and leaves its page", async () => {
   capabilities = { orchestratorEdit: {} };
   await renderApp();

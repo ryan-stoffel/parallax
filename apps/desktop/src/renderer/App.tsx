@@ -337,6 +337,11 @@ export function App() {
     if (askedSettings.title) setSettingsFocus({ anchor: anchorOf(askedSettings.title) });
   }, [askedSettings]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // A hidden sidebar peeks over the workspace while the pointer is at the window's left edge or on
+  // it. Undefined until the first peek, so hiding a docked sidebar still slides the workspace with
+  // it, then false between peeks, so a peek slides away floating. Docking ends it.
+  const [peek, setPeek] = useState<boolean>();
+  if (sidebarOpen && peek !== undefined) setPeek(undefined);
   // An orchestrator's menu items, from the sidebar, which holds their dialogs and icon picker. Each
   // shows the sidebar first, since a modal in a hidden sidebar would leave the window inert.
   const orchestratorActions = (entry: ProjectEntry) =>
@@ -1412,6 +1417,8 @@ export function App() {
     sidebarOpen ? requestedWidths[0] : 0,
     sidePanelOpen && !expanded ? requestedWidths[1] : 0,
   );
+  // A peek floats, so it takes the sidebar's width without the workspace giving it room.
+  const peekWidth = panelWidths(viewportWidth, requestedWidths[0], 0)[0];
   const resizePanel = (side: 0 | 1, value: number) => {
     const other =
       side === 0 ? (sidePanelOpen && !expanded ? rightWidth : 0) : sidebarOpen ? leftWidth : 0;
@@ -1843,12 +1850,18 @@ export function App() {
           }}
         />
       )}
+      {!sidebarOpen && (
+        <div aria-hidden className="sidebar-peek-edge" onMouseEnter={() => setPeek(true)} />
+      )}
       <Sidebar
         history={tabsOn && sidebarOpen && historyButtons}
-        width={leftWidth}
-        onResize={(width) => resizePanel(0, width)}
-        open={sidebarOpen}
+        width={sidebarOpen ? leftWidth : peekWidth}
+        onResize={sidebarOpen ? (width) => resizePanel(0, width) : undefined}
+        open={sidebarOpen || peek === true}
+        peek={!sidebarOpen && peek !== undefined}
+        onPeekLeave={() => setPeek(false)}
         onClose={() => setSidebarOpen(false)}
+        onDock={() => setSidebarOpen(true)}
         onNewThread={() => newThread()}
       >
         <ThreadList

@@ -917,6 +917,48 @@ body {
   mask: none;
 }
 
+/* A hidden sidebar's peek (App.tsx): the window's left edge shows it floating over the workspace,
+   opaque even on glass, until the pointer leaves it. It meets the window's top, bottom, and left
+   edges, so the pointer can't leave the edge strip without crossing it. */
+.sidebar-peek-edge {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 8px;
+  z-index: 44;
+  -webkit-app-region: no-drag;
+}
+#sidebar[data-peek] {
+  --pane-sidebar: var(--sidebar);
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 45;
+  overflow: clip;
+  border-right: 1px solid var(--border);
+  border-radius: 0 12px 12px 0;
+  box-shadow: 0 12px 40px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 50%));
+}
+/* A drag region is outside the page to Electron, so reaching for the peek's top row would leave
+   the peek and hide it. Electron also adds drag regions in page order, so the workspace's top row,
+   after the sidebar, drags through the peek's. No top row drags while the peek shows. */
+:root:has(#sidebar[data-peek]:not([hidden])) .titlebar {
+  -webkit-app-region: no-drag;
+}
+#sidebar[data-peek][hidden] {
+  margin-left: calc(-1 * var(--sidebar-width) - 24px);
+}
+@starting-style {
+  #sidebar[data-peek]:not([hidden]) {
+    margin-left: calc(-1 * var(--sidebar-width) - 24px);
+  }
+}
+:root #sidebar[data-peek]::before {
+  content: none;
+}
+:root.nightly #sidebar[data-peek] > .night-sky {
+  right: 0;
+  mask: none;
+}
+
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
