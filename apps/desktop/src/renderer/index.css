@@ -1704,8 +1704,9 @@ body {
 }
 /* The cards over the box, pinned or opened from its tabs (a secret, an approval, a question, the
    plan), are the same glass: the transcript scrolls under them, and a pane's light fill alone
-   would leave its text sharp through theirs. */
-:root.translucent .composer-card.bg-surface {
+   would leave its text sharp through theirs. A card that wraps another, as a plan's approval wraps
+   the proposed plan, marks the wrapper, so the plan in the transcript keeps a pane's fill. */
+:root.translucent :is(.composer-card, .composer-card > *).bg-surface {
   background-color: var(--composer-glass);
   backdrop-filter: var(--composer-blur);
   border-color: var(--composer-edge);
