@@ -340,7 +340,12 @@ export function ProposedPlan({
         className="relative overflow-hidden px-4 pt-3 pb-3.5"
         style={
           folded
-            ? { maxHeight: foldAt }
+            ? // A fade of the text itself, not a band of the card's color over it, so the card's
+              // own fill shows through, glass included.
+              {
+                maxHeight: foldAt,
+                maskImage: "linear-gradient(to bottom, black calc(100% - 6rem), transparent)",
+              }
             : long && openHeight
               ? { maxHeight: openHeight, overflowY: "auto" }
               : undefined
@@ -352,12 +357,6 @@ export function ProposedPlan({
         <div ref={content} className="proposed-plan">
           {children}
         </div>
-        {folded && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-surface to-transparent"
-          />
-        )}
       </div>
       {long && (
         <button
