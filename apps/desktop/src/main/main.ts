@@ -119,10 +119,12 @@ import { wallpaperJpeg } from "./wallpaper";
 // Parallax (Dev) keeps apart from Stable and Nightly (0103): plxd's data folder, its login
 // service's label, and so its plxd, and the app's own data, so a breaking change it carries never
 // reaches theirs. Set before anything reads them, and passed on to every plxd the app runs.
+// Always set, over what the app inherits: opened from a terminal in another Parallax's thread,
+// it inherits that plxd's PLXD_DATA_DIR, `~/.parallax`.
 const dev = isDev(app.getVersion());
 if (dev) {
-  process.env["PLXD_DATA_DIR"] ??= path.join(homedir(), ".parallax-dev");
-  process.env["PLXD_SERVICE_LABEL"] ??= "io.github.ryan-stoffel.parallax.plxd.dev";
+  process.env["PLXD_DATA_DIR"] = path.join(homedir(), ".parallax-dev");
+  process.env["PLXD_SERVICE_LABEL"] = "io.github.ryan-stoffel.parallax.plxd.dev";
 }
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly or dev
 // build is one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in
