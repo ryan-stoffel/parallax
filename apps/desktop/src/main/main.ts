@@ -110,22 +110,40 @@ import { logLine } from "../protocol/connectionLog";
 import { startConnectionLog, writeConnectionLine } from "./connectionLogFile";
 import { startStorage } from "./storage";
 import { startTelemetry } from "./telemetry";
-import { isNightly, startUpdater } from "./updater";
+import { isDev, isNightly, startUpdater } from "./updater";
 import { broadcast } from "./windows";
 import { startVoice } from "./voice";
 import { readWindowState, writeWindowState } from "./windowState";
 import { wallpaperJpeg } from "./wallpaper";
 
-// The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
-// one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in plxd's
-// `~/.parallax`, which both builds share, unless `--user-data-dir` (the end-to-end tests) sets it.
-if (!app.commandLine.hasSwitch("user-data-dir")) {
-  app.setPath("userData", appDataDir(homedir(), app.getPath("userData")));
+// Parallax (Dev) keeps apart from Stable and Nightly (0103): plxd's data folder, its login
+// service's label, and so its plxd, and the app's own data, so a breaking change it carries never
+// reaches theirs. Set before anything reads them, and passed on to every plxd the app runs.
+const dev = isDev(app.getVersion());
+if (dev) {
+  process.env["PLXD_DATA_DIR"] ??= path.join(homedir(), ".parallax-dev");
+  process.env["PLXD_SERVICE_LABEL"] ??= "io.github.ryan-stoffel.parallax.plxd.dev";
 }
-app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
+// The app menu's About, Hide, and Quit items show the app's name, which says a nightly or dev
+// build is one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in
+// plxd's data folder, `~/.parallax`, which Stable and Nightly share, unless `--user-data-dir` (the
+// end-to-end tests) sets it.
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath(
+    "userData",
+    dev
+      ? path.join(process.env["PLXD_DATA_DIR"]!, "desktop")
+      : appDataDir(homedir(), app.getPath("userData")),
+  );
+}
+app.setName(
+  dev ? "Parallax (Dev)" : isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax",
+);
 // Windows ties the taskbar button and notifications to the Start menu shortcut the installer made by
-// its AppUserModelID, the appId (electron-builder.yml). Without it, toasts aren't the app's.
-if (process.platform === "win32" && app.isPackaged) app.setAppUserModelId("dev.parallax.desktop");
+// its AppUserModelID, the appId (electron-builder.yml, and a dev build's in package-app).
+// Without it, toasts aren't the app's.
+if (process.platform === "win32" && app.isPackaged)
+  app.setAppUserModelId(dev ? "dev.parallax.desktop.dev" : "dev.parallax.desktop");
 // One copy per userData off macOS, where the OS already brings a running app forward: a second
 // launch, from the Start menu or a shortcut, shows the first one's window and quits. Only a
 // packaged app, so `pnpm dev` still runs beside an installed Parallax, whose userData it shares.

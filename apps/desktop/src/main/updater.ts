@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { app } from "electron";
 import { autoUpdater, type UpdateInfo } from "electron-updater";
 
@@ -6,10 +9,17 @@ import type { UpdateState } from "../preload/bridge";
 /** Whether this build is a nightly (0030): its version's prerelease identifier is `nightly`. */
 export const isNightly = (version: string) => version.includes("-nightly");
 
+/** Whether this build is Parallax (Dev) (0103): its version ends in `-dev`. */
+export const isDev = (version: string) => version.endsWith("-dev");
+
+/** The private repo, under `ryan-stoffel`, that dev builds are published to and update from (0103). */
+const DEV_REPO = "parallax-dev";
+
 /**
  * electron-updater's settings for the build's own channel (0028). A nightly takes the newest
  * GitHub prerelease whose version's first prerelease identifier is `nightly`, from its
- * `nightly*.yml`; any other build the release marked Latest, from its `latest*.yml`.
+ * `nightly*.yml`; any other build the release marked Latest, from its `latest*.yml`. A dev build
+ * takes its private repo's Latest: electron-updater's private provider reads only `latest*.yml`.
  */
 export function updaterSettings(version: string) {
   const nightly = isNightly(version);
@@ -41,7 +51,25 @@ function notesText(notes: UpdateInfo["releaseNotes"]): string {
 }
 
 const releasePage = (version: string) =>
-  `https://github.com/ryan-stoffel/parallax/releases/tag/v${version}`;
+  `https://github.com/ryan-stoffel/${isDev(version) ? DEV_REPO : "parallax"}/releases/tag/v${version}`;
+
+/**
+ * The signed-in GitHub CLI's token, which a dev build reads its private releases with, so no
+ * token ships in the app. Through the login shell off Windows, where an app opened from the Dock
+ * has no Homebrew on its PATH. Undefined when gh is missing or signed out.
+ */
+async function ghToken(): Promise<string | undefined> {
+  const [file, args] =
+    process.platform === "win32"
+      ? ["gh", ["auth", "token"]]
+      : [process.env["SHELL"] || "/bin/sh", ["-lc", "gh auth token"]];
+  try {
+    const { stdout } = await promisify(execFile)(file, args, { timeout: 15_000 });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // Chromium's errors for a request that never reached GitHub.
 const offline =
@@ -72,7 +100,9 @@ function updateError(error: Error & { code?: string; statusCode?: number }): str
  * installs it, which also happens when Parallax quits. `publish` gets what the Update button
  * shows on every change. It checks at start, every 30 min, and on `checkSoon` at most every 10 s,
  * until a download starts. The checks read github.com's releases feed and download URLs, not the
- * REST API, so they spend no API quota (PLX-211). Settings > About's updates card (PLX-1522) runs
+ * REST API, so they spend no API quota (PLX-211). A dev build reads its private repo through the
+ * REST API with gh's token instead, two requests a check, and waits 5 min between `checkSoon`
+ * checks (0103). Settings > About's updates card (PLX-1522) runs
  * `update` too, and has no button in a build that can't update, which `publish` hears as
  * `unsupported`.
  */
@@ -89,11 +119,35 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   let downloaded: string | undefined;
   let checkedAt = 0;
 
+  // A dev build's feed is its private repo, read with gh's token, set again when the token
+  // changes. Resolves to the line to show when there's no token.
+  const dev = isDev(app.getVersion());
+  let token: string | undefined;
+  const feed = async (): Promise<string | undefined> => {
+    if (!dev) return undefined;
+    const current = await ghToken();
+    if (!current) return "Dev updates need the GitHub CLI signed in: run gh auth login.";
+    if (current !== token) {
+      token = current;
+      autoUpdater.setFeedURL({
+        provider: "github",
+        owner: "ryan-stoffel",
+        repo: DEV_REPO,
+        private: true,
+        token,
+      });
+    }
+    return undefined;
+  };
+
   const check = () => {
     if (unsupported || progress !== undefined || downloaded) return;
     checkedAt = Date.now();
-    // Its errors also reach the "error" event below.
-    autoUpdater.checkForUpdates().catch(() => {});
+    void feed().then((missing) => {
+      if (missing) return show(missing);
+      // Its errors also reach the "error" event below.
+      autoUpdater.checkForUpdates().catch(() => {});
+    });
   };
 
   // `note` is the latest check's or download's line.
@@ -143,9 +197,12 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   setInterval(check, 30 * 60_000);
 
   return {
-    /** A window came to the front. */
+    /**
+     * A window came to the front. A dev build's check spends the GitHub API quota its gh login
+     * shares with every agent, so it waits five minutes between these.
+     */
     checkSoon() {
-      if (Date.now() - checkedAt > 10_000) check();
+      if (Date.now() - checkedAt > (dev ? 5 * 60_000 : 10_000)) check();
     },
     /**
      * The Update button: installs what's downloaded, else downloads what's available, else checks
@@ -172,6 +229,8 @@ export function startUpdater(publish: (state: UpdateState) => void) {
       }
       checkedAt = Date.now();
       try {
+        const missing = await feed();
+        if (missing) return missing;
         const result = await autoUpdater.checkForUpdates();
         if (!result?.isUpdateAvailable) return "Up to date";
         return `Parallax ${result.updateInfo.version} is available`;

@@ -263,7 +263,7 @@ struct ServiceOptions {
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// Override the service's label. For tests: a real install never needs this.
+    /// Override the service's label. For tests, and Parallax (Dev)'s own service (0103).
     #[arg(long, value_name = "LABEL", env = SERVICE_LABEL_ENV, default_value = DEFAULT_LABEL, hide = true)]
     label: String,
 }

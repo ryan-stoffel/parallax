@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # Decides what release.yml's plan job builds (0051). Writes key=value lines to GITHUB_OUTPUT:
-# tag, version, channel (nightly or latest), sha, build (true or false), and dry_run (1, or
-# empty when this run publishes).
+# tag, version, channel (nightly or latest), sha, build (true or false), dry_run (1, or empty
+# when this run publishes), and dev (true for Parallax (Dev), 0103).
 #
 # A schedule publishes a nightly of the default branch when that branch has commits since the
 # last nightly and the last nightly is at least six hours old. A manual nightly publishes
 # immediately, and only from the default branch. A manual stable release publishes the latest
 # nightly's commit without -nightly. COMMIT_INPUT names a different commit, for a fix that
-# cannot wait for the next snapshot; VERSION_INPUT overrides its timestamp. Any other manual
-# run is a dry run: it versions the selected branch and sets dry_run=1.
+# cannot wait for the next snapshot; VERSION_INPUT overrides its timestamp. A manual dev run
+# publishes the selected branch, from any branch, as -dev to the private dev repo; its channel is
+# latest, the only update file electron-updater's private provider reads (0103). Any other
+# manual run is a dry run: it versions the selected branch and sets dry_run=1.
 #
 # The version is the commit's committer time in UTC as YYMM.1DDHH.1MMSS (0030). A nightly
 # appends -nightly, so the stable tag of that same commit is newer.
 #
-# Environment: EVENT (schedule or workflow_dispatch), CHANNEL_INPUT (dry-run, nightly, or
-# stable), REF, SHA, DEFAULT_BRANCH, COMMIT_INPUT, VERSION_INPUT, GH_TOKEN, GH_REPO.
+# Environment: EVENT (schedule or workflow_dispatch), CHANNEL_INPUT (dry-run, nightly, stable, or
+# dev), REF, SHA, DEFAULT_BRANCH, COMMIT_INPUT, VERSION_INPUT, GH_TOKEN, GH_REPO.
 # NOW_EPOCH overrides the clock, for tests.
 set -euo pipefail
 
@@ -60,9 +62,10 @@ compare_status() {
 }
 
 finish() {
-  local build=$1 dry=$2 channel=$3 version=$4 sha=$5 tag=
+  local build=$1 dry=$2 channel=$3 version=$4 sha=$5 dev=${6:-false} tag=
   [ -n "$version" ] && tag="v$version"
   emit "build=$build"
+  emit "dev=$dev"
   emit "dry_run=$dry"
   emit "channel=$channel"
   emit "version=$version"
@@ -85,6 +88,11 @@ require_default() {
 channel_input=${CHANNEL_INPUT:-}
 commit_input=${COMMIT_INPUT:-}
 version_input=${VERSION_INPUT:-}
+
+if [ "$EVENT" = workflow_dispatch ] && [ "$channel_input" = dev ]; then
+  finish true "" latest "$(version_of "$SHA" 0)-dev" "$SHA" true
+  exit 0
+fi
 
 if [ "$EVENT" = workflow_dispatch ] && [ "$channel_input" != nightly ] && [ "$channel_input" != stable ]; then
   nightly=1

@@ -7,7 +7,9 @@
 # Only this job creates releases, so builds never race to, and a tag never gets a second one.
 #
 # Environment: TAG, CHANNEL (nightly or latest), GITHUB_SHA (the tag's commit), GH_TOKEN, and
-# GH_REPO. DRY_RUN=1 prints the create instead of making it (workflow_dispatch).
+# GH_REPO. DRY_RUN=1 prints the create instead of making it (workflow_dispatch). DEV=true makes a
+# Parallax (Dev) release in the private dev repo (0103), whose notes name SOURCE, the commit and
+# branch it was built from.
 set -euo pipefail
 
 write() {
@@ -44,6 +46,13 @@ releases=$(gh release list --limit 1000 --json tagName,isDraft)
 if jq -e --arg tag "$TAG" 'any(.[]; .tagName == $tag)' <<< "$releases" > /dev/null; then
   echo "draft-release: $TAG is listed but couldn't be read; not creating another." >&2
   exit 1
+fi
+# The dev repo holds release files, not the source, so the tag goes on its own default branch and
+# the notes say where the build came from.
+if [ "${DEV:-}" = true ]; then
+  write release create "$TAG" --draft --notes "Parallax (Dev), built from $SOURCE." >&2
+  echo build=true
+  exit 0
 fi
 previous=$(jq -r --arg tag "$TAG" --arg pattern "$pattern" \
   '[.[] | select((.isDraft | not) and (.tagName | test($pattern)) and .tagName != $tag) | .tagName][0] // empty' <<< "$releases")

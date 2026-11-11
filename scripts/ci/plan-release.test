@@ -66,6 +66,16 @@ expect_out() {
   grep -qxF "$1" <<< "$RUN_OUT" || { echo "missing $1"; echo "$RUN_OUT"; exit 1; }
 }
 
+# A dev run publishes any branch as -dev, with the latest update files, and never as a dry run.
+run env EVENT=workflow_dispatch CHANNEL_INPUT=dev REF=refs/heads/feature/x SHA=tip DEFAULT_BRANCH=main "$plan"
+expect_status 0
+expect_out "build=true"
+expect_out "dry_run="
+expect_out "dev=true"
+expect_out "channel=latest"
+expect_out "version=2610.10402.10000-dev"
+expect_out "tag=v2610.10402.10000-dev"
+
 # No previous nightly: the schedule publishes one.
 rm -f "$fixture/latest" "$fixture/compare"
 run env EVENT=schedule REF=refs/heads/main SHA=tip DEFAULT_BRANCH=main "$plan"
@@ -76,6 +86,7 @@ expect_out "channel=nightly"
 expect_out "version=2610.10402.10000-nightly"
 expect_out "sha=tip"
 expect_out "tag=v2610.10402.10000-nightly"
+expect_out "dev=false"
 
 # Published an hour ago: skip, and do not compare.
 printf '%s\n' $'2026-10-04T02:00:00Z\tv2610.10402.10000-nightly' > "$fixture/latest"

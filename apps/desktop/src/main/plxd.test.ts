@@ -130,10 +130,11 @@ test("only a packaged Parallax's serve of another version is replaced", async ()
 });
 
 test("an installed login service is restarted on the copy instead of sending SIGTERM", async () => {
-  // The app's bundled serve, or the copy the service already runs.
+  // The app's bundled serve, or the copy the service already runs, a dev build's included (0103).
   for (const args of [
     "/Applications/Parallax.app/Contents/Resources/plxd serve",
     "/Users/r/.parallax-plxd/plxd serve",
+    "/Users/r/.parallax-dev-plxd/plxd serve",
   ]) {
     const system = fakeServe(args);
     let restarted = false;

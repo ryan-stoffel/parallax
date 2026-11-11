@@ -2,8 +2,8 @@
 # requires-python = ">=3.10"
 # dependencies = ["resvg-py==0.2.6", "pillow==12.0.0"]
 # ///
-"""Renders the Windows icons, Parallax.ico and Parallax-nightly.ico, from the full-bleed masters,
-and the Linux nightly's, png/Parallax-nightly/.
+"""Renders the Windows icons, Parallax.ico, Parallax-nightly.ico, and Parallax-dev.ico, from the
+full-bleed masters, and the Linux nightly's and dev's, png/Parallax-nightly/ and png/Parallax-dev/.
 
 Windows and Linux draw an icon as is, with no mask of their own, so each is the master's tile with
 rounded corners and a little room around it: the .ico at every size Explorer, the taskbar, and the
@@ -38,16 +38,21 @@ def render(svg: str, size: int) -> Image.Image:
     return Image.open(io.BytesIO(png)).convert("RGBA")
 
 
-for name, master in [("Parallax", "Parallax-dark-full"), ("Parallax-nightly", "Parallax-nightly-full")]:
+for name, master in [
+    ("Parallax", "Parallax-dark-full"),
+    ("Parallax-nightly", "Parallax-nightly-full"),
+    ("Parallax-dev", "Parallax-dev-full"),
+]:
     svg = tile((MASTERS / f"{master}.svg").read_text())
     images = [render(svg, size) for size in SIZES]
     out = HERE / f"{name}.ico"
     images[-1].save(out, sizes=[(s, s) for s in SIZES], append_images=images[:-1])
     print(f"wrote {out}")
 
-pngs = HERE.parent / "png" / "Parallax-nightly"
-pngs.mkdir(parents=True, exist_ok=True)
-nightly = tile((MASTERS / "Parallax-nightly-full.svg").read_text())
-for size in [16, 24, 32, 48, 64, 128, 256, 512]:
-    render(nightly, size).save(pngs / f"{size}x{size}.png")
-print(f"wrote {pngs}")
+for name in ["Parallax-nightly", "Parallax-dev"]:
+    pngs = HERE.parent / "png" / name
+    pngs.mkdir(parents=True, exist_ok=True)
+    svg = tile((MASTERS / f"{name}-full.svg").read_text())
+    for size in [16, 24, 32, 48, 64, 128, 256, 512]:
+        render(svg, size).save(pngs / f"{size}x{size}.png")
+    print(f"wrote {pngs}")

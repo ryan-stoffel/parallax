@@ -372,11 +372,13 @@
 }
 
 /* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
-   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons.
+   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons. A dev
+   build (.dev, 0103) has blueprint paper there instead, with a grid and drafting marks. .stage is
+   either, for what the two share.
 
    The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
-   it fades into each theme's sidebar behind the Search row. Both themes share the dark sky,
-   white header text, stars, and indigo clouds. */
+   it fades into each theme's sidebar behind the Search row. Both themes share the dark sky or
+   blue paper, white header text, and the art. */
 
 :root.nightly .night-sky-host {
   background:
@@ -384,12 +386,18 @@
       no-repeat,
     var(--pane-sidebar);
 }
+:root.dev .night-sky-host {
+  background:
+    linear-gradient(in oklab, #1236c4, #2563eb 20%, #3a84f8 34%, transparent) top / 100% 104px
+      no-repeat,
+    var(--pane-sidebar);
+}
 /* The Search field sits on the sidebar's own color over the sky, so its text keeps the contrast
    the theme gives it there, whatever the theme and mode. */
-:root.nightly .night-sky-host .sky-search {
+:root.stage .night-sky-host .sky-search {
   background-color: var(--sidebar);
 }
-:root.nightly .night-sky-host .sky-search:is(:hover, :focus-within) {
+:root.stage .night-sky-host .sky-search:is(:hover, :focus-within) {
   background-color: color-mix(in oklab, var(--sidebar), var(--foreground) 4.5%);
 }
 /* The stars, the glow behind them, and the clouds' bodies and lit tops, far to near. */
@@ -403,10 +411,20 @@
   --cloud-near: #6e6ac8;
   --cloud-near-lit: #8a86e4;
 }
+/* The blueprint's lines and the glow behind them. */
+:root.dev .night-sky {
+  --blueprint-line: #ddf7ff;
+  --blueprint-glow: #d4f6ff;
+}
+/* Each build shows its own art in the box. */
+:root.dev .night-sky .sky-art,
+:root.nightly .night-sky .blueprint-art {
+  display: none;
+}
 .night-sky {
   display: none;
 }
-:root.nightly .night-sky {
+:root.stage .night-sky {
   display: block;
   position: absolute;
   inset: 0 0 auto;
@@ -414,11 +432,11 @@
   overflow: hidden;
   pointer-events: none;
 }
-:root.nightly .night-sky svg {
+:root.stage .night-sky svg {
   width: 100%;
   height: 56px;
 }
-:root.nightly .night-sky-text {
+:root.stage .night-sky-text {
   --foreground: #ffffff;
   --muted-foreground: rgb(255 255 255 / 75%);
   --hover: rgb(255 255 255 / 12%);
@@ -442,11 +460,24 @@
     0 4px 14px -4px rgb(79 70 229 / 70%);
   transition: filter 150ms;
 }
-:root.nightly .send-sky:enabled:hover {
+:root.dev .send-sky {
+  background:
+    repeating-linear-gradient(90deg, rgb(221 247 255 / 30%) 0 0.5px, transparent 0.5px 6px),
+    repeating-linear-gradient(rgb(221 247 255 / 30%) 0 0.5px, transparent 0.5px 6px),
+    radial-gradient(circle at 72% 12%, rgb(212 246 255 / 55%), transparent 60%),
+    linear-gradient(160deg, #67c2ff, #347ff8 50%, #1538d0);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 30%),
+    inset 0 0 0 1px rgb(221 247 255 / 30%),
+    0 4px 14px -4px rgb(37 99 235 / 70%);
+  transition: filter 150ms;
+}
+:root.stage .send-sky:enabled:hover {
   filter: brightness(1.15);
 }
 /* A send button with nothing to send keeps its sky, grayed out and without the glow. */
-:root.nightly .send-sky:disabled {
+:root.stage .send-sky:disabled {
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 25%),
     inset 0 0 0 1px rgb(165 180 252 / 25%);
@@ -802,7 +833,7 @@ body {
     radial-gradient(circle at 16px 1px, transparent 15px, #000 16px) bottom left / 17px 17px
       no-repeat;
 }
-:root.nightly:not(.tabs-beta) #sidebar > .night-sky {
+:root.stage:not(.tabs-beta) #sidebar > .night-sky {
   right: -24px;
   mask:
     linear-gradient(#000 0 0) left / calc(100% - 24px) 100% no-repeat,
@@ -912,7 +943,7 @@ body {
 :root[data-platform="linux"]:not(.tabs-beta) #sidebar::before {
   content: none;
 }
-:root.nightly[data-platform="linux"]:not(.tabs-beta) #sidebar > .night-sky {
+:root.stage[data-platform="linux"]:not(.tabs-beta) #sidebar > .night-sky {
   right: 0;
   mask: none;
 }
@@ -954,7 +985,7 @@ body {
 :root #sidebar[data-peek]::before {
   content: none;
 }
-:root.nightly #sidebar[data-peek] > .night-sky {
+:root.stage #sidebar[data-peek] > .night-sky {
   right: 0;
   mask: none;
 }
@@ -1082,7 +1113,7 @@ body {
 :root.translucent .tucked {
   clip-path: inset(1rem 0 0);
 }
-:root.nightly.translucent .night-sky-host .sky-search {
+:root.stage.translucent .night-sky-host .sky-search {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
 }
 /* Settings' theme previews show their theme as it is, and .solid keeps an element opaque, as
@@ -1447,7 +1478,7 @@ body {
 }
 /* Attach, voice, and send or stop at the end of the controls' row: round buttons of one size, part
    of the box rather than a box of their own (Composer.tsx). Send is filled, and with nothing to
-   send it's a quiet disc, except in a nightly, which keeps its sky. */
+   send it's a quiet disc, except in a nightly or dev build, which keeps its art. */
 .composer-actions {
   display: flex;
   flex-shrink: 0;
@@ -1528,18 +1559,19 @@ body {
 .composer-shell .composer-send.send-sky {
   margin-left: 2px;
 }
-/* Over .composer-action's own colors. A nightly's sky keeps its white arrow (.send-sky). */
-:root:not(.nightly) .composer-shell .composer-send.send-sky:enabled {
+/* Over .composer-action's own colors. A nightly's sky or a dev build's blueprint keeps its white
+   arrow (.send-sky). */
+:root:not(.stage) .composer-shell .composer-send.send-sky:enabled {
   color: var(--send-foreground);
 }
-:root:not(.nightly) .composer-shell .composer-send.send-sky:enabled:hover {
+:root:not(.stage) .composer-shell .composer-send.send-sky:enabled:hover {
   background-color: var(--send);
   filter: brightness(1.1);
 }
-:root.nightly .composer-shell .composer-send.send-sky {
+:root.stage .composer-shell .composer-send.send-sky {
   color: #ffffff;
 }
-:root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
+:root:not(.stage) .composer-shell .composer-actions .composer-send.send-sky:disabled {
   background: color-mix(in oklab, var(--foreground) 12%, transparent);
   color: var(--muted-foreground);
   box-shadow: none;
@@ -1554,7 +1586,7 @@ body {
   transition: height var(--transition-duration-fast) var(--ease-out);
 }
 /* Send pops up when there's something to send, and Stop when it takes Send's place. Doubled up to
-   win over a nightly's .send-sky transition. */
+   win over a nightly's or dev build's .send-sky transition. */
 .composer-shell .composer-send.send-sky {
   transition:
     scale var(--transition-duration-base) var(--ease-spring),
@@ -1562,8 +1594,9 @@ body {
     box-shadow var(--transition-duration-fast),
     filter var(--transition-duration-fast);
 }
-/* With nothing to send, a nightly's sky stays, dimmed and without its glow. It pops up with text. */
-:root.nightly .composer-shell .composer-send.send-sky:disabled {
+/* With nothing to send, a nightly's or dev build's art stays, dimmed and without its glow. It pops
+   up with text. */
+:root.stage .composer-shell .composer-send.send-sky:disabled {
   filter: none;
   opacity: 0.75;
 }
