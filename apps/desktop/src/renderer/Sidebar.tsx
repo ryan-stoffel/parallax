@@ -38,6 +38,7 @@ import {
   Network,
   Palette,
   PanelLeftClose,
+  PanelLeftOpen,
   PanelTop,
   PencilLine,
   PersonStanding,
@@ -224,7 +225,13 @@ interface SidebarProps {
   width?: number;
   onResize?: (width: number) => void;
   open: boolean;
+  /** Floats over the workspace, shown while the pointer is on it, as a hidden sidebar's peek. */
+  peek?: boolean;
+  /** The pointer left a peek. */
+  onPeekLeave?: () => void;
   onClose: () => void;
+  /** Keeps a peek shown, docked beside the workspace. */
+  onDock?: () => void;
   onNewThread: () => void;
   /** Back and Forward, at the end of its top row. */
   history?: ReactNode;
@@ -239,7 +246,10 @@ interface SidebarProps {
  */
 export function Sidebar({
   open,
+  peek,
+  onPeekLeave,
   onClose,
+  onDock,
   onNewThread,
   history,
   children,
@@ -256,6 +266,8 @@ export function Sidebar({
       id="sidebar"
       aria-label="Sidebar"
       hidden={!open}
+      data-peek={peek || undefined}
+      onMouseLeave={peek ? onPeekLeave : undefined}
       style={{ "--sidebar-width": `${open ? width : lastWidth.current}px` } as CSSProperties}
       className="night-sky-host relative flex min-w-0 shrink-0 flex-col bg-pane-sidebar"
     >
@@ -263,15 +275,27 @@ export function Sidebar({
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
       {/* Positioned, so it paints over the sky. */}
       <TopBar className="traffic-light-inset night-sky-text relative">
-        <IconButton
-          label="Hide sidebar"
-          command="sidebar"
-          aria-expanded
-          aria-controls="sidebar"
-          onClick={onClose}
-        >
-          <PanelLeftClose />
-        </IconButton>
+        {peek ? (
+          <IconButton
+            label="Show sidebar"
+            command="sidebar"
+            aria-expanded={false}
+            aria-controls="sidebar"
+            onClick={onDock}
+          >
+            <PanelLeftOpen />
+          </IconButton>
+        ) : (
+          <IconButton
+            label="Hide sidebar"
+            command="sidebar"
+            aria-expanded
+            aria-controls="sidebar"
+            onClick={onClose}
+          >
+            <PanelLeftClose />
+          </IconButton>
+        )}
         <button
           type="button"
           onClick={onNewThread}
