@@ -266,7 +266,8 @@ pub(crate) fn initialize(
 /// (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s `now`. `checkpoints`
 /// (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
 /// `orchestration/getFullThreadDiff`, `checkpoint.rollback`, and the `thread.checkpoint` and
-/// `thread.reverted` events. `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and
+/// `thread.reverted` events. `reviewScopes` (PLX-694): `git/reviewCommits` and `git/reviewDiff`.
+/// `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and
 /// `thread/mergeBack`. `secrets` (PLX-648, 0063): `secret/request`, `secret/answer`, the
 /// `secretRequested` and `secretResolved` transcript items, and `secretRef` in `schedule/save`.
 /// `devices` (PLX-886): every `device/*` method and notification. `computerUse` (PLX-897, 0077), on
@@ -408,6 +409,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "projectThreads",
     "projects",
     "providerUpdates",
+    "reviewScopes",
     "providers",
     "pullRequests",
     "questions",

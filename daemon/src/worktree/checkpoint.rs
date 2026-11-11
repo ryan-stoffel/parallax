@@ -8,6 +8,7 @@
 //! Like every call in a run's folder, each runs pinned and hardened in a worktree (#166), and
 //! hookless in a checkout ([`RunFolder`]).
 
+use parallax_protocol::ReviewCommit;
 use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
@@ -51,6 +52,17 @@ pub enum DiffFormat {
     },
     /// `--numstat -z`, for [`parse_numstat_z`].
     Numstat,
+}
+
+/// One line of [`WorktreeManager::review_commits`]'s `git log`.
+fn parse_review_commit(line: &str) -> Option<ReviewCommit> {
+    let mut fields = line.split('\0');
+    Some(ReviewCommit {
+        sha: fields.next()?.to_owned(),
+        subject: fields.next()?.to_owned(),
+        author: fields.next()?.to_owned(),
+        committed_at: fields.next()?.to_owned(),
+    })
 }
 
 impl WorktreeManager {
@@ -214,6 +226,71 @@ impl WorktreeManager {
                 .map(|stdout| (stdout, false)),
             _ => Ok((stdout, truncated)),
         }
+    }
+
+    /// The commit `folder`'s branch is compared with: `base` when it has one, as a worktree does,
+    /// else where it left `origin`'s default branch. `None` when it has neither.
+    pub async fn review_base(&self, folder: RunFolder<'_>, base: Option<&str>) -> Option<String> {
+        if let Some(base) = base {
+            return Some(base.to_owned());
+        }
+        let found = self
+            .folder_git_ok(folder, &["merge-base", "HEAD", "refs/remotes/origin/HEAD"])
+            .await
+            .ok()?;
+        Some(found.trim().to_owned())
+    }
+
+    /// `folder`'s commits since `base`, newest first, the newest 100.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn review_commits(
+        &self,
+        folder: RunFolder<'_>,
+        base: &str,
+    ) -> Result<Vec<ReviewCommit>, WorktreeError> {
+        let range = format!("{base}..HEAD");
+        let log = self
+            .folder_git_ok(
+                folder,
+                &[
+                    "log",
+                    "--format=%H%x00%s%x00%aN%x00%cI",
+                    "--max-count=100",
+                    &range,
+                    "--",
+                ],
+            )
+            .await?;
+        Ok(log.lines().filter_map(parse_review_commit).collect())
+    }
+
+    /// `folder`'s files as they are now against its latest commit, untracked ones included, read
+    /// through a checkpoint in `reference`, which is gone again after. The real index isn't touched.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::capture_checkpoint`] and [`Self::diff_checkpoints`].
+    pub async fn review_uncommitted(
+        &self,
+        folder: RunFolder<'_>,
+        reference: &str,
+        max_bytes: usize,
+    ) -> Result<(String, bool), WorktreeError> {
+        self.capture_checkpoint(folder, reference).await?;
+        let patch = DiffFormat::Patch {
+            ignore_whitespace: false,
+        };
+        let diff = self
+            .diff_checkpoints(folder, "HEAD", reference, patch, max_bytes)
+            .await;
+        // Left behind, it's only a ref no one reads.
+        let _ = self
+            .folder_git_ok(folder, &["update-ref", "-d", reference])
+            .await;
+        diff
     }
 
     /// Restores `folder`'s files to checkpoint `reference`, as T3 Code does: the checkpoint's

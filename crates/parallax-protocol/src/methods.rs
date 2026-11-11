@@ -96,7 +96,8 @@ use crate::{
     RepoFilesResult, RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoLogoParams,
     RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
     RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
-    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
+    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ReviewCommitsParams,
+    ReviewCommitsResult, ReviewDiffParams, ScheduleDeleteResult, ScheduleIdParams,
     ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
     SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
     SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
@@ -895,6 +896,13 @@ method_table! {
         OrchestrationGetTurnDiff = "orchestration/getTurnDiff": TurnDiffParams => TurnDiffResult;
         /// `orchestration/getFullThreadDiff`: the diff from a thread's start to a checkpoint.
         OrchestrationGetFullThreadDiff = "orchestration/getFullThreadDiff": FullThreadDiffParams => TurnDiffResult;
+        /// `git/reviewCommits`: a thread's commits since its base, for the Changes view. Gated on
+        /// the `reviewScopes` capability, like `git/reviewDiff`.
+        GitReviewCommits = "git/reviewCommits": ReviewCommitsParams => ReviewCommitsResult;
+        /// `git/reviewDiff`: a thread's branch against its base, its uncommitted changes, or one
+        /// commit, as a diff. Fails with `invalidParams` when the thread has no folder of its own,
+        /// no base for the branch, or no such commit.
+        GitReviewDiff = "git/reviewDiff": ReviewDiffParams => TurnDiffResult;
         /// `bundle/prepare`: bundles a run's branch, pinned to its tip, for the home plxd to read
         /// (0057). Gated on the `peerGit` capability, like every `bundle/*` method and
         /// `git/startMerge`. Fails with `bundleTooLarge` over 64 MiB.

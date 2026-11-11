@@ -529,7 +529,69 @@ pub struct FullThreadDiffParams {
     pub ignore_whitespace: Option<bool>,
 }
 
-/// Result of `orchestration/getTurnDiff` and `orchestration/getFullThreadDiff`.
+/// Params of `git/reviewCommits`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommitsParams {
+    /// The thread: its run id.
+    pub thread_id: RunId,
+}
+
+/// A commit of a thread's branch, for review.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommit {
+    /// Its full hash.
+    pub sha: String,
+    /// Its message's first line.
+    pub subject: String,
+    /// Its author's name.
+    pub author: String,
+    /// When it was committed, in RFC 3339.
+    pub committed_at: String,
+}
+
+/// Result of `git/reviewCommits`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCommitsResult {
+    /// Whether the thread's folder has a base to compare its branch with. Without one, it has
+    /// only uncommitted changes to show.
+    pub has_base: bool,
+    /// The newest 100 commits since the base, newest first.
+    pub commits: Vec<ReviewCommit>,
+}
+
+/// What `git/reviewDiff` compares in a thread's folder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReviewScope {
+    /// The branch's latest commit against its base.
+    Branch,
+    /// The folder's files as they are now against its latest commit, untracked files included.
+    Uncommitted,
+    /// One commit against its parent.
+    Commit {
+        /// Its hash.
+        sha: String,
+    },
+}
+
+/// Params of `git/reviewDiff`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewDiffParams {
+    /// The thread: its run id.
+    pub thread_id: RunId,
+    /// What it compares.
+    pub scope: ReviewScope,
+}
+
+/// Result of `orchestration/getTurnDiff`, `orchestration/getFullThreadDiff`, and `git/reviewDiff`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnDiffResult {
