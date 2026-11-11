@@ -443,6 +443,13 @@
   /* Keep the logo's overlap visible on the sky. */
   --mark-overlap: #e4e4e7;
 }
+/* On blueprint paper the blue circle would vanish, so the mark is drawn as on the dev icon: white
+   circles, their overlap the paper's blue. */
+:root.dev .night-sky-text {
+  --mark-blue: #ffffff;
+  --mark-coral: #ffffff;
+  --mark-overlap: #347ff8;
+}
 :root.nightly .send-sky {
   background:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='8' cy='33' r='6'/%3E%3Ccircle cx='17' cy='29' r='7.5'/%3E%3Ccircle cx='28' cy='32' r='6.5'/%3E%3C/g%3E%3Cg fill='%23a5a1ef'%3E%3Ccircle cx='12' cy='37' r='5'/%3E%3Ccircle cx='22' cy='36' r='6'/%3E%3C/g%3E%3C/svg%3E")
@@ -462,8 +469,8 @@
 }
 :root.dev .send-sky {
   background:
-    repeating-linear-gradient(90deg, rgb(221 247 255 / 30%) 0 0.5px, transparent 0.5px 6px),
-    repeating-linear-gradient(rgb(221 247 255 / 30%) 0 0.5px, transparent 0.5px 6px),
+    repeating-linear-gradient(90deg, rgb(221 247 255 / 24%) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(rgb(221 247 255 / 24%) 0 1px, transparent 1px 6px),
     radial-gradient(circle at 72% 12%, rgb(212 246 255 / 55%), transparent 60%),
     linear-gradient(160deg, #67c2ff, #347ff8 50%, #1538d0);
   color: #ffffff;
