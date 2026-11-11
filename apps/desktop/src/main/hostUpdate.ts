@@ -28,8 +28,12 @@ export function compareVersions(a: string, b: string): number | undefined {
   return 0;
 }
 
-/** Whether plxd `plxd` is older than the app's `version`. */
-export const isOlder = (plxd: string, version: string) => (compareVersions(plxd, version) ?? 0) < 0;
+/**
+ * Whether plxd `plxd` is older than the app's `version`, so the app updates it. Never when either
+ * is Parallax (Dev)'s (0103): its plxd keeps its own data, and public releases have no dev plxd.
+ */
+export const isOlder = (plxd: string, version: string) =>
+  !plxd.endsWith("-dev") && !version.endsWith("-dev") && (compareVersions(plxd, version) ?? 0) < 0;
 
 /** How a remote host is reached, which decides how its plxd updates without `host/update`. */
 type HostKind = "ssh" | "remote";

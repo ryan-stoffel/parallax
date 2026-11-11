@@ -237,6 +237,14 @@ impl SelfUpdate {
         now: bool,
     ) -> Result<HostUpdateResult, ErrorObject> {
         let failed = |message: String| ErrorObject::parallax(ErrorKind::HostUpdateFailed, message);
+        // Parallax (Dev)'s plxd keeps its own data and updates only with its own app (0103), so
+        // another computer's app, on another channel, can't put its plxd in.
+        if self.current.ends_with("-dev") {
+            return Err(failed(format!(
+                "plxd {} is Parallax (Dev)'s, which updates with its own app.",
+                self.current
+            )));
+        }
         let wanted = parse_version(version)
             .ok_or_else(|| failed(format!("{version:?} isn't a Parallax release version.")))?;
         match parse_version(&self.current).map(|current| compare(&wanted, &current)) {
