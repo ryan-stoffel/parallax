@@ -4120,6 +4120,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   worktrees: GitFork,
   computerUse: MousePointerClick,
   connections: Server,
+  sharing: ShieldCheck,
   storage: HardDrive,
   beta: FlaskConical,
   about: Info,

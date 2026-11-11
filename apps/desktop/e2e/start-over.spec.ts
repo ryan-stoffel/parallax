@@ -128,10 +128,11 @@ const refusal = (page: Page, id: string, method: string, params: object) =>
       .then((a) => a.error && (a.error.data?.kind ?? a.error.message))`,
   );
 
-const openConnections = async (page: Page) => {
+/** Opens one of Settings' two Connections pages. */
+const openSettings = async (page: Page, name: "Computers" | "Sharing & access") => {
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Connections" }).click();
+  await page.getByRole("button", { name, exact: true }).click();
 };
 
 let mini: Launched | undefined;
@@ -200,12 +201,14 @@ test("a removed device, then a read-only one, starts over with a new key and get
   await signIn(laptop, fake.issuer);
   const key = () => device.evaluate<string>(`window.parallax.deviceKey()`);
   const firstKey = await key();
-  await openConnections(device);
+  // The laptop's computers, where its key's standing shows, are on Computers.
+  await openSettings(device, "Computers");
   const startOver = device.getByRole("button", { name: "Start over with a new key" });
   await expect(startOver).toHaveCount(0);
 
   // The mini removes it. Its session ends, and its sign-in is refused for good.
-  await openConnections(host);
+  // The devices with access to the mini are on its Sharing & access.
+  await openSettings(host, "Sharing & access");
   await host.getByRole("button", { name: "Revoke" }).click();
   await expect(
     device.getByRole("status").filter({ hasText: "This computer was removed" }),

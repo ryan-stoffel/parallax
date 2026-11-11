@@ -59,6 +59,7 @@ import { BrowserSettings } from "./settings/BrowserSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { BetaSettings } from "./settings/BetaSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
+import { SharingSettings } from "./settings/SharingSettings";
 import { DeviceSettings } from "./settings/DeviceSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
 import { KeybindSettings } from "./settings/KeybindSettings";
@@ -262,6 +263,8 @@ export function Settings({
           <AboutSettings />
         ) : section === "beta" ? (
           <BetaSettings />
+        ) : section === "sharing" ? (
+          <SharingSettings />
         ) : (
           <ConnectionSettings />
         )}

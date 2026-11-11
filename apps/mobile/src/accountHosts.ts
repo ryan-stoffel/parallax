@@ -132,9 +132,9 @@ export function relayProblem(status: number | undefined, usage?: RelayUsage): st
     const cap = relayCap("That computer", usage);
     return cap?.reached ? cap.body : "Too many connections to that computer this minute. Try again shortly.";
   }
-  if (status === 401 || status === 403) return "Parallax Relay didn't take this phone's sign-in.";
-  if (status === 404) return "Parallax Relay doesn't know that computer. Run npx plx-cli connect --channel nightly on it.";
-  return `Parallax Relay refused the connection (${status}).`;
+  if (status === 401 || status === 403) return "Parallax Connect didn't take this phone's sign-in.";
+  if (status === 404) return "Parallax Connect doesn't know that computer. Run npx plx-cli connect --channel nightly on it.";
+  return `Parallax Connect refused the connection (${status}).`;
 }
 
 /** What the account's list last said of each host's cap, for a refusal of its stream. */
@@ -429,7 +429,7 @@ export class AccountHosts {
       };
     }
     const token = await this.token();
-    if (!token) throw new Error("Sign in to reach your computers through Parallax Relay.");
+    if (!token) throw new Error("Sign in to reach your computers through Parallax Connect.");
     const relay = RELAY_URL.replace(/^http/, "ws");
     const bridge = await openRelay(`${relay}/v1/hosts/${hostId}/connect`, token);
     return {

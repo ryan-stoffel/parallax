@@ -38,7 +38,7 @@ export function PageTitle({
 }) {
   return (
     <header className="mb-8">
-      <div className="flex min-h-8 items-center justify-between gap-4">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h1 className="text-heading font-semibold">{title}</h1>
         {action}
       </div>

@@ -19,10 +19,16 @@ export type RouteChoices = {
   addedRoutes?: string[];
   /** The user's order, the relay included. Without one, direct routes race as equals. */
   routeOrder?: string[];
+  /** Reported routes the user removed: never tried from this device, until a reset or an add. */
+  hiddenRoutes?: string[];
 };
 
-/** A change the user makes to a computer's routes. */
-export type RouteEdit = { add: string } | { remove: string } | { move: string; by: -1 | 1 };
+/** A change the user makes to a computer's routes. `reset` brings back hidden routes and the default order. */
+export type RouteEdit =
+  | { add: string }
+  | { remove: string }
+  | { move: string; by: -1 | 1 }
+  | { reset: true };
 
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const NAME =
@@ -39,7 +45,8 @@ export function parseRoute(typed: string): { route: string } | { error: string }
   if (!text) return { error: "Enter an address, with a port if it isn't 7341." };
   if (text.includes("/"))
     return { error: "Enter only the address and port, with no https:// or path." };
-  if (text.toLowerCase().startsWith(RELAY)) return { error: "Parallax Relay is already a route." };
+  if (text.toLowerCase().startsWith(RELAY))
+    return { error: "Parallax Connect is already a route." };
   const bracketed = /^\[([^\]]*)\](?::(.*))?$/.exec(text);
   const parts = text.split(":");
   const [host, port] = bracketed
@@ -71,14 +78,16 @@ function isIpv6(host: string): boolean {
  * The routes to try for computer `hostId`, best first, each once: those it reports then those added,
  * then the relay, or the user's order. A route that order doesn't know goes after its last direct
  * one, so a new address can't jump ahead of what the user chose, and one it knows that's gone just
- * isn't listed, and takes its place back if it returns.
+ * isn't listed, and takes its place back if it returns. A hidden route is never listed.
  */
 export function routeList(
   hostId: string,
-  { routes, addedRoutes, routeOrder }: RouteChoices,
+  { routes, addedRoutes, routeOrder, hiddenRoutes }: RouteChoices,
 ): string[] {
   const relay = `${RELAY}${hostId}`;
-  const direct = [...new Set([...routes, ...(addedRoutes ?? [])])];
+  const direct = [...new Set([...routes, ...(addedRoutes ?? [])])].filter(
+    (route) => !hiddenRoutes?.includes(route),
+  );
   const order = [...new Set(routeOrder ?? [])];
   if (!order.includes(relay)) order.push(relay);
   const fresh = direct.filter((route) => !order.includes(route));
@@ -100,38 +109,66 @@ export function routesAhead(list: string[], route: string, ordered: boolean): st
 }
 
 /**
- * `choices`' added routes and order after `edit` of computer `hostId`, or why it can't be done, for
- * people. Only an added route can be removed: a computer reports its own again, and the relay is
- * what reaches it from anywhere. An order that's back to the default isn't kept, so direct routes
+ * `choices`' added routes, order and hidden routes after `edit` of computer `hostId`, or why it
+ * can't be done, for people. Removing an added route forgets it. Removing one the computer reports
+ * hides it on this device, since it would report it again, and adding it back unhides it. The relay
+ * can't be removed: it's what reaches the computer from anywhere. Reset brings back every hidden
+ * route and the default order. An order that's back to the default isn't kept, so direct routes
  * race as equals again.
  */
 export function editRoutes(
   hostId: string,
   choices: RouteChoices,
   edit: RouteEdit,
-): Pick<RouteChoices, "addedRoutes" | "routeOrder"> | { error: string } {
+): Pick<RouteChoices, "addedRoutes" | "routeOrder" | "hiddenRoutes"> | { error: string } {
   const added = choices.addedRoutes ?? [];
+  const hidden = choices.hiddenRoutes ?? [];
   const list = routeList(hostId, choices);
+  const kept = { addedRoutes: choices.addedRoutes, hiddenRoutes: choices.hiddenRoutes };
+  if ("reset" in edit)
+    return { addedRoutes: choices.addedRoutes, routeOrder: undefined, hiddenRoutes: undefined };
   if ("add" in edit) {
     const parsed = parseRoute(edit.add);
     if ("error" in parsed) return parsed;
     if (list.some((route) => withPort(route) === parsed.route))
       return { error: "That route is already in the list." };
-    return { addedRoutes: [...added, parsed.route], routeOrder: choices.routeOrder };
+    const back = hidden.find((route) => withPort(route) === parsed.route);
+    // Unhidden, it's listed again while the computer still reports it, and added if it doesn't.
+    if (back && choices.routes.includes(back))
+      return {
+        ...kept,
+        hiddenRoutes: few(hidden.filter((route) => route !== back)),
+        routeOrder: choices.routeOrder,
+      };
+    return {
+      ...kept,
+      ...(back && { hiddenRoutes: few(hidden.filter((route) => route !== back)) }),
+      addedRoutes: [...added, parsed.route],
+      routeOrder: choices.routeOrder,
+    };
   }
   if ("remove" in edit) {
-    if (!added.includes(edit.remove)) return { error: "Only a route you added can be removed." };
-    const addedRoutes = added.filter((route) => route !== edit.remove);
-    const routeOrder = choices.routeOrder?.filter((route) => route !== edit.remove);
-    return { addedRoutes, routeOrder };
+    const routeOrder = few(choices.routeOrder?.filter((route) => route !== edit.remove));
+    if (added.includes(edit.remove))
+      return { ...kept, addedRoutes: added.filter((route) => route !== edit.remove), routeOrder };
+    if (isRelay(edit.remove)) return { error: "Parallax Connect can't be removed." };
+    if (!list.includes(edit.remove)) return { error: "That route isn't in the list." };
+    return { ...kept, hiddenRoutes: [...hidden, edit.remove], routeOrder };
   }
   const from = list.indexOf(edit.move);
   const to = from + edit.by;
   if (from < 0 || to < 0 || to >= list.length) return { error: "That route can't move there." };
   [list[from], list[to]] = [list[to]!, list[from]!];
-  const usual = routeList(hostId, { routes: choices.routes, addedRoutes: added });
+  const usual = routeList(hostId, {
+    routes: choices.routes,
+    addedRoutes: added,
+    hiddenRoutes: hidden,
+  });
   return {
-    addedRoutes: choices.addedRoutes,
+    ...kept,
     routeOrder: list.join("\n") === usual.join("\n") ? undefined : list,
   };
 }
+
+/** `list`, or undefined once it's empty, so nothing empty is kept. */
+const few = (list: string[] | undefined) => (list?.length ? list : undefined);

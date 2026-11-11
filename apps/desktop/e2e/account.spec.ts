@@ -179,10 +179,10 @@ test("a new account computer takes its code in a dialog, then installs and signs
   );
   expect(await run(launched, { hostId, cli: "claude" })).toContain("build-box claude");
 
-  // Settings > Connections lists it, connected.
+  // Settings > Computers lists it, connected.
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Connections" }).click();
+  await page.getByRole("button", { name: "Computers", exact: true }).click();
   const card = page.locator(`li[data-device="${hostId}"]`);
   await expect(card).toContainText("build-box");
   await expect(card).toContainText("Connected");
@@ -202,32 +202,33 @@ test("an added route reaches a computer, a reorder moves it, and another key get
 
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Connections" }).click();
+  await page.getByRole("button", { name: "Computers", exact: true }).click();
+  // Its card opens to its routes: only the relay, so far.
   const card = page.locator(`li[data-device="${hostId}"]`);
-  await card.getByRole("button", { name: "build-box options" }).click();
-  await card.getByRole("menuitem", { name: "Routes" }).click();
-  const dialog = page.getByRole("dialog", { name: "Routes to build-box" });
+  await card.getByRole("button", { name: "1 route to build-box" }).click();
+  const routes = card.locator("li[data-route]");
   const shot = (name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
-  const row = (route: string) => dialog.locator(`li[data-route="${route}"]`);
-  const address = dialog.getByRole("textbox", { name: "Address" });
+  const row = (route: string) => card.locator(`li[data-route="${route}"]`);
+  await card.getByRole("button", { name: "Add route" }).click();
+  const address = card.getByRole("textbox", { name: "Address" });
   const add = async (text: string) => {
     await address.fill(text);
-    await dialog.getByRole("button", { name: "Add route" }).click();
+    await card.getByRole("button", { name: "Add", exact: true }).click();
   };
 
   // Bad input says what's wrong, and the relay can't be removed.
   await add("");
-  await expect(dialog.getByRole("alert")).toHaveText(/Enter an address/);
+  await expect(card.getByRole("alert")).toHaveText(/Enter an address/);
   await add("https://build-box.example.com");
-  await expect(dialog.getByRole("alert")).toHaveText(/no https:\/\/ or path/);
-  await expect(row(`relay:${box.hostId}`)).toContainText("Parallax Relay");
-  await expect(dialog.getByRole("button", { name: "Remove Parallax Relay" })).toHaveCount(0);
+  await expect(card.getByRole("alert")).toHaveText(/no https:\/\/ or path/);
+  await expect(row(`relay:${box.hostId}`)).toContainText("Parallax Connect");
+  await expect(card.getByRole("button", { name: "Remove Parallax Connect" })).toHaveCount(0);
   await shot("routes-bad-input");
 
   // A DNS name is what first reaches it: its code is asked for, and it connects over that.
   const named = `localhost:${port}`;
   await add(named);
-  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect(card.getByRole("alert")).toHaveCount(0);
   const { code } = await box.result<{ code: string }>("access/setupCode", {});
   const prompt = page.getByRole("dialog", { name: "Add build-box" });
   await prompt.getByRole("textbox", { name: "Code" }).fill(code);
@@ -236,15 +237,14 @@ test("an added route reaches a computer, a reorder moves it, and another key get
     .getByRole("dialog", { name: "build-box is added" })
     .getByRole("button", { name: "Done" })
     .click();
-  await expect(dialog.getByText("Connected")).toBeVisible();
+  await expect(routes.filter({ hasText: "Connected" })).toHaveCount(1);
   await expect(row(named)).toContainText("Added");
 
   // Pairing learned the name as a route too, until build-box's own report replaces that, which puts
   // what it reports above the name. Moving routes before then would order the wrong list.
   const relay = `relay:${box.hostId}`;
   const reported = (await box.result<{ routes: string[] }>("relay/id", {})).routes;
-  const shown = () =>
-    dialog.locator("li").evaluateAll((rows) => rows.map((li) => li.getAttribute("data-route")));
+  const shown = () => routes.evaluateAll((rows) => rows.map((li) => li.getAttribute("data-route")));
   await expect
     .poll(shown)
     .toEqual([...reported.filter((route) => !route.startsWith("relay:")), named, relay]);
@@ -253,8 +253,11 @@ test("an added route reaches a computer, a reorder moves it, and another key get
   // which fails at once here, the name is next and the connection moves to it.
   const moveToTop = (route: string) =>
     expect(async () => {
-      if ((await dialog.locator("li").first().getAttribute("data-route")) === route) return;
-      await row(route).getByRole("button", { name: /up$/ }).click({ timeout: 1000 });
+      if ((await routes.first().getAttribute("data-route")) === route) return;
+      // Its handle, moved one step with the keyboard.
+      await row(route)
+        .getByRole("button", { name: /^Move / })
+        .press("ArrowUp", { timeout: 1000 });
       throw new Error("one step up");
     }).toPass();
   await moveToTop(named);
@@ -385,11 +388,13 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   // The setting: on each computer, and it and pairing change each other.
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Connections" }).click();
+  await page.getByRole("button", { name: "Computers", exact: true }).click();
   // The fake tailscale kept the tailnet's real computers out.
-  await expect(page.locator("li[data-device]")).toHaveCount(2);
+  await expect(page.locator("li[data-device]")).toHaveCount(1);
+  // This computer's is on Sharing & access, and another's is in its card on Computers.
+  await page.getByRole("button", { name: "Sharing & access" }).click();
   const here = page.getByRole("switch", { name: "Let agents on my other computers work here" });
-  const pairing = page.getByRole("switch", { name: "Pair computers on this network" });
+  const pairing = page.getByRole("switch", { name: "Pair on this network" });
   await expect(here).not.toBeChecked();
   await here.click();
   await expect(here).toBeChecked();
@@ -397,6 +402,9 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   await pairing.click();
   await expect(pairing).not.toBeChecked();
   await expect(here).not.toBeChecked();
+  // build-box's is in its card, opened.
+  await page.getByRole("button", { name: "Computers", exact: true }).click();
+  await page.getByRole("button", { name: /routes? to build-box$/ }).click();
   const there = page.getByRole("switch", {
     name: "Let agents on my other computers work on build-box",
   });
@@ -423,8 +431,10 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   await box.result("providers/save", runnable("both"));
   await request("local", "providers/save", runnable("both"));
 
-  // The Load Balancer. Both plxds read this one machine, so load can't decide here: each case
-  // leaves one computer that can take the thread, and it may be too busy to, when it says so.
+  // The Load Balancer, under the computers. Both plxds read this one machine, so load can't decide
+  // here: each case leaves one computer that can take the thread, and it may be too busy to, when it
+  // says so.
+  await page.getByRole("button", { name: "Computers", exact: true }).click();
   await page.getByRole("switch", { name: "Balance new threads across my computers" }).click();
   await page.getByRole("switch", { name: "Balance new threads onto studio" }).click();
   const often = "How often build-box takes new threads";

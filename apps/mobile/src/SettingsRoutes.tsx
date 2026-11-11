@@ -64,10 +64,10 @@ export function ComputerRoutesScreen({ route }: NativeStackScreenProps<SettingsS
     >
       <Section
         title="Tried in this order"
-        footer="Until you move one, direct routes start together and Parallax Relay 200 ms later. Saved on this phone. Parallax Relay stays, as the route that works from anywhere."
+        footer="Until you move one, direct routes start together and Parallax Connect 200 ms later. Saved on this phone. Parallax Connect stays, as the route that works from anywhere."
       >
         {list.map((each, i) => {
-          const name = isRelay(each) ? "Parallax Relay" : each;
+          const name = isRelay(each) ? "Parallax Connect" : each;
           return (
             <Row
               key={each}

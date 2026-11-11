@@ -25,6 +25,8 @@ export type SavedAccount = {
   addedRoutes?: string[];
   /** The user's order of all its routes, the relay included, once they move one. */
   routeOrder?: string[];
+  /** Routes it reports that the user removed in this app, which it never tries. */
+  hiddenRoutes?: string[];
   icon?: DeviceIcon;
   /** Turned off in this app: listed, with no connection. */
   off?: true;
@@ -71,8 +73,18 @@ export const directRoutes = (routes: unknown): string[] =>
 export function checkAccounts(accounts: unknown, ids: Set<string>): void {
   if (!Array.isArray(accounts)) throw new Error("`accounts` isn't a list");
   for (const entry of accounts as unknown[]) {
-    const { hostId, name, routes, addedRoutes, routeOrder, icon, off, removed, pairRuns } =
-      (entry ?? {}) as Record<string, unknown>;
+    const {
+      hostId,
+      name,
+      routes,
+      addedRoutes,
+      routeOrder,
+      hiddenRoutes,
+      icon,
+      off,
+      removed,
+      pairRuns,
+    } = (entry ?? {}) as Record<string, unknown>;
     const where = `account computer ${JSON.stringify(entry)}`;
     if (!isRelayId(hostId) || ids.has(accountId(hostId))) throw new Error(`${where} has a bad id`);
     ids.add(accountId(hostId));
@@ -85,6 +97,11 @@ export function checkAccounts(accounts: unknown, ids: Set<string>): void {
       throw new Error(`${where} has bad addedRoutes`);
     if (routeOrder !== undefined && !(Array.isArray(routeOrder) && routeOrder.every(isRoute)))
       throw new Error(`${where} has a bad routeOrder`);
+    if (
+      hiddenRoutes !== undefined &&
+      !(Array.isArray(hiddenRoutes) && hiddenRoutes.every((r) => isRoute(r) && !isRelay(r)))
+    )
+      throw new Error(`${where} has bad hiddenRoutes`);
     if (icon !== undefined && !isDeviceIcon(icon)) throw new Error(`${where} has a bad icon`);
     if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
       throw new Error(`${where} has a bad off or removed`);

@@ -210,9 +210,7 @@ const openConnections = async () => {
       new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: mac, ctrlKey: !mac }),
     );
   });
-  await click(
-    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
-  );
+  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Computers")!);
 };
 const signIn = () =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === "Sign in");
