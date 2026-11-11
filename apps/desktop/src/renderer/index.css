@@ -917,8 +917,9 @@ body {
   mask: none;
 }
 
-/* A hidden sidebar's peek (App.tsx): the window's left edge shows it as a card floating over the
-   workspace, opaque even on glass, until the pointer leaves it. */
+/* A hidden sidebar's peek (App.tsx): the window's left edge shows it floating over the workspace,
+   opaque even on glass, until the pointer leaves it. It meets the window's top, bottom, and left
+   edges, so the pointer can't leave the edge strip without crossing it. */
 .sidebar-peek-edge {
   position: fixed;
   inset: 0 auto 0 0;
@@ -929,11 +930,11 @@ body {
 #sidebar[data-peek] {
   --pane-sidebar: var(--sidebar);
   position: fixed;
-  inset: 6px auto 6px 6px;
+  inset: 0 auto 0 0;
   z-index: 45;
   overflow: clip;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  border-right: 1px solid var(--border);
+  border-radius: 0 12px 12px 0;
   box-shadow: 0 12px 40px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 50%));
 }
 #sidebar[data-peek][hidden] {

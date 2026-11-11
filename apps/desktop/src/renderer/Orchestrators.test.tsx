@@ -920,7 +920,7 @@ test("a hidden sidebar peeks from the window's left edge until the pointer leave
 
   pointer("mouseover", document.querySelector(".sidebar-peek-edge")!);
   expect(sidebar.hidden).toBe(false);
-  expect(sidebar.dataset.peek).toBe("true");
+  expect(sidebar.dataset["peek"]).toBe("true");
   expect(workspace.getAttribute("data-sidebar-open")).toBe("false");
 
   pointer("mouseout", sidebar);
@@ -929,7 +929,7 @@ test("a hidden sidebar peeks from the window's left edge until the pointer leave
   pointer("mouseover", document.querySelector(".sidebar-peek-edge")!);
   await click(sidebar.querySelector('button[aria-label="Show sidebar"]'));
   expect(sidebar.hidden).toBe(false);
-  expect(sidebar.dataset.peek).toBeUndefined();
+  expect(sidebar.dataset["peek"]).toBeUndefined();
   expect(workspace.getAttribute("data-sidebar-open")).toBe("true");
   expect(document.querySelector(".sidebar-peek-edge")).toBeNull();
 });
