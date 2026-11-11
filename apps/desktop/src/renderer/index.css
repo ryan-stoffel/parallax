@@ -963,9 +963,9 @@ body {
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
    than an opaque block, so nothing reads as a patch. Text keeps its color, solid. The sidebar is
-   a denser pane of the same glass, as a macOS sidebar is, and what's raised over the glass (the
-   composer, menus, dialogs, cards) is a lighter frosted layer with a lit top edge rather than a
-   dark slab. Unlayered, so these win over Tailwind's utilities. */
+   a denser pane of the same glass, as a macOS sidebar is. The composer and modal dialogs are a
+   lighter frosted layer with a lit top edge, and what floats over the page's text (menus, cards)
+   is solid with that edge. Unlayered, so these win over Tailwind's utilities. */
 :root.translucent {
   --pane: transparent;
   --pane-sidebar: color-mix(in srgb, var(--sidebar) 40%, transparent);
@@ -1021,19 +1021,22 @@ body {
   }
 }
 /* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
-   shadow (tooltips, the find bar, suggestions, hover cards). */
+   shadow (tooltips, the find bar, suggestions, hover cards). Solid, with a lit top edge: in a
+   see-through window a backdrop-filter draws its blur over what's under it rather than in its
+   place, so the page's text would stay sharp through any fill short of solid. */
 :root.translucent
   :is([popover], dialog, .shadow-composer):is(.bg-background, .bg-surface):not(
     :where([class*="hover:bg-"]:hover)
   ) {
-  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
-  backdrop-filter: var(--glass);
+  background-color: var(--raised);
   box-shadow: var(--glass-edge), var(--shadow-composer);
 }
-/* Menus and dialogs hold rows of text over whatever is under them, so they're denser. */
+/* A modal dialog stays glass: the app behind it blurs itself (#root's filter, below), so
+   nothing sharp is left under it. */
 :root.translucent
-  :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
+  dialog:modal:is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--raised) 92%, transparent);
+  backdrop-filter: var(--glass);
 }
 /* macOS shows black behind a full screen window, so the page paints a copy of the wallpaper under
    the glass (main.tsx). The root's own fill keeps body's tint on body, above the copy, rather than
@@ -1702,11 +1705,14 @@ body {
 :root.translucent .composer-tabs {
   border-color: var(--composer-edge);
 }
-/* The box's own menu is solid: inside the box's backdrop-filter, its own can't reach the page, so
-   the transcript would stay sharp through it. */
-:root.translucent .composer-shell > .shadow-composer.bg-surface {
+/* The cards over the box, pinned or opened from its tabs (a secret, an approval, a question, the
+   plan), are solid with the box's edge: the transcript scrolls under them, and its text would stay
+   sharp through a see-through fill, as through what floats (above). A card that wraps another, as
+   a plan's approval wraps the proposed plan, marks the wrapper, so the plan in the transcript
+   keeps a pane's fill. */
+:root.translucent :is(.composer-card, .composer-card > *).bg-surface {
   background-color: var(--raised);
-  backdrop-filter: none;
+  border-color: var(--composer-edge);
 }
 /* The bars over and under the box are one frame with it: their labels share the controls' weight,
    and a bar's own titles stay heavier (ComposerTabs.tsx). */

@@ -770,7 +770,7 @@ function ApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className="composer-card flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
     >
       <div className="flex items-center gap-2 px-4 pt-3 text-body">
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
@@ -861,7 +861,7 @@ function ComputerApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="flex flex-col rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className="composer-card flex flex-col rounded-xl border border-border bg-surface focus-visible:outline-none"
     >
       <div className="flex items-start gap-3 px-4 pt-3.5">
         <span
@@ -933,7 +933,7 @@ function PlanApprovalCard({
       tabIndex={-1}
       aria-label="Plan approval"
       aria-describedby={statusId}
-      className="flex min-h-0 flex-col rounded-xl focus-visible:outline-none"
+      className="composer-card flex min-h-0 flex-col rounded-xl focus-visible:outline-none"
     >
       <ProposedPlan
         id={asked.approval.key}
