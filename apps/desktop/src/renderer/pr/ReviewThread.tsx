@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { icons } from "../icons";
 import { useSticky } from "../sticky";
@@ -7,7 +7,7 @@ import { GithubMarkdown } from "./GithubMarkdown";
 import type { ThreadView } from "./model";
 import { Suggestion, type SuggestionActions, SuggestionButtons } from "./Suggestion";
 import { linesUnderThread, splitSuggestions } from "./suggestions";
-import { ago } from "./parts";
+import { ago, Avatar } from "./parts";
 
 /**
  * A review thread: its file and lines, Outdated or Resolved, each comment, and, where plxd writes
@@ -39,89 +39,129 @@ export function ReviewThread({
   suggestions?: SuggestionActions;
 }) {
   const [reply, setReply] = useSticky(`prReply/${thread.id ?? thread.url}`, "");
+  const [replying, setReplying] = useState(false);
+  const [open, setOpen] = useState(!thread.resolved);
+  useEffect(() => setOpen(!thread.resolved), [thread.resolved]);
   const [sending, setSending] = useState<"reply" | "resolve">();
   const send = async (what: "reply" | "resolve") => {
     setSending(what);
     const ok = what === "reply" ? await onReply!(reply.trim()) : await onResolve!();
     setSending(undefined);
-    if (ok && what === "reply") setReply("");
+    if (ok && what === "reply") {
+      setReply("");
+      setReplying(false);
+    }
   };
   const lines = thread.startLine ? `${thread.startLine}-${thread.line}` : thread.line;
   const where = thread.path && `${thread.path}${lines ? `:${lines}` : ""}`;
   const span = thread.startLine && `Lines ${thread.startLine} to ${thread.line}`;
+  const canAct = (onReply || onResolve) && !thread.resolved && !thread.pending && thread.id;
+  const writing = replying || !!reply;
+  const first = thread.comments[0];
   return (
     <article
       aria-label={where ? `Thread on ${where}` : "Review thread"}
-      className="overflow-hidden rounded-xl border border-border bg-surface font-sans"
+      className="rounded-xl border border-border bg-surface font-sans shadow-xs"
     >
       {(!bare || span || thread.outdated || thread.resolved) && (
-        <header className="flex h-9 items-center gap-2 border-b border-border pr-1.5 pl-3">
-          <icons.comment aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-          <span className="min-w-0 flex-1 truncate font-mono text-meta text-muted-foreground">
-            {bare ? span : (where ?? "Conversation")}
+        <header
+          className={`flex min-h-8 items-center gap-2 px-3 pt-1.5 text-meta text-faint-foreground ${open ? "" : "pb-1.5"}`}
+        >
+          {thread.resolved && (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-label={open ? "Hide resolved thread" : "Show resolved thread"}
+              onClick={() => setOpen(!open)}
+              className="grid size-5 shrink-0 place-items-center rounded-md hover:bg-hover"
+            >
+              <icons.next
+                aria-hidden
+                className={`size-3.5 transition-transform duration-fast ${open ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
+          <span className="min-w-0 flex-1 truncate">
+            {bare ? span : <span className="font-mono">{where ?? "Conversation"}</span>}
+            {!open && first && (
+              <span className="text-muted-foreground">
+                {bare && span ? " · " : !bare ? " · " : ""}
+                {first.author}: {first.body.split("\n")[0]}
+              </span>
+            )}
           </span>
           {thread.outdated && <Badge tone="warning">Outdated</Badge>}
           {thread.resolved && <Badge tone="success">Resolved</Badge>}
-          {thread.url && !thread.pending && !bare && (
-            <IconButton size="sm" label="Open on GitHub" onClick={() => onOpen(thread.url!)}>
-              <icons.external aria-hidden />
-            </IconButton>
-          )}
         </header>
       )}
-      <ol className="flex flex-col gap-3 px-3 py-3">
-        {thread.comments.map((c, i) => (
-          <ThreadComment
-            key={c.id ?? i}
-            comment={c}
-            thread={thread}
-            repo={repo}
-            onOpen={onOpen}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            suggestions={suggestions}
-          />
-        ))}
-      </ol>
-      {(onReply || onResolve) && !thread.resolved && !thread.pending && thread.id && (
+      {open && (
+        <ol className="flex flex-col gap-3 px-3 py-2.5">
+          {thread.comments.map((c, i) => (
+            <ThreadComment
+              key={c.id ?? i}
+              comment={c}
+              thread={thread}
+              repo={repo}
+              onOpen={onOpen}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              suggestions={suggestions}
+            />
+          ))}
+        </ol>
+      )}
+      {open && canAct && !writing && (
+        <div className="flex items-center gap-1 px-2 pb-2 pl-9">
+          {onReply && (
+            <Button size="sm" onClick={() => setReplying(true)}>
+              <icons.reply aria-hidden />
+              Reply
+            </Button>
+          )}
+          {onResolve && (
+            <Button size="sm" disabled={!!sending} onClick={() => void send("resolve")}>
+              <icons.done aria-hidden />
+              {sending === "resolve" ? "Resolving…" : "Resolve"}
+            </Button>
+          )}
+        </div>
+      )}
+      {open && canAct && writing && onReply && (
         <form
-          className="flex flex-col gap-2 border-t border-border px-3 py-2.5"
+          className="flex flex-col gap-2 px-3 pb-2.5 pl-10"
           onSubmit={(e) => {
             e.preventDefault();
-            if (reply.trim() && onReply) void send("reply");
+            if (reply.trim()) void send("reply");
           }}
         >
-          {onReply && (
-            <textarea
-              aria-label="Reply"
-              placeholder="Reply…"
-              rows={1}
-              value={reply}
-              onChange={(e) => setReply(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
-                  e.currentTarget.form?.requestSubmit();
-              }}
-              className="field-sizing-content max-h-40 min-h-8 w-full resize-none rounded-md border border-border bg-transparent px-2.5 py-1.5 text-body placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
-            />
-          )}
+          <textarea
+            aria-label="Reply"
+            placeholder="Reply…"
+            autoFocus
+            rows={2}
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+                e.currentTarget.form?.requestSubmit();
+              if (e.key === "Escape" && !reply) setReplying(false);
+            }}
+            className="field-sizing-content max-h-40 min-h-14 w-full resize-none rounded-md border border-border bg-transparent px-2.5 py-1.5 text-body placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          />
           <div className="flex justify-end gap-1.5">
-            {onResolve && (
-              <Button size="sm" disabled={!!sending} onClick={() => void send("resolve")}>
-                <icons.done aria-hidden />
-                {sending === "resolve" ? "Resolving…" : "Resolve"}
-              </Button>
-            )}
-            {onReply && (
-              <Button
-                size="sm"
-                variant="outline"
-                type="submit"
-                disabled={!reply.trim() || !!sending}
-              >
-                {sending === "reply" ? "Replying…" : "Reply"}
-              </Button>
-            )}
+            <Button
+              size="sm"
+              disabled={!!sending}
+              onClick={() => {
+                setReply("");
+                setReplying(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" type="submit" disabled={!reply.trim() || !!sending}>
+              {sending === "reply" ? "Replying…" : "Reply"}
+            </Button>
           </div>
         </form>
       )}
@@ -166,18 +206,21 @@ function ThreadComment({
   const first = parts.findIndex((part) => "suggestion" in part);
   return (
     <li>
-      <div className="flex min-h-6 items-center gap-1.5 text-meta">
+      <div className="group/comment flex min-h-5 items-center gap-1.5 text-meta">
+        <Avatar login={c.author ?? "?"} />
         <span className="font-medium text-foreground">{c.author ?? "Someone"}</span>
         {c.pending ? (
           <Badge tone="warning">Pending</Badge>
         ) : (
-          c.createdAt && <span className="text-faint-foreground">· {ago(c.createdAt)}</span>
+          c.createdAt && <span className="text-faint-foreground">{ago(c.createdAt)}</span>
         )}
         <span className="flex-1" />
         {c.url && !c.pending && (
-          <IconButton size="sm" label="Open on GitHub" onClick={() => onOpen(c.url!)}>
-            <icons.external aria-hidden />
-          </IconButton>
+          <span className="opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
+            <IconButton size="sm" label="Open on GitHub" onClick={() => onOpen(c.url!)}>
+              <icons.external aria-hidden />
+            </IconButton>
+          </span>
         )}
         {mine && onEdit && draft === undefined && (
           <IconButton size="sm" label="Edit comment" onClick={() => setDraft(c.body)}>
@@ -197,7 +240,7 @@ function ThreadComment({
       </div>
       {draft !== undefined ? (
         <form
-          className="mt-1 flex flex-col gap-2"
+          className="mt-1 flex flex-col gap-2 pl-7"
           onSubmit={(e) => {
             e.preventDefault();
             void save();
@@ -224,7 +267,7 @@ function ThreadComment({
           </div>
         </form>
       ) : (
-        <div className="mt-1 flex flex-col gap-2 text-body [&_.markdown]:text-body">
+        <div className="mt-0.5 flex flex-col gap-2 pl-7 text-body [&_.markdown]:text-body">
           {parts.map((part, i) =>
             "markdown" in part ? (
               <GithubMarkdown key={i} text={part.markdown} repo={repo} onOpen={onOpen} />
@@ -237,6 +280,7 @@ function ThreadComment({
                 )}
                 after={part.suggestion}
                 start={thread.startLine ?? thread.line ?? 1}
+                path={thread.path}
               >
                 {i === first && suggestions && c.id && !c.pending && (
                   <SuggestionButtons commentId={c.id} thread={thread} actions={suggestions} />
