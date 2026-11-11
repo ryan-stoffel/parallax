@@ -937,6 +937,12 @@ body {
   border-radius: 0 12px 12px 0;
   box-shadow: 0 12px 40px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 50%));
 }
+/* A drag region is outside the page to Electron, so reaching for the peek's top row would leave
+   the peek and hide it. Electron also adds drag regions in page order, so the workspace's top row,
+   after the sidebar, drags through the peek's. No top row drags while the peek shows. */
+:root:has(#sidebar[data-peek]:not([hidden])) .titlebar {
+  -webkit-app-region: no-drag;
+}
 #sidebar[data-peek][hidden] {
   margin-left: calc(-1 * var(--sidebar-width) - 24px);
 }
