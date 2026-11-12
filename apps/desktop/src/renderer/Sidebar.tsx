@@ -24,6 +24,7 @@ import {
   FolderPlus,
   GitBranch,
   GitFork,
+  MonitorUp,
   GitMerge,
   Globe,
   HardDrive,
@@ -215,6 +216,7 @@ import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
 import { RemoteControlBadge } from "./ClaudeRemoteControl";
 import { isRemoteControl } from "./remoteControl";
+import { MoveThread } from "./MoveThread";
 
 const row =
   "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
@@ -565,6 +567,8 @@ export function ThreadList({
   const folders = mode === "traditional";
   // The thread or orchestrator the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
+  // The thread Move to another computer is moving (PLX-1538).
+  const [toMove, setToMove] = useState<Item & { kind: "thread" }>();
   // Its key, once its host says a deleted thread's worktree and branch stay on disk.
   const [keptOnDelete, setKeptOnDelete] = useState<string>();
   const [deleting, setDeleting] = useState(false);
@@ -1285,6 +1289,11 @@ export function ThreadList({
                 onSelect(item.host.id, { kind: "thread", threadId: forked });
                 return undefined;
               }
+            : undefined
+        }
+        onMove={
+          !item.orchestration && "threadMove" in view.capabilities
+            ? () => setToMove(item)
             : undefined
         }
         projectPicker={
@@ -2062,6 +2071,16 @@ export function ThreadList({
         ref={entryDialogs}
         onError={(error) => actionFailed(error, "Couldn't change the orchestrator")}
       />
+      {toMove && (
+        <MoveThread
+          hostId={toMove.host.id}
+          runId={toMove.thread.id}
+          title={toMove.title}
+          repo={toMove.repo}
+          onClose={() => setToMove(undefined)}
+          onOpen={(hostId, threadId) => onSelect(hostId, { kind: "thread", threadId })}
+        />
+      )}
       <ConfirmDialog
         ref={deleteDialog}
         title={
@@ -3343,6 +3362,7 @@ function ThreadRow({
   onOpenBeside,
   onOpenInTab,
   onFork,
+  onMove,
   projectPicker,
   onAutoResume,
   onRest,
@@ -3415,6 +3435,8 @@ function ThreadRow({
   onOpenInTab?: () => void;
   /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
   onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
+  /** Opens Move to another computer (PLX-1538), where its plxd exports threads. */
+  onMove?: () => void;
   /** The Projects it can be added to (ThreadProjectMenu.tsx), for Add to Project. */
   projectPicker?: { view: ThreadsView; projects: Repo[] };
   /** Sets its run's auto-resume override, or clears it with undefined. */
@@ -3815,6 +3837,15 @@ function ThreadRow({
                 onClick={choose(() =>
                   forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
                 )}
+              />
+            )}
+            {onMove && run && (
+              <ToolbarMenuRow
+                icon={<MonitorUp aria-hidden />}
+                label="Move to another computer…"
+                disabled={isRunning(run.status)}
+                title={isRunning(run.status) ? "Move once this turn finishes" : undefined}
+                onClick={choose(onMove)}
               />
             )}
             {autoResumable && run && (

@@ -465,8 +465,11 @@ async fn archive(
     }
 }
 
-/// The thread run `id` already imported, if it was.
-async fn imported(daemon: &Daemon, id: RunId) -> Result<Option<ThreadStartResult>, ErrorObject> {
+/// The thread run `id` already is, if it is one: an import, or a thread `thread/receive` made.
+pub(crate) async fn imported(
+    daemon: &Daemon,
+    id: RunId,
+) -> Result<Option<ThreadStartResult>, ErrorObject> {
     store(daemon, move |db| {
         let error = |e| store_error(&e);
         let (Some(thread), Some(run)) = (

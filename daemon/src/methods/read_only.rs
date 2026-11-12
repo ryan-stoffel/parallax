@@ -215,6 +215,8 @@ fn is_read(method: RequestName) -> bool {
         | M::RepoSaveScripts
         | M::ThreadStart
         | M::ThreadFork
+        | M::ThreadExport
+        | M::ThreadReceive
         | M::ThreadImportable
         | M::ThreadImport
         | M::ThreadImportChat

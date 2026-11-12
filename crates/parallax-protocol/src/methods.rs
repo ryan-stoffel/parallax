@@ -57,11 +57,11 @@ use crate::{
     DeviceOkResult, DeviceResult, DeviceScreenshotResult, DeviceSetupParams, DeviceStateParams,
     DeviceStateResult, DeviceStreamParams, DeviceStreamResult, DeviceTarget, DispatchResult,
     EventsEventParams, EventsResyncParams, EventsSubscribeParams, EventsSubscribeResult,
-    EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams, GitStatus,
-    GithubInstallParams, GithubSignIn, GithubSignInCancelParams, GithubSignInCancelResult,
-    GithubSignInParams, GithubStatus, GithubStatusParams, HostAnnounceUpdateParams,
-    HostAnnounceUpdateResult, HostFoldersParams, HostFoldersResult, HostHealthParams,
-    HostHealthResult, HostReadUploadParams, HostReadUploadResult, HostSettings,
+    EventsUnsubscribeParams, EventsUnsubscribeResult, ExportedThread, FullThreadDiffParams,
+    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
+    HostAnnounceUpdateParams, HostAnnounceUpdateResult, HostFoldersParams, HostFoldersResult,
+    HostHealthParams, HostHealthResult, HostReadUploadParams, HostReadUploadResult, HostSettings,
     HostSettingsGetParams, HostSettingsSetParams, HostUpdateParams, HostUpdateResult,
     HostUpdatingParams, HostUploadParams, HostUploadResult, HostVersionParams, HostVersionResult,
     HubAccountRemoveParams, HubAccountSetEnabledParams, HubSignIn, HubSignInCallbackParams,
@@ -104,16 +104,16 @@ use crate::{
     TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
     TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
     TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
-    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
-    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
-    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
-    TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
-    UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
-    UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
+    ThreadDeleteResult, ThreadExportParams, ThreadForkParams, ThreadHistoryParams,
+    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
+    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadReceiveParams,
+    ThreadRunsParams, ThreadRunsResult, ThreadSearchParams, ThreadSearchResult,
+    ThreadSetProjectParams, ThreadSetProjectResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
+    UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    UsageLimitsParams, UsageLimitsResult, UsageReportClaimParams, UsageReportClaimResult,
+    UsageReportReleaseParams, UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -512,6 +512,12 @@ method_table! {
         /// turns, in a workspace of the same kind (0050). Idempotent on its client-generated
         /// run id. Gated on the `threadFork` capability.
         ThreadFork = "thread/fork": ThreadForkParams => ThreadStartResult;
+        /// `thread/export`: a thread as another computer's `thread/receive` takes it, to move it
+        /// there (PLX-1538). Gated on the `threadMove` capability.
+        ThreadExport = "thread/export": ThreadExportParams => ExportedThread;
+        /// `thread/receive`: makes a thread another computer exported a thread here, at rest with
+        /// its conversation. Idempotent on the exported thread. Gated on `threadMove`.
+        ThreadReceive = "thread/receive": ThreadReceiveParams => ThreadStartResult;
         /// `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
         /// keep on the host, and Claude Code's and Codex's Remote Control sessions that ran on
         /// it (PLX-881). Gated on the `threadImport` capability.

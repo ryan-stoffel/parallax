@@ -8,15 +8,15 @@ use super::*;
 
 /// What a backend's CLI started with.
 #[derive(Clone, Debug)]
-struct Start {
-    prompt: String,
+pub(super) struct Start {
+    pub(super) prompt: String,
     /// The session it resumed or forked.
-    resume: Option<String>,
-    fork: bool,
+    pub(super) resume: Option<String>,
+    pub(super) fork: bool,
 }
 
 /// The starts a backend recorded.
-type Starts = Arc<Mutex<Vec<Start>>>;
+pub(super) type Starts = Arc<Mutex<Vec<Start>>>;
 
 /// The fake CLI as a backend named `name`, recording each start.
 struct Seen {
@@ -45,7 +45,7 @@ impl Backend for Seen {
 }
 
 /// A host whose `fake` backend, and `other` backend for another provider, record their starts.
-fn host() -> (Host, Starts, Starts) {
+pub(super) fn host() -> (Host, Starts, Starts) {
     host_running(&editing())
 }
 
@@ -67,7 +67,7 @@ fn host_running(steps: &[Step]) -> (Host, Starts, Starts) {
     (Host::start(backends), fake, other)
 }
 
-fn finished(run_id: RunId) -> impl FnMut(&EventsEventParams) -> bool {
+pub(super) fn finished(run_id: RunId) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| {
         matches!(&event.event, ParallaxEvent::AgentUpdated { run_id: id, state }
             if *id == run_id && state.status == AgentStatus::Completed)
@@ -76,7 +76,10 @@ fn finished(run_id: RunId) -> impl FnMut(&EventsEventParams) -> bool {
 
 /// Starts a thread with "Write the notes", then sends it "Now the tests", and returns it and the
 /// follow-up's turn id once both turns are done. Subscribes to its scope.
-async fn two_turns(client: &mut Conn, params: ThreadStartParams) -> (ThreadStartResult, TurnId) {
+pub(super) async fn two_turns(
+    client: &mut Conn,
+    params: ThreadStartParams,
+) -> (ThreadStartResult, TurnId) {
     let started = client.call::<ThreadStart>(params).await.unwrap();
     let run_id = started.thread.id;
     client.subscribe(0, Some(scope(started.thread.repo))).await;
@@ -99,7 +102,7 @@ fn fork_params(run_id: RunId) -> ThreadForkParams {
 }
 
 /// The `agent.output` items in run `run_id`'s log, oldest first, and its `agent.started` prompt.
-async fn transcript(client: &mut Conn, run_id: RunId) -> (String, Vec<AgentOutputItem>) {
+pub(super) async fn transcript(client: &mut Conn, run_id: RunId) -> (String, Vec<AgentOutputItem>) {
     let events = client
         .call::<AgentEvents>(AgentEventsParams {
             before: None,
@@ -130,7 +133,7 @@ async fn transcript(client: &mut Conn, run_id: RunId) -> (String, Vec<AgentOutpu
     (run.prompt.clone(), items)
 }
 
-fn follow_ups(items: &[AgentOutputItem]) -> Vec<&str> {
+pub(super) fn follow_ups(items: &[AgentOutputItem]) -> Vec<&str> {
     items
         .iter()
         .filter_map(|item| match item {

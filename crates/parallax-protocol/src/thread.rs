@@ -26,8 +26,8 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::peer::RemoteThreadRef;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ChosenIcon, PromptImage, RunId, ScopeId,
-    TurnId,
+    AccountChoice, AgentEffort, AgentOutputItem, AgentPermission, AgentRun, ChosenIcon,
+    PromptImage, RunId, ScopeId, TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -763,6 +763,69 @@ pub struct ThreadForkParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent: Option<RunId>,
+}
+
+/// Params of `thread/export`, behind `threadMove` (PLX-1538): a thread as another computer's
+/// `thread/receive` takes it. Fails with `threadNotFound` for an unknown thread, and with
+/// `invalidParams` while it is starting or running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadExportParams {
+    /// The thread.
+    pub run_id: RunId,
+}
+
+/// A thread moving to another computer: what `thread/export` reads and `thread/receive` takes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedThread {
+    /// The thread's run id where it was exported.
+    pub run_id: RunId,
+    /// Its title, if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// Its prompt.
+    pub prompt: String,
+    /// The backend it ran on, such as `claude`.
+    pub backend: String,
+    /// Its model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Its effort, as `thread/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<String>,
+    /// Its permission, as `thread/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<String>,
+    /// Whether it asks before acting.
+    pub approvals: bool,
+    /// Its `agent.output` items, one list per event, oldest first, cut as a
+    /// fork at its latest turn is (0050). The oldest are left out past 6 MiB.
+    pub transcript: Vec<Vec<AgentOutputItem>>,
+}
+
+/// Params of `thread/receive`, behind `threadMove` (PLX-1538): makes a thread another computer's
+/// `thread/export` read a thread here, at rest with its conversation, as an import is. Its first
+/// follow-up tells a new session the conversation (0014). Its run id comes from the exported one,
+/// so receiving the same thread again returns the thread it made.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadReceiveParams {
+    /// The thread, as `thread/export` read it.
+    pub thread: ExportedThread,
+    /// The repo entry to work in, in a new worktree. Absent means a scratch repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<RepoId>,
+    /// The ref the worktree starts from, such as `origin/<branch>`. Absent means the entry's
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base: Option<String>,
 }
 
 /// Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an

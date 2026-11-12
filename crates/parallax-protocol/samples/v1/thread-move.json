@@ -1,0 +1,79 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/export",
+    "params": {
+      "runId": "01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e03"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "runId": "01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+      "title": "Fix the flaky attach test",
+      "prompt": "Fix the flaky attach test.",
+      "backend": "claude",
+      "model": "sonnet",
+      "approvals": true,
+      "transcript": [
+        [
+          { "kind": "text", "text": "The test waits on a fixed sleep." },
+          { "kind": "turnFinished", "result": "The test waits on a fixed sleep." }
+        ],
+        [
+          {
+            "kind": "turnStarted",
+            "turnId": "01a0d5c3-3b4c-7d5e-8f6a-7b8c9d0e1f04",
+            "text": "Wait on the socket instead."
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/receive",
+    "params": {
+      "thread": {
+        "runId": "01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+        "title": "Fix the flaky attach test",
+        "prompt": "Fix the flaky attach test.",
+        "backend": "claude",
+        "model": "sonnet",
+        "approvals": true,
+        "transcript": []
+      },
+      "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+      "base": "origin/parallax/1b2c3d4e"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e09",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "createdAt": "2026-11-12T19:00:00Z",
+        "lastPromptAt": "2026-11-12T19:00:00Z",
+        "title": "Fix the flaky attach test"
+      },
+      "run": {
+        "id": "01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e09",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "Fix the flaky attach test.",
+        "policy": "workspaceWrite",
+        "status": "completed",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/5e6f7a8b",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/parallax-5e6f7a8b/01a0d5c2-2a3b-7c4d-8e5f-6a7b8c9d0e09",
+        "createdAt": "2026-11-12T19:00:00Z",
+        "updatedAt": "2026-11-12T19:00:00Z"
+      }
+    }
+  }
+]

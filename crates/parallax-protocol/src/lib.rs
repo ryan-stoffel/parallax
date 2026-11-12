@@ -279,16 +279,18 @@ pub use terminal::{
     TerminalWriteParams,
 };
 pub use thread::{
-    ForkedFrom, MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS_BYTES, MAX_PROJECT_NAME_BYTES,
-    MAX_THREAD_TITLE_BYTES, MAX_TITLE_INSTRUCTIONS_BYTES, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
-    RepoCloneProgressParams, RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult,
-    RepoId, RepoLogo, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRef,
-    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,
-    RepoUpdateResult, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming,
-    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, WakeReason,
+    ExportedThread, ForkedFrom, MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS_BYTES,
+    MAX_PROJECT_NAME_BYTES, MAX_THREAD_TITLE_BYTES, MAX_TITLE_INSTRUCTIONS_BYTES,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, Repo,
+    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult, RepoId, RepoLogo,
+    RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRef, RepoRefsParams,
+    RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams, RepoUpdateResult, Thread,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadExportParams, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming,
+    ThreadReceiveParams, ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams,
+    ThreadSetProjectResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, WakeReason,
 };
 pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,
