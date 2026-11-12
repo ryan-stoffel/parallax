@@ -1296,8 +1296,20 @@ describe("spare placement (PLX-1540)", () => {
     return { answers, asked, spy };
   }
 
+  /** Counts the relay's `spare_superseded` log lines, still printing every line. */
+  function supersedes() {
+    const log = console.log.bind(console);
+    let count = 0;
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].includes('"event":"spare_superseded"')) count++;
+      log(...args);
+    });
+    return { count: () => count, spy };
+  }
+
   it("lets a second spare request mid-placement supersede the first, so plxd gets one spare", async () => {
     const { answers, asked, spy } = heldLookups();
+    const superseded = supersedes();
     const before = testEnv.SPARE_PLACEMENT_TRIES;
     testEnv.SPARE_PLACEMENT_TRIES = "3";
     try {
@@ -1307,8 +1319,10 @@ describe("spare placement (PLX-1540)", () => {
       // As plxd does after doubting its link: it drops the unannounced spare and asks again.
       control.ws.send(JSON.stringify({ t: "spare" }));
       await expect.poll(() => asked.length).toBe(2);
-      // The first finishes first, and is dropped, so the first open is the second's.
+      // The first finishes first, and is dropped before the second answers.
       answers[0] = "LAX";
+      await expect.poll(superseded.count).toBe(1);
+      expect(await openStreams(host)).toEqual({});
       answers[1] = "LAX";
       const open = JSON.parse((await control.next()) as string) as Open;
       expect(open).toMatchObject({ spare: true, stream: asked[1] });
@@ -1317,11 +1331,13 @@ describe("spare placement (PLX-1540)", () => {
     } finally {
       testEnv.SPARE_PLACEMENT_TRIES = before;
       spy.mockRestore();
+      superseded.spy.mockRestore();
     }
   });
 
   it("drops a placement plxd reconnected during, so the new connection isn't sent the old spare", async () => {
     const { answers, asked, spy } = heldLookups();
+    const superseded = supersedes();
     const before = testEnv.SPARE_PLACEMENT_TRIES;
     testEnv.SPARE_PLACEMENT_TRIES = "3";
     try {
@@ -1330,7 +1346,10 @@ describe("spare placement (PLX-1540)", () => {
       await expect.poll(() => asked.length).toBe(1);
       const again = (await connectHost(host, [], "LAX")).control;
       expect(JSON.parse((await again.next()) as string)).toMatchObject({ t: "ready" });
+      // No spare request came on the new connection, so only the reconnect can drop this one.
       answers[0] = "LAX";
+      await expect.poll(superseded.count).toBe(1);
+      expect(await openStreams(host)).toEqual({});
       // The new connection asks for its own spare, which is the first open it hears.
       again.ws.send(JSON.stringify({ t: "spare" }));
       await expect.poll(() => asked.length).toBe(2);
@@ -1341,6 +1360,7 @@ describe("spare placement (PLX-1540)", () => {
     } finally {
       testEnv.SPARE_PLACEMENT_TRIES = before;
       spy.mockRestore();
+      superseded.spy.mockRestore();
     }
   });
 
