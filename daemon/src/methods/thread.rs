@@ -11,7 +11,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ProjectDeleteParams, ProjectDeleteResult, RepoAddResult, RepoCloneParams, ThreadDeleteParams,
     ThreadDeleteResult, ThreadForkParams, ThreadImportChatParams, ThreadImportParams,
-    ThreadStartParams, ThreadStartResult,
+    ThreadReceiveParams, ThreadStartParams, ThreadStartResult,
 };
 
 use super::Context;
@@ -48,6 +48,15 @@ pub(super) async fn fork(
 ) -> Result<ThreadStartResult, ErrorObject> {
     context
         .detached(|daemon| threads::fork(daemon, params))
+        .await
+}
+
+pub(super) async fn receive(
+    context: &Context,
+    params: ThreadReceiveParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    context
+        .detached(|daemon| threads::receive(daemon, params))
         .await
 }
 

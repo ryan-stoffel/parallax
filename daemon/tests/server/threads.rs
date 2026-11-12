@@ -36,6 +36,7 @@ mod context;
 mod files;
 mod fork;
 mod from_threads;
+mod moving;
 mod orchestrator;
 mod projects;
 mod schedules;

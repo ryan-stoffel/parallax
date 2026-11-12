@@ -39,12 +39,13 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentOutputItem, AgentStatus, ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent,
-    Repo, RepoAddParams, RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
-    RepoUpdateResult, RunId, ScopeId, Thread, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteResult, ThreadForkParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
-    WakeReason,
+    AccountChoice, AgentOutputItem, AgentStatus, ErrorKind, ExportedThread, ForkedFrom,
+    MAX_THREAD_TITLE_BYTES, ParallaxEvent, Repo, RepoAddParams, RepoAddResult, RepoId,
+    RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult, RunId, ScopeId, Thread,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteResult, ThreadExportParams,
+    ThreadForkParams, ThreadListResult, ThreadReceiveParams, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, TurnId, WakeReason,
 };
 use parallax_store::{RepoFields, ThreadFields, ThreadUpdate};
 use tokio_util::sync::CancellationToken;
@@ -770,6 +771,8 @@ struct Parent {
     latest: Option<Uuid>,
     /// Whether it is itself a fork, whose prompt's turn is the history it copied.
     forked: bool,
+    /// Its title, if it has one.
+    title: Option<String>,
 }
 
 /// `thread/fork`: see [`ThreadForkParams`] and decision 0050. Idempotent on the new run id.
@@ -865,6 +868,152 @@ pub(crate) async fn fork(
         thread: thread_entry(thread)?,
         run: created.run,
     })
+}
+
+/// The most transcript `thread/export` sends, in bytes of JSON, so the export and the
+/// `thread/receive` that carries it stay under the 8 MiB frame limit (0007).
+const MAX_EXPORT_BYTES: usize = 6 * 1024 * 1024;
+
+/// `thread/export` (PLX-1538): see [`ThreadExportParams`]. The transcript is a fork's at the latest
+/// turn (0050), with its oldest events left out past [`MAX_EXPORT_BYTES`].
+pub(crate) async fn export(
+    daemon: &Arc<Daemon>,
+    params: ThreadExportParams,
+) -> Result<ExportedThread, ErrorObject> {
+    let run_id = params.run_id;
+    let parent = load_parent(daemon, run_id).await?;
+    if matches!(parent.status, AgentStatus::Starting | AgentStatus::Running) {
+        return Err(ErrorObject::invalid_params(format!(
+            "thread {run_id} is still running: move it once its turn ends"
+        )));
+    }
+    let turn = fork_turn(&parent, run_id, None)?;
+    let first = first_turn(run_id)?;
+    let events: Vec<_> = agents::logged_events(daemon, run_id)
+        .await?
+        .into_iter()
+        .map(|event| event.event)
+        .collect();
+    // An import or a received thread that hasn't run here has no session yet, and its whole log is
+    // the history it copied, as a fork's prompt's turn is.
+    let mut parent = parent;
+    parent.forked |= parent.run.state.session_id.is_none();
+    let (mut transcript, _) = transcript_until(&events, turn, first, &parent);
+    // ponytail: drops whole events from the front; cut long tool output instead if long threads
+    // lose too much.
+    let mut bytes = 0;
+    let keep = transcript
+        .iter()
+        .rev()
+        .take_while(|items| {
+            bytes += serde_json::to_vec(items).map_or(0, |json| json.len());
+            bytes <= MAX_EXPORT_BYTES
+        })
+        .count();
+    transcript.drain(..transcript.len() - keep);
+    let fields = parent.run.fields;
+    Ok(ExportedThread {
+        run_id,
+        title: parent.title,
+        prompt: fields.prompt,
+        backend: fields.backend,
+        model: fields.model,
+        effort: fields.effort,
+        permission: fields.permission,
+        context_window: fields.context_window,
+        fast: fields.fast,
+        approvals: fields.approvals,
+        transcript,
+    })
+}
+
+/// `thread/receive` (PLX-1538): see [`ThreadReceiveParams`]. The thread is shaped as an import is:
+/// a fork with no parent here, so no CLI starts and its first follow-up is a handoff (0014).
+pub(crate) async fn receive(
+    daemon: Arc<Daemon>,
+    params: ThreadReceiveParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    let ThreadReceiveParams { thread, repo, base } = params;
+    let run_id = received_id(thread.run_id)?;
+    let lane = daemon.dispatcher.lane(run_id).await;
+    if let Some(done) = crate::importer::imported(&daemon, run_id).await? {
+        return Ok(done);
+    }
+    let git_ref = git_ref(false, base, None)?;
+    let (scope, scratch) = workspace(&daemon, None, repo, false, run_id, false).await?;
+    let title = match thread.title.as_deref() {
+        Some(title) => check_title(title)?,
+        None => None,
+    };
+    let new = NewRun {
+        run_id,
+        scope,
+        prompt: thread.prompt,
+        images: Vec::new(),
+        attachments: agents::attached::Attachments::default(),
+        account: Some(AccountChoice::Subscription {
+            backend: thread.backend.clone(),
+        }),
+        orchestrator_thread: None,
+        notify: false,
+        options: RunOptions {
+            model: thread.model,
+            effort: thread.effort.as_deref().and_then(option_value),
+            permission: thread.permission.as_deref().and_then(option_value),
+            context_window: thread.context_window,
+            fast: thread.fast,
+        },
+        approvals: thread.approvals,
+        thread: Some(NewThread {
+            scratch: scratch.clone(),
+            branch_slug: None,
+            checkout: false,
+            git_ref,
+            parent: None,
+            fields: ThreadFields {
+                forked_from: None,
+                title,
+            },
+            fork: Some(NewFork {
+                parent_backend: thread.backend,
+                model_given: false,
+                keep_permission: false,
+                transcript: thread.transcript,
+            }),
+        }),
+        explore: false,
+    };
+    let created = match agents::create_started(Arc::clone(&daemon), new, &lane).await {
+        Ok(created) => created,
+        Err(error) => {
+            if let Some(dir) = scratch {
+                remove_unused_scratch(&daemon, run_id, &dir).await;
+            }
+            return Err(error);
+        }
+    };
+    let row = created
+        .thread
+        .as_ref()
+        .ok_or_else(|| ErrorObject::internal_error("a received thread has no thread row"))?;
+    Ok(ThreadStartResult {
+        thread: thread_entry(row)?,
+        run: created.run,
+    })
+}
+
+/// The run id a thread moved from run `from` gets: a version 7 UUID with `from`'s time and a hash
+/// of it, so receiving it again finds the same thread.
+fn received_id(from: RunId) -> Result<RunId, ErrorObject> {
+    let from = Uuid::from(from);
+    let hash = <sha2::Sha256 as sha2::Digest>::digest(format!("parallax move {from}"));
+    let (seconds, nanos) = from.get_timestamp().map_or((0, 0), |time| time.to_unix());
+    let millis = seconds * 1000 + u64::from(nanos / 1_000_000);
+    let bytes: [u8; 10] = hash[..10]
+        .try_into()
+        .map_err(|_| ErrorObject::internal_error("a hash is shorter than 10 bytes"))?;
+    RunId::try_from(uuid::Builder::from_unix_timestamp_millis(millis, &bytes).into_uuid())
+        .map_err(|_| ErrorObject::internal_error("a received thread's run id isn't a valid run id"))
 }
 
 /// The fork a retried `thread/fork` already made: `None` if `new_run_id` is free, and
@@ -989,6 +1138,7 @@ async fn load_parent(daemon: &Arc<Daemon>, run_id: RunId) -> Result<Parent, Erro
             turns,
             latest,
             forked,
+            title: thread.fields.title,
         })
     })
     .await

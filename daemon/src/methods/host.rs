@@ -146,6 +146,8 @@ pub(crate) fn initialize(
 /// `Repo`. `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on
 /// `Thread`, `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`,
 /// which an older plxd would silently drop. `threadFork` (PLX-375, 0050): `thread/fork`.
+/// `threadMove` (PLX-1538): `thread/export` and `thread/receive`, to move a thread to another
+/// computer.
 /// `claudeRemoteControl` (PLX-1140): `thread/remoteControl`, and a Claude Remote Control thread's
 /// follow-ups go to its session on `claude.ai`, which an older plxd would run here instead.
 /// `claudeRemoteControlMove` (PLX-1143): `thread/remoteControlOrigin`, where a Claude Remote
@@ -437,6 +439,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "threadImport",
     "threadImportRemote",
     "threadLineage",
+    "threadMove",
     "threadNaming",
     "threadTitleInstructions",
     "threadTools",

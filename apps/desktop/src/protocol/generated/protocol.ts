@@ -480,6 +480,16 @@ export type ParallaxRequests = {
 	 */
 	"thread/fork": { params: ThreadForkParams, result: ThreadStartResult },
 	/**
+	 * `thread/export`: a thread as another computer's `thread/receive` takes it, to move it
+	 * there (PLX-1538). Gated on the `threadMove` capability.
+	 */
+	"thread/export": { params: ThreadExportParams, result: ExportedThread },
+	/**
+	 * `thread/receive`: makes a thread another computer exported a thread here, at rest with
+	 * its conversation. Idempotent on the exported thread. Gated on `threadMove`.
+	 */
+	"thread/receive": { params: ThreadReceiveParams, result: ThreadStartResult },
+	/**
 	 * `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
 	 * keep on the host, and Claude Code's and Codex's Remote Control sessions that ran on
 	 * it (PLX-881). Gated on the `threadImport` capability.
@@ -1249,6 +1259,8 @@ export const REQUEST_METHODS = [
 	"repo/fetchBase",
 	"thread/start",
 	"thread/fork",
+	"thread/export",
+	"thread/receive",
 	"thread/importable",
 	"thread/import",
 	"thread/importChat",
@@ -6943,6 +6955,91 @@ export type ThreadForkParams = {
 	 * none, as for a fork the user makes.
 	 */
 	parent?: RunId,
+};
+
+/**
+ * Params of `thread/export`, behind `threadMove` (PLX-1538): a thread as another computer's
+ * `thread/receive` takes it. Fails with `threadNotFound` for an unknown thread, and with
+ * `invalidParams` while it is starting or running.
+ */
+export type ThreadExportParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+};
+
+/**
+ * A thread moving to another computer: what `thread/export` reads and `thread/receive` takes.
+ */
+export type ExportedThread = {
+	/**
+	 * The thread's run id where it was exported.
+	 */
+	runId: RunId,
+	/**
+	 * Its title, if it has one.
+	 */
+	title?: string,
+	/**
+	 * Its prompt.
+	 */
+	prompt: string,
+	/**
+	 * The backend it ran on, such as `claude`.
+	 */
+	backend: string,
+	/**
+	 * Its model.
+	 */
+	model?: string,
+	/**
+	 * Its effort, as `thread/start` takes it.
+	 */
+	effort?: string,
+	/**
+	 * Its permission, as `thread/start` takes it.
+	 */
+	permission?: string,
+	/**
+	 * Its context window in tokens, as `thread/start` takes it.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `thread/start` takes it.
+	 */
+	fast?: boolean,
+	/**
+	 * Whether it asks before acting.
+	 */
+	approvals: boolean,
+	/**
+	 * Its `agent.output` items, one list per event, oldest first, cut as a
+	 * fork at its latest turn is (0050). The oldest are left out past 6 MiB.
+	 */
+	transcript: Array<Array<AgentOutputItem>>,
+};
+
+/**
+ * Params of `thread/receive`, behind `threadMove` (PLX-1538): makes a thread another computer's
+ * `thread/export` read a thread here, at rest with its conversation, as an import is. Its first
+ * follow-up tells a new session the conversation (0014). Its run id comes from the exported one,
+ * so receiving the same thread again returns the thread it made.
+ */
+export type ThreadReceiveParams = {
+	/**
+	 * The thread, as `thread/export` read it.
+	 */
+	thread: ExportedThread,
+	/**
+	 * The repo entry to work in, in a new worktree. Absent means a scratch repository.
+	 */
+	repo?: RepoId,
+	/**
+	 * The ref the worktree starts from, such as `origin/<branch>`. Absent means the entry's
+	 * default.
+	 */
+	base?: string,
 };
 
 /**

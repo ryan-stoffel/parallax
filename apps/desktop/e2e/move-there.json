@@ -1,0 +1,6 @@
+[
+  { "init": { "sessionId": "e2e-move-there", "model": "fake-model" } },
+  { "emit": { "kind": "text", "text": "Picked it up on this computer." } },
+  { "endTurn": {} },
+  "hang"
+]

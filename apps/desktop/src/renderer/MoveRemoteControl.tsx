@@ -571,7 +571,7 @@ function ComputerRow({
 }
 
 /** A step in progress: what it's doing, shimmering. */
-function Working({ children }: { children: ReactNode }) {
+export function Working({ children }: { children: ReactNode }) {
   return (
     <div className="mx-6 mb-6 flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3.5">
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background text-faint-foreground">
@@ -585,7 +585,7 @@ function Working({ children }: { children: ReactNode }) {
 }
 
 /** The dialog's footer: `start` on the left, its buttons on the right, under a rule. */
-function Footer({ children, start }: { children: ReactNode; start?: ReactNode }) {
+export function Footer({ children, start }: { children: ReactNode; start?: ReactNode }) {
   return (
     <footer className="flex items-center gap-2 border-t border-border px-6 py-3">
       <div className="flex-1">{start}</div>
