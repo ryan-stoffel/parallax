@@ -618,7 +618,13 @@ async fn bind(serving: &Serving) -> Option<Bound> {
 
 async fn accept(bound: Option<&Bound>) -> io::Result<(TcpStream, SocketAddr)> {
     match bound {
-        Some(bound) => bound.listener.accept().await,
+        Some(bound) => {
+            let (stream, peer) = bound.listener.accept().await?;
+            // Nagle holds a write while the one before it waits for the client's delayed ACK, 40 ms
+            // on Linux. Over a LAN it held the 101 behind the TLS session tickets (PLX-1512).
+            let _ = stream.set_nodelay(true);
+            Ok((stream, peer))
+        }
         None => std::future::pending().await,
     }
 }
