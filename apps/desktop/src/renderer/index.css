@@ -1076,6 +1076,11 @@ body {
   background-color: color-mix(in srgb, var(--raised) 92%, transparent);
   backdrop-filter: var(--glass);
 }
+/* A list's sticky label in a modal dialog takes the dialog's fill, as it does on an opaque window,
+   rather than a pane's lighter one, which reads as a band across the list (NewThreadPicker.tsx). */
+:root.translucent dialog:modal .sticky.bg-surface {
+  background-color: var(--raised);
+}
 /* macOS shows black behind a full screen window, so the page paints a copy of the wallpaper under
    the glass (main.tsx). The root's own fill keeps body's tint on body, above the copy, rather than
    on the canvas below it. */
@@ -1744,6 +1749,26 @@ body {
 :root.translucent .composer-bar,
 :root.translucent .composer-tabs {
   border-color: var(--composer-edge);
+}
+/* The transcript leaves room for the composer past its end (AgentChat.tsx). Over glass it fades out
+   above the composer rather than scroll under it: a backdrop-filter can't hide the page's text in a
+   see-through window, so its lines would stay sharp through the box and its bars. The room grows by
+   the fade, so the last line at the end stays whole. */
+.dock-room {
+  height: var(--docked);
+}
+:root.translucent {
+  --dock-fade: 1.5rem;
+}
+:root.translucent [data-docked] {
+  mask-image: linear-gradient(
+    to top,
+    transparent var(--docked),
+    #000 calc(var(--docked) + var(--dock-fade))
+  );
+}
+:root.translucent [data-docked] > .dock-room {
+  height: calc(var(--docked) + var(--dock-fade));
 }
 /* The cards over the box, pinned or opened from its tabs (a secret, an approval, a question, the
    plan), are solid with the box's edge: the transcript scrolls under them, and its text would stay

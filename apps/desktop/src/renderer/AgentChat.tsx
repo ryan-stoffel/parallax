@@ -45,6 +45,7 @@ import {
   useState,
   type ComponentProps,
   type ComponentType,
+  type CSSProperties,
   type ReactNode,
   type SVGProps,
 } from "react";
@@ -1523,6 +1524,9 @@ export function TranscriptView({
             if (upKeys.has(key) && e.currentTarget.scrollTop > 0) scrolled(true);
             else if (downKeys.has(key)) scrolled(false);
           }}
+          // The composer's height, which the transcript fades out above on glass (index.css).
+          data-docked={docked > 0 || undefined}
+          style={{ "--docked": `${docked}px` } as CSSProperties}
           className="min-h-0 flex-1 overflow-y-auto select-text"
         >
           <div className="relative w-full" style={{ height: total }}>
@@ -1566,7 +1570,8 @@ export function TranscriptView({
             })}
           </div>
           {end && <div className="mx-auto max-w-3xl px-10 pb-6 @max-lg:px-5">{end}</div>}
-          <div aria-hidden style={{ height: docked }} />
+          {/* Room for the composer, and on glass for the fade above it. */}
+          <div aria-hidden className="dock-room" />
         </div>
         {/* One prompt is no choice of where to go, so there's no rail for it. */}
         {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
