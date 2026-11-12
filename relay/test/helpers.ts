@@ -91,12 +91,15 @@ export type Socket = {
   closed: Promise<number>;
 };
 
+/** A WebSocket to `path`, or the refusal. `cf` stands in for Cloudflare's, such as its `colo`. */
 export async function socket(
   path: string,
   headers: Record<string, string> = {},
+  cf?: Record<string, unknown>,
 ): Promise<Socket | Response> {
   const response = await SELF.fetch(`${BASE}${path}`, {
     headers: { upgrade: "websocket", ...headers },
+    ...(cf ? { cf } : {}),
   });
   const ws = response.webSocket;
   if (!ws) return response;
@@ -146,15 +149,15 @@ export async function peerHeader(caller: Host, route: string, signer: Host = cal
 
 /** Opens plxd's control socket with `proof`: the socket, or the refusal. `held` lists the streams
  *  plxd still holds, and a plxd from before PLX-1419 lists none. */
-export function hostSocket(host: Host, proof: string, held?: string[]) {
+export function hostSocket(host: Host, proof: string, held?: string[], colo?: string) {
   const headers: Record<string, string> = { [PROOF_HEADER]: proof };
   if (held) headers[STREAMS_HEADER] = held.join(",");
-  return socket(`/v1/hosts/${host.id}/host`, headers);
+  return socket(`/v1/hosts/${host.id}/host`, headers, colo ? { colo } : undefined);
 }
 
-/** plxd's control socket, opened with a fresh proof. */
-export async function connectHost(host: Host, held?: string[]) {
-  return { control: opened(await hostSocket(host, await hostProof(host), held)) };
+/** plxd's control socket, opened with a fresh proof, through the data center `colo` if given. */
+export async function connectHost(host: Host, held?: string[], colo?: string) {
+  return { control: opened(await hostSocket(host, await hostProof(host), held, colo)) };
 }
 
 /** A hook frame as plxd reads it: its head and raw body. */

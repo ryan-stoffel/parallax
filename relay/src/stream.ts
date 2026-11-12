@@ -29,6 +29,23 @@ const UNCONFIRMED = { allowUnconfirmed: true } as const;
 /** What the host's object armed this stream with. */
 type Armed = { hostId: string; stream: string; tokenHash: string };
 
+/** Any Cloudflare zone's trace, which names the data center a subrequest left from (PLX-1540). */
+export const TRACE_URL = "https://cloudflare.com/cdn-cgi/trace";
+/** How long a colo lookup may take before it counts as failed. */
+const TRACE_TIMEOUT = 1_000;
+
+/** The data center this code runs in, such as `LAX`, read from [`TRACE_URL`], or null when the
+ *  lookup fails. Cloudflare doesn't document it, so a caller treats null as "keep what you have". */
+export async function traceColo(): Promise<string | null> {
+  try {
+    const response = await fetch(TRACE_URL, { signal: AbortSignal.timeout(TRACE_TIMEOUT) });
+    if (!response.ok) return null;
+    return /^colo=([A-Z]{3})$/m.exec(await response.text())?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Which end each WebSocket is, kept with it across hibernation. */
 type Side = "client" | "host";
 
@@ -120,6 +137,12 @@ export class StreamRelay extends DurableObject<Env> {
     this.ending = true;
     logEvent("socket_closing", { ...this.context(ws), by: "relay", code, reason });
     ws.close(code, reason);
+  }
+
+  /** The data center this object runs in, which the host's object asks before it arms a spare
+   *  here, to match where plxd's control socket entered (PLX-1540). Stores nothing, so an object it doesn't keep leaves nothing behind. */
+  async colo() {
+    return traceColo();
   }
 
   /** Called by the host's object before it tells plxd or a client about this stream. */

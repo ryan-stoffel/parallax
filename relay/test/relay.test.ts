@@ -12,12 +12,13 @@ import {
   LIMITS,
   MAX_DAILY_BYTES,
   MAX_HOOK_BYTES,
+  MAX_PLACEMENT_TRIES,
   MAX_REMOVAL,
   MAX_STREAMS,
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
-import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
+import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay, TRACE_URL } from "../src/stream";
 import { apnsPayload, MAX_SEALED, sendApns } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
@@ -41,12 +42,13 @@ import {
 /** The relay's account for `user` of this test's Clerk instance. */
 const account = (user: string) => accountOf("https://clerk.test", user);
 
-/** A registered, connected host for `user`, a new one by default, and that user's token. */
-async function online(user = `user_${crypto.randomUUID()}`) {
+/** A registered, connected host for `user`, a new one by default, and that user's token. `colo` is
+ *  the data center its control socket enters, unknown when not given. */
+async function online(user = `user_${crypto.randomUUID()}`, colo?: string) {
   const host = await newHost();
   const token = await session(user);
   expect((await register(host, token)).status).toBe(200);
-  const { control } = await connectHost(host);
+  const { control } = await connectHost(host, undefined, colo);
   expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
   return { host, token, control };
 }
@@ -1227,6 +1229,80 @@ async function away() {
   await control.closed;
   return { host, token };
 }
+
+describe("spare placement (PLX-1540)", () => {
+  /**
+   * Asks for a spare with `SPARE_PLACEMENT_TRIES` at `tries`, while each new stream object's colo
+   * lookup answers the next of `colos`, null for a failed lookup. plxd's control socket entered
+   * `entered`, or an unknown colo when null. Answers the spare and the stream objects asked, in order.
+   */
+  async function placed(tries: string | undefined, colos: (string | null)[], entered: string | null = "LAX") {
+    const answers = [...colos];
+    const lookups = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      expect(String(input instanceof Request ? input.url : input)).toBe(TRACE_URL);
+      const colo = answers.shift();
+      expect(colo).not.toBeUndefined();
+      if (!colo) return new Response("", { status: 503 });
+      return new Response(`fl=1\nh=cloudflare.com\ncolo=${colo}\n`);
+    });
+    const asked: string[] = [];
+    const original = StreamRelay.prototype.colo;
+    const colo = vi.spyOn(StreamRelay.prototype, "colo").mockImplementation(async function (this: StreamRelay) {
+      asked.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString());
+      return original.call(this);
+    });
+    const before = testEnv.SPARE_PLACEMENT_TRIES;
+    testEnv.SPARE_PLACEMENT_TRIES = tries;
+    try {
+      const { host, control } = await online(undefined, entered ?? undefined);
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      expect(spare).toMatchObject({ t: "open", spare: true });
+      expect(answers).toEqual([]);
+      // The kept spare works as any other: plxd joins it with its token.
+      opened(await join(host, spare));
+      expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
+      // A dropped object kept nothing.
+      for (const id of asked.filter((id) => id !== spare.stream))
+        expect(await runInDurableObject(streamObject(id), (_, state) => state.storage.list())).toEqual(new Map());
+      return { spare, asked };
+    } finally {
+      testEnv.SPARE_PLACEMENT_TRIES = before;
+      lookups.mockRestore();
+      colo.mockRestore();
+    }
+  }
+
+  it("changes nothing when the setting is unset or 0", async () => {
+    for (const tries of [undefined, "0"]) expect((await placed(tries, [])).asked).toEqual([]);
+  });
+
+  it("re-creates a spare away from the control socket's colo, up to the cap, and keeps the last", async () => {
+    const { spare, asked } = await placed("3", ["SJC", "SJC", "SJC"]);
+    expect(asked).toHaveLength(3);
+    expect(new Set(asked).size).toBe(3);
+    expect(spare.stream).toBe(asked[2]);
+    // A larger setting is capped.
+    expect((await placed("50", ["SJC", "SJC", "SJC"])).asked).toHaveLength(MAX_PLACEMENT_TRIES);
+  });
+
+  it("keeps a spare in the control socket's colo", async () => {
+    const first = await placed("3", ["LAX"]);
+    expect(first.asked).toEqual([first.spare.stream]);
+    const second = await placed("3", ["SJC", "LAX"]);
+    expect(second.asked).toHaveLength(2);
+    expect(second.spare.stream).toBe(second.asked[1]);
+  });
+
+  it("keeps the current spare when its lookup fails", async () => {
+    const failed = await placed("3", [null]);
+    expect(failed.asked).toEqual([failed.spare.stream]);
+  });
+
+  it("looks nothing up when the control socket's colo is unknown", async () => {
+    expect((await placed("3", [], null)).asked).toEqual([]);
+  });
+});
 
 describe("webhooks", () => {
   const signed = {
