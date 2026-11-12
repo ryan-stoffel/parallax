@@ -88,7 +88,7 @@ test("a thread in a repository pushes its branch, moves onto it there, and is ar
     ["local", "agent/gitStatus", { runId: "t1" }],
     ["local", "repo/remote", { repo: "r1" }],
     ["local", "agent/push", { runId: "t1" }],
-    ["local", "repo/fetchBase", { repo: "r1", base: "parallax/fix" }],
+    ["local", "repo/fetchBase", { repo: "r1", base: "refs/heads/parallax/fix" }],
     ["ssh:mini", "repo/match", { origin: "git@github.com:me/parallax.git" }],
     ["ssh:mini", "repo/fetchBase", { repo: "r9", base: "origin/parallax/fix" }],
     ["ssh:mini", "thread/receive", { thread: exported, repo: "r9", base: "origin/parallax/fix" }],

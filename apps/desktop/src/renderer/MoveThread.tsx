@@ -93,7 +93,7 @@ export function MoveThread({
         // The commit it pushed, to check the other computer fetched it and not an older one.
         const { commit } = await call(hostId, "repo/fetchBase", {
           repo: repo.id,
-          base: status.branch,
+          base: `refs/heads/${status.branch}`,
         });
         doing(`Finding the repository on ${where}`);
         const found = (await call(target.id, "repo/match", { origin: url })).repo;
