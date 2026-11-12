@@ -1299,6 +1299,53 @@ describe("spare placement (PLX-1540)", () => {
     expect(failed.asked).toEqual([failed.spare.stream]);
   });
 
+  it("never offers a spare until its placement ends, so a client arriving meanwhile gets its own stream", async () => {
+    // Each lookup waits until the test sets its answer. A plain value, since a promise made here
+    // can't be settled from another object.
+    const answers: string[] = [];
+    const asked: string[] = [];
+    const colo = vi.spyOn(StreamRelay.prototype, "colo").mockImplementation(async function (this: StreamRelay) {
+      const at = asked.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString()) - 1;
+      while (answers[at] === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
+      return answers[at];
+    });
+    const before = testEnv.SPARE_PLACEMENT_TRIES;
+    testEnv.SPARE_PLACEMENT_TRIES = "3";
+    try {
+      const { host, token, control } = await online(undefined, "LAX");
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      await expect.poll(() => asked.length).toBe(1);
+      answers[0] = "SJC";
+      await expect.poll(() => asked.length).toBe(2);
+      // Mid-placement: nothing is listed, so a client takes a new stream, not a spare.
+      expect(await openStreams(host)).toEqual({});
+      const client = opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      expect(open.spare).toBeUndefined();
+      expect(asked).not.toContain(open.stream);
+      opened(await join(host, open));
+      expect(await client.next()).toBe("ready");
+
+      answers[1] = "SJC";
+      await expect.poll(() => asked.length).toBe(3);
+      answers[2] = "LAX";
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      expect(spare).toMatchObject({ spare: true, stream: asked[2] });
+      // The two dropped objects were never listed, armed, or announced.
+      expect(Object.keys(await openStreams(host)).sort()).toEqual([open.stream, spare.stream].sort());
+      for (const id of asked.slice(0, 2))
+        expect(await runInDurableObject(streamObject(id), (_, state) => state.storage.list())).toEqual(new Map());
+      // The next client takes the placed spare, and plxd joins it.
+      const side = opened(await join(host, spare));
+      const next = opened(await connect(host, token));
+      expect(await next.next()).toBe("ready");
+      expect(await side.next()).toBe("ready");
+    } finally {
+      testEnv.SPARE_PLACEMENT_TRIES = before;
+      colo.mockRestore();
+    }
+  });
+
   it("looks nothing up when the control socket's colo is unknown", async () => {
     expect((await placed("3", [], null)).asked).toEqual([]);
   });
