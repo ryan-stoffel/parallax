@@ -127,6 +127,39 @@ test("one JWKS fetch at a time; forged kids refetch once a minute; the cache exp
   assert.equal(fetches(), 3);
 });
 
+test("a cached copy refetches past the cache for a key it lacks, once, and lives out its age", async () => {
+  const issuer = "https://clerk.six.test";
+  const { options, sign } = await instance(issuer);
+  // A shared cache in front of the JWKS: its copy is 500 s into a 600 s max-age.
+  const calls: (RequestInit | undefined)[] = [];
+  const cached = {
+    ...options,
+    fetch: (async (url: string, init?: RequestInit) => {
+      calls.push(init);
+      const res = await options.fetch!(url);
+      if (init?.cache === "no-store") return res;
+      return new Response(res.body, { headers: { "cache-control": "max-age=600", age: "500" } });
+    }) as typeof fetch,
+  };
+  const claims = { iss: issuer, sub: "user_1", sid: "sess_1", exp: now + 3600 };
+  const good = await sign(claims);
+  const forged = await sign(claims, { alg: "RS256", kid: "forged" });
+  const at = (ms: number) => ({ ...cached, now: Date.now() + ms });
+
+  await verifyClerkToken(good, at(0));
+  await verifyClerkToken(good, at(99_000));
+  assert.deepEqual(calls, [undefined]);
+  // The copy had 100 s left, not a new 600.
+  await verifyClerkToken(good, at(101_000));
+  assert.deepEqual(calls, [undefined, undefined]);
+  // A cached set may predate a rotation, so the first unknown kid reads past the cache at once.
+  await assert.rejects(verifyClerkToken(forged, at(102_000)), { message: "Unknown signing key." });
+  assert.deepEqual(calls, [undefined, undefined, { cache: "no-store" }]);
+  // That set is fresh, so more forged kids wait for the minute.
+  await assert.rejects(verifyClerkToken(forged, at(103_000)), { message: "Unknown signing key." });
+  assert.equal(calls.length, 3);
+});
+
 test("while the JWKS is down, a forged kid can't drop the keys already fetched", async () => {
   const issuer = "https://clerk.four.test";
   const { options, sign, fetches, setDown } = await instance(issuer);

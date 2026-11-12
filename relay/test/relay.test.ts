@@ -2,7 +2,9 @@ import { SELF } from "cloudflare:test";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
-import { accountOf, DEVELOPMENT, verifySession } from "../src/clerk";
+import { KeysUnavailable } from "@parallax/clerk-verify";
+
+import { accountOf, DEVELOPMENT, sharedJwks, verifySession } from "../src/clerk";
 import { sha256 } from "../src/crypto";
 import {
   hookKey,
@@ -112,6 +114,75 @@ describe("sign-in", () => {
     // The isolate keeps the keys, so the next check reads nothing.
     expect(await check()).toBe(accountOf(issuer, "user_keys"));
     expect(reads).toHaveLength(1);
+  });
+
+  describe("the data center's shared JWKS (PLX-1505)", () => {
+    /** Clerk's JWKS endpoint, stubbed: what it answers, and the requests it got. */
+    function clerk(answer: () => Response) {
+      const urls: string[] = [];
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        urls.push(String(input instanceof Request ? input.url : input));
+        return answer();
+      });
+      return { urls, restore: () => spy.mockRestore() };
+    }
+    const keysUrl = () => `https://keys-${crypto.randomUUID()}.test/jwks`;
+
+    it("serves a stored copy without a fetch or a jwks time, for an hour at most", async () => {
+      const url = keysUrl();
+      const stub = clerk(() => new Response(testEnv.CLERK_JWKS, { headers: { "cache-control": "public, max-age=14400" } }));
+      const reads: number[] = [];
+      try {
+        const first = await sharedJwks(url, false, (ms) => reads.push(ms));
+        expect(first.headers.get("cache-control")).toBe("public, max-age=3600");
+        expect(first.headers.has("age")).toBe(false);
+        const second = await sharedJwks(url, false, (ms) => reads.push(ms));
+        expect(await second.text()).toBe(testEnv.CLERK_JWKS);
+        expect(second.headers.get("age")).toMatch(/^\d+$/);
+        expect(stub.urls).toEqual([url]);
+        expect(reads).toHaveLength(1);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it("refetches once past a stored copy that lacks the token's key, and stores what Clerk has now", async () => {
+      const issuer = `https://clerk-${crypto.randomUUID()}.test`;
+      const url = keysUrl();
+      const env = { ...testEnv, CLERK_JWKS: undefined, CLERK_ISSUER: issuer, CLERK_JWKS_URL: url } as Env;
+      // Another isolate stored the keys from before a rotation, which lack the test key.
+      const old = { keys: [{ ...JSON.parse(testEnv.CLERK_JWKS!).keys[0], kid: "before" }] };
+      const headers = { "cache-control": "public, max-age=3600", date: new Date().toUTCString() };
+      await caches.default.put(url, Response.json(old, { headers }));
+      const stub = clerk(() => new Response(testEnv.CLERK_JWKS));
+      const reads: number[] = [];
+      try {
+        const token = await session("user_rotated", { iss: issuer });
+        expect(await verifySession(env, token, (ms) => reads.push(ms))).toBe(accountOf(issuer, "user_rotated"));
+        expect(stub.urls).toEqual([url]);
+        expect(reads).toHaveLength(1);
+        expect(await (await caches.default.match(url))!.text()).toBe(testEnv.CLERK_JWKS);
+        // The isolate now holds the fresh keys, so the next check reads nothing.
+        expect(await verifySession(env, token, (ms) => reads.push(ms))).toBe(accountOf(issuer, "user_rotated"));
+        expect(stub.urls).toHaveLength(1);
+      } finally {
+        stub.restore();
+      }
+    });
+
+    it("never stores an outage, which still throws KeysUnavailable", async () => {
+      const issuer = `https://clerk-${crypto.randomUUID()}.test`;
+      const url = keysUrl();
+      const env = { ...testEnv, CLERK_JWKS: undefined, CLERK_ISSUER: issuer, CLERK_JWKS_URL: url } as Env;
+      const stub = clerk(() => new Response(null, { status: 503 }));
+      try {
+        const token = await session("user_outage", { iss: issuer });
+        await expect(verifySession(env, token)).rejects.toBeInstanceOf(KeysUnavailable);
+        expect(await caches.default.match(url)).toBeUndefined();
+      } finally {
+        stub.restore();
+      }
+    });
   });
 
   it("takes two Clerk instances at once, each checked against its own JWKS (PLX-1049)", async () => {

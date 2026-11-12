@@ -13,7 +13,11 @@ export type VerifyOptions = {
    * session token without `azp`, as Clerk's native SDKs send, passes.
    */
   authorizedParties: readonly string[];
-  /** For tests: what fetches the JWKS, and the time in ms. */
+  /**
+   * What fetches the JWKS, for tests and for a shared cache in front of it. A response from a
+   * cache carries `Age`. A refetch for a key the set lacks passes `cache: "no-store"`, which such a
+   * fetch answers from the network.
+   */
   fetch?: typeof fetch;
   now?: number;
 };
@@ -26,7 +30,8 @@ export class KeysUnavailable extends Error {}
 
 type Claims = Record<string, unknown>;
 
-type KeySet = { ttl: number; keys: Map<string, CryptoKey> };
+// `fresh`: read past any cache, so a key it lacks waits for the once-a-minute refetch.
+type KeySet = { ttl: number; keys: Map<string, CryptoKey>; fresh: boolean };
 // Signing keys by JWKS URL: when each fetch started, and the fetch, which concurrent checks share.
 const keySets = new Map<string, { at: number; set: Promise<KeySet> }>();
 // A token naming a key the cached set lacks refetches it, at most this often, since Clerk rotates
@@ -93,12 +98,12 @@ export async function verifyClerkToken(token: string, options: VerifyOptions): P
 async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKey> {
   const url = `${options.issuer}/.well-known/jwks.json`;
   const now = options.now ?? Date.now();
-  const refetch = (previous?: Promise<KeySet>) => {
-    const set = loadKeys(options, url).catch(async (error: unknown) => {
+  const refetch = (previous?: Promise<KeySet>, noStore = false) => {
+    const set = loadKeys(options, url, noStore).catch(async (error: unknown) => {
       // While the JWKS is down, the keys already fetched still count, and it's retried in a
       // minute, so a forged kid can't make good tokens fail.
       if (!previous) throw error;
-      return { ttl: REFETCH_MS, keys: (await previous).keys };
+      return { ttl: REFETCH_MS, keys: (await previous).keys, fresh: true };
     });
     const entry = { at: now, set };
     keySets.set(url, entry);
@@ -109,10 +114,13 @@ async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKe
   let entry = keySets.get(url) ?? refetch();
   const cached = await entry.set;
   let keys = cached.keys;
-  if (now - entry.at >= cached.ttl || (!keys.has(kid) && now - entry.at >= REFETCH_MS)) {
+  // A key the set lacks is refetched at once when the set came from a cache, which may predate a
+  // rotation, and otherwise once a minute.
+  const missing = !keys.has(kid);
+  if (now - entry.at >= cached.ttl || (missing && (!cached.fresh || now - entry.at >= REFETCH_MS))) {
     // Checks that waited on the same set share one refetch.
     const latest = keySets.get(url);
-    entry = latest && latest !== entry ? latest : refetch(entry.set);
+    entry = latest && latest !== entry ? latest : refetch(entry.set, missing);
     ({ keys } = await entry.set);
   }
   const key = keys.get(kid);
@@ -120,13 +128,15 @@ async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKe
   return key;
 }
 
-async function loadKeys(options: VerifyOptions, url: string): Promise<KeySet> {
-  const res = await (options.fetch ?? fetch)(url).catch((error: unknown) => {
+async function loadKeys(options: VerifyOptions, url: string, noStore: boolean): Promise<KeySet> {
+  const res = await (options.fetch ?? fetch)(url, noStore ? { cache: "no-store" } : undefined).catch((error: unknown) => {
     throw new KeysUnavailable(`JWKS fetch failed: ${String(error)}`);
   });
   if (!res.ok) throw new KeysUnavailable(`JWKS answered ${res.status}.`);
+  // A cached copy lives out what's left of its max-age, not a new one.
   const maxAge = /max-age=(\d+)/.exec(res.headers.get("cache-control") ?? "")?.[1];
-  const ttl = maxAge ? Math.max(Number(maxAge) * 1000, REFETCH_MS) : TTL_MS;
+  const age = Number(res.headers.get("age")) || 0;
+  const ttl = maxAge ? Math.max((Number(maxAge) - age) * 1000, REFETCH_MS) : TTL_MS;
   const { keys } = (await res.json()) as { keys?: (JsonWebKey & { kid?: string })[] };
   const imported = new Map<string, CryptoKey>();
   for (const jwk of keys ?? []) {
@@ -142,7 +152,7 @@ async function loadKeys(options: VerifyOptions, url: string): Promise<KeySet> {
       ),
     );
   }
-  return { ttl, keys: imported };
+  return { ttl, keys: imported, fresh: noStore || !res.headers.has("age") };
 }
 
 function bytes(base64url: string): Uint8Array<ArrayBuffer> {

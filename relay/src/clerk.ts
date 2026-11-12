@@ -43,8 +43,9 @@ export const accountOf = (issuer: string, userId: string) =>
  * counts only with its own instance's applications. The JWKS is `CLERK_JWKS` inline (tests and
  * `wrangler dev`), else its `CLERK_JWKS_URL` entry, else its issuer's `/.well-known/jwks.json`.
  * Throws `KeysUnavailable` when those keys can't be read, so an outage isn't taken for a bad token
- * (PLX-1351). `fetched` hears how long reading the JWKS took, when this check had to read it: the
- * keys are otherwise this isolate's cached ones.
+ * (PLX-1351). The JWKS is read through [`sharedJwks`], and `fetched` hears how long reading it
+ * took when this check had to fetch it from Clerk: the keys are otherwise this isolate's or this
+ * data center's cached ones.
  */
 export async function verifySession(
   env: Env,
@@ -58,19 +59,14 @@ export async function verifySession(
   if (issuer === undefined || at < 0) return null;
   const inline = env.CLERK_JWKS;
   const url = list(env.CLERK_JWKS_URL)[at];
-  const read: typeof fetch = inline
-    ? async () => new Response(inline)
-    : url
-      ? () => fetch(url)
-      : (...args) => fetch(...args);
-  const jwks: typeof fetch = async (...args) => {
-    const start = performance.now();
-    try {
-      return await read(...args);
-    } finally {
-      fetched?.(performance.now() - start);
-    }
-  };
+  const jwks: typeof fetch = inline
+    ? async () => {
+        const start = performance.now();
+        const response = new Response(inline);
+        fetched?.(performance.now() - start);
+        return response;
+      }
+    : (input, init) => sharedJwks(url ?? String(input), init?.cache === "no-store", fetched);
   try {
     const verified = await verifyClerkToken(token, {
       issuer,
@@ -84,6 +80,57 @@ export async function verifySession(
     if (error instanceof KeysUnavailable) throw error;
     return null;
   }
+}
+
+/**
+ * How long a JWKS stays in the shared cache, at most: an hour, or Clerk's `max-age` when shorter.
+ * Clerk sends four hours. An hour costs one fetch per data center and instance each hour, and
+ * bounds how long a key Clerk removed keeps working, since isolates keep a copy only for what's
+ * left of its hour.
+ */
+const SHARED_TTL_S = 3600;
+
+/**
+ * Clerk's JWKS at `url`, from the Cache API, which every isolate in a data center shares, or else
+ * fetched and stored there for [`SHARED_TTL_S`]. A stored copy answers with its `Age`, so the
+ * isolate keeps it only for the rest of that time and refetches past it for a key it lacks
+ * (`noStore`). That refetch replaces the stored copy, so a rotation reaches the data center's
+ * other isolates too. `fetched` hears how long a fetch from Clerk took, and only then. A failed
+ * fetch or a non-2xx answer is never stored, and the cache failing counts as a miss.
+ */
+export async function sharedJwks(
+  url: string,
+  noStore: boolean,
+  fetched?: (ms: number) => void,
+): Promise<Response> {
+  const cache = caches.default;
+  if (!noStore) {
+    const hit = await cache.match(url).catch(() => undefined);
+    if (hit) {
+      const headers = new Headers(hit.headers);
+      const date = Date.parse(headers.get("date") ?? "");
+      headers.set("age", String(Number.isNaN(date) ? 0 : Math.max(0, Math.floor((Date.now() - date) / 1000))));
+      return new Response(hit.body, { status: hit.status, headers });
+    }
+  }
+  const start = performance.now();
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } finally {
+    fetched?.(performance.now() - start);
+  }
+  if (!response.ok) return response;
+  const maxAge = Number(/max-age=(\d+)/.exec(response.headers.get("cache-control") ?? "")?.[1]);
+  const ttl = Number.isNaN(maxAge) ? SHARED_TTL_S : Math.min(maxAge, SHARED_TTL_S);
+  const body = await response.arrayBuffer();
+  const headers = new Headers({
+    "content-type": response.headers.get("content-type") ?? "application/json",
+    "cache-control": `public, max-age=${ttl}`,
+    date: new Date().toUTCString(),
+  });
+  await cache.put(url, new Response(body, { headers })).catch(() => {});
+  return new Response(body, { headers });
 }
 
 /**
