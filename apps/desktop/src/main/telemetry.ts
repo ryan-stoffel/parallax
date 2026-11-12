@@ -6,7 +6,7 @@ import path from "node:path";
 import type { UsageHour, UsageReportClaimResult } from "../protocol/generated/protocol";
 import type { Account } from "./account";
 import { tokenSubject } from "./accountHosts";
-import { isNightly } from "./updater";
+import { isDev, isNightly } from "./updater";
 
 // PostHog's public project key, which only writes events, as the Clerk publishable key in
 // account.ts. Project 674045, US Cloud.
@@ -58,7 +58,7 @@ function installEvent(
       $geoip_disable: true,
       signed_in: install.account !== undefined,
       version: install.version,
-      channel: isNightly(install.version) ? "nightly" : "stable",
+      channel: isDev(install.version) ? "dev" : isNightly(install.version) ? "nightly" : "stable",
       os: install.platform,
       arch: install.arch,
       ...properties,

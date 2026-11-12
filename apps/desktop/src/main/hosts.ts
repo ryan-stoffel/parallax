@@ -123,7 +123,7 @@ import {
   serviceStep,
 } from "./plxd";
 import { requestAccepted, type HostUsage } from "./telemetry";
-import { isNightly } from "./updater";
+import { isDev, isNightly } from "./updater";
 import { anyWindowVisible, broadcast, perWindow } from "./windows";
 
 // With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
@@ -224,7 +224,9 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   });
   targetVersion = target;
   hostUpdater = new HostUpdater({
-    packaged: app.isPackaged && !process.env["PLXD_PATH"],
+    // A dev build leaves other computers' plxd alone (0103): they serve Stable and Nightly too, and
+    // public releases have no plxd of its version to install.
+    packaged: app.isPackaged && !process.env["PLXD_PATH"] && !isDev(app.getVersion()),
     version: app.getVersion(),
     channel: channel(),
     kindOf: (hostId) => (savedHost(hostId) ? "ssh" : runsOnHost(hostId) ? "remote" : undefined),
@@ -887,7 +889,9 @@ async function replaceOtherServe(
   if (!plxd) return false;
   try {
     const installed = /^installed: true$/m.test((await serviceStatus(plxd)) ?? "");
-    const copy = installed ? await refreshCopy(plxd, homedir()) : undefined;
+    const copy = installed
+      ? await refreshCopy(plxd, homedir(), undefined, undefined, copyFolder())
+      : undefined;
     const wanted = copy ? copy.version : await plxdVersion(plxd);
     if (wanted !== undefined && wanted !== running && serveChecks >= 2) {
       console.warn(`parallax: kept plxd serve ${running}, not ${wanted}, after two tries`);
@@ -1423,6 +1427,9 @@ const connectProgram = (): ConnectProgram => ({
     : path.join(app.getAppPath(), "..", "..", "packages", "plx", "bin", "plx.mjs"),
 });
 
+/** Where this computer's copy of plxd goes under the home folder (`refreshCopy`, 0103). */
+const copyFolder = () => (isDev(app.getVersion()) ? ".parallax-dev-plxd" : ".parallax-plxd");
+
 /**
  * The channel `plx add` installs: this app's own (0028). A development build follows
  * nightly, the channel with releases.
@@ -1590,7 +1597,7 @@ async function keepServing(): Promise<void> {
       next = "done";
       return;
     }
-    const copy = await refreshCopy(plxd, homedir());
+    const copy = await refreshCopy(plxd, homedir(), undefined, undefined, copyFolder());
     const local = connections.get("local")?.state;
     const runsCopy =
       local?.status === "connected" &&

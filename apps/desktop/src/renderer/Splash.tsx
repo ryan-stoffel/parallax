@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import devIcon from "./assets/app-icon-dev.svg";
 import nightlyIcon from "./assets/app-icon-nightly.svg";
 import { ParallaxMark } from "./logos";
 
@@ -11,8 +12,9 @@ const FADE_MS = 300;
 
 /**
  * The app's mark centered on the window's background while the app launches, as T3 Code does
- * (PLX-1109): its circles' overlap light in dark mode and dark in light mode. A nightly build
- * shows its whole app icon instead, sky tile and all (main.tsx sets `.nightly`). It fades out
+ * (PLX-1109): its circles' overlap light in dark mode and dark in light mode. A nightly or dev
+ * build shows its whole app icon instead, sky or blueprint tile and all (main.tsx sets `.nightly`
+ * or `.dev`, and `.stage` for both). It fades out
  * once `ready`, the open host's list loaded or its connection failed, and goes away when faded.
  */
 export function Splash({ ready }: { ready: boolean }) {
@@ -37,12 +39,13 @@ export function Splash({ ready }: { ready: boolean }) {
       data-testid="splash"
       className={`fixed inset-0 z-[1000] grid place-items-center bg-[var(--background)] transition-opacity duration-300 ${phase === "fading" ? "pointer-events-none opacity-0" : ""}`}
     >
-      <ParallaxMark className="size-16 [:root.nightly_&]:hidden" />
+      <ParallaxMark className="size-16 [:root.stage_&]:hidden" />
       <img
         src={nightlyIcon}
         alt=""
         className="hidden size-16 rounded-[22%] [:root.nightly_&]:block"
       />
+      <img src={devIcon} alt="" className="hidden size-16 rounded-[22%] [:root.dev_&]:block" />
     </div>
   );
 }

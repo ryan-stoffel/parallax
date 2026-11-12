@@ -125,8 +125,8 @@ export async function serviceRuns(
 const WEB_CLIENT = path.join("app.asar.unpacked", "dist", "renderer");
 
 /**
- * Keeps this computer's copy of the bundled plxd at `~/.parallax-plxd` under `home`, which plxd's
- * login service runs (0072): written when it's missing or older than `bundled`, never over a
+ * Keeps this computer's copy of the bundled plxd in `folder` under `home`, `~/.parallax-plxd`
+ * unless a dev build keeps its own (0103), which plxd's login service runs (0072): written when it's missing or older than `bundled`, never over a
  * newer one, such as `host/update`'s. The web client plxd serves from beside itself (`WEB_CLIENT`)
  * is kept the same way on its own, by the version in `renderer.version` beside it, since
  * `host/update` and plx install plxd without it. Each is copied into a temp folder there,
@@ -139,9 +139,10 @@ export async function refreshCopy(
   home: string,
   platform = process.platform,
   version = plxdVersion,
+  folder = ".parallax-plxd",
 ): Promise<{ plxd: string; version: string | undefined }> {
   const name = platform === "win32" ? "plxd.exe" : "plxd";
-  const dir = path.join(home, ".parallax-plxd");
+  const dir = path.join(home, folder);
   const plxd = path.join(dir, name);
   // Electron's asar patch leaves `app.asar.unpacked` alone, as command.ts's Linux copy relies on.
   const source = path.join(path.dirname(bundled), WEB_CLIENT);
@@ -240,8 +241,11 @@ const processes: ServeSystem = {
 const isBundledServe = (args: string) =>
   /(\.app\/Contents\/Resources|\/resources|\/parallax\/app)\/plxd serve(\s|$)/.test(args);
 
-/** Whether a serve's command line is the copy at `~/.parallax-plxd/plxd` (`refreshCopy`). */
-const isCopyServe = (args: string) => /\/\.parallax-plxd\/plxd serve(\s|$)/.test(args);
+/**
+ * Whether a serve's command line is a copy `refreshCopy` keeps: `~/.parallax-plxd/plxd`, or a dev
+ * build's `~/.parallax-dev-plxd/plxd`. The lock it holds says whose data folder it serves.
+ */
+const isCopyServe = (args: string) => /\/\.parallax(-dev)?-plxd\/plxd serve(\s|$)/.test(args);
 
 /**
  * After an update, stops the `plxd serve` holding `dir`'s lock when its version (`running`)

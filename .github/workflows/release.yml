@@ -4,7 +4,9 @@ name: Release
 # schedule only from the default branch: every half hour, plan publishes a nightly of that
 # branch when it has commits since the last nightly and that nightly is at least six hours
 # old. A manual stable run publishes that nightly's commit without -nightly and marks it
-# Latest. dry-run, the default manual choice, builds and signs any branch and never publishes.
+# Latest. dry-run, the default manual choice, builds and signs any branch and never publishes. A
+# manual dev run publishes any branch as Parallax (Dev) to the private repo parallax-dev, with the
+# DEV_RELEASE_TOKEN secret, which only Ryan's installs read (0103).
 # Each build attaches its own files as soon as it's done; the dmg is notarized after. Only
 # this workflow can write releases. It runs no tests or lint; the pull request already passed CI.
 on:
@@ -14,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: "dry-run never publishes. nightly and stable do."
+        description: "dry-run never publishes. nightly and stable do. dev publishes this branch privately."
         required: true
         default: dry-run
         type: choice
@@ -22,6 +24,7 @@ on:
           - dry-run
           - nightly
           - stable
+          - dev
       commit:
         description: "Stable only. Commit to publish instead of the latest nightly."
         required: false
@@ -35,10 +38,10 @@ permissions:
   contents: read
 
 # Nightlies share a queue so two runs cannot publish the same commit. A stable run has its
-# own, so a check does not block a promotion. A dry run stays on its branch. A run that has
-# started publishing is not cancelled.
+# own, so a check does not block a promotion, and dev builds share theirs. A dry run stays on its
+# branch. A run that has started publishing is not cancelled.
 concurrency:
-  group: ${{ github.event_name == 'schedule' && 'release-nightly' || github.event.inputs.channel == 'nightly' && 'release-nightly' || github.event.inputs.channel == 'stable' && 'release-stable' || format('release-dry-{0}', github.ref) }}
+  group: ${{ github.event_name == 'schedule' && 'release-nightly' || github.event.inputs.channel == 'nightly' && 'release-nightly' || github.event.inputs.channel == 'stable' && 'release-stable' || github.event.inputs.channel == 'dev' && 'release-dev' || format('release-dry-{0}', github.ref) }}
   cancel-in-progress: false
 
 defaults:
@@ -62,6 +65,7 @@ jobs:
       channel: ${{ steps.plan.outputs.channel }}
       sha: ${{ steps.plan.outputs.sha }}
       dry_run: ${{ steps.plan.outputs.dry_run }}
+      dev: ${{ steps.plan.outputs.dev }}
       # A skipped draft means plan already decided not to build. A draft that ran says whether
       # the release is already complete.
       build: ${{ steps.draft.conclusion == 'skipped' && steps.plan.outputs.build || steps.draft.outputs.build }}
@@ -83,11 +87,16 @@ jobs:
           VERSION_INPUT: ${{ inputs.version }}
         run: scripts/ci/plan-release
 
-      # A dry run prints the create. A skipped plan (nothing new, or too soon) creates nothing.
+      # A dry run prints the create. A skipped plan (nothing new, or too soon) creates nothing. A
+      # dev release goes to the private dev repo, with its own token.
       - name: Create the draft release
         id: draft
         if: steps.plan.outputs.build == 'true'
         env:
+          GH_TOKEN: ${{ steps.plan.outputs.dev == 'true' && secrets.DEV_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ steps.plan.outputs.dev == 'true' && 'ryan-stoffel/parallax-dev' || github.repository }}
+          DEV: ${{ steps.plan.outputs.dev }}
+          SOURCE: ${{ github.repository }}@${{ steps.plan.outputs.sha }} (${{ github.ref_name }})
           TAG: ${{ steps.plan.outputs.tag }}
           CHANNEL: ${{ steps.plan.outputs.channel }}
           GITHUB_SHA: ${{ steps.plan.outputs.sha }}
@@ -224,15 +233,15 @@ jobs:
       # notarize runs it.
       - name: Verify the app's signature
         if: runner.os == 'macOS'
-        # Parallax.app, or Parallax (Nightly).app for a nightly.
+        # Parallax.app, or Parallax (Nightly).app or Parallax (Dev).app.
         run: codesign --verify --deep --strict --verbose=2 apps/desktop/release/mac-arm64/*.app
 
       # Straight from the runner to plan's draft, then publishes it: the first build done makes the
       # release visible. A dry run prints the writes.
       - name: Publish this build
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ needs.plan.outputs.dev == 'true' && secrets.DEV_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ needs.plan.outputs.dev == 'true' && 'ryan-stoffel/parallax-dev' || github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
           DRY_RUN: ${{ needs.plan.outputs.dry_run }}
@@ -290,8 +299,8 @@ jobs:
 
       - name: Finish the release
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ needs.plan.outputs.dev == 'true' && secrets.DEV_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ needs.plan.outputs.dev == 'true' && 'ryan-stoffel/parallax-dev' || github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
           ALL_BUILT: ${{ needs.build.result == 'success' }}
@@ -394,8 +403,8 @@ jobs:
       - name: Download the published dmg
         if: needs.plan.outputs.dry_run != '1'
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ needs.plan.outputs.dev == 'true' && secrets.DEV_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ needs.plan.outputs.dev == 'true' && 'ryan-stoffel/parallax-dev' || github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           mkdir dmg

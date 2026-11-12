@@ -118,6 +118,34 @@ async fn host_update_hands_over_to_a_copy_that_isnt_older_instead_of_writing_ove
     assert_eq!(version, format!("{NEWER}\n"));
 }
 
+/// Parallax (Dev)'s plxd refuses another app's `host/update` and touches nothing (0103).
+#[tokio::test]
+async fn a_dev_plxd_refuses_host_update() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let program = copy_in(&home.join(".parallax-dev-plxd"), OLDER);
+    let launcher = Launcher::new(
+        DataDir::new(temp.path().join("data")).unwrap(),
+        Environment::empty(),
+    );
+    let update = SelfUpdate::for_tests(
+        launcher,
+        "file:///nonexistent",
+        &program,
+        &home,
+        "2610.10901.10000-dev",
+    );
+
+    let error = update.install(NEW, 0, false).await.unwrap_err();
+    assert!(
+        error.message.contains("Parallax (Dev)"),
+        "{}",
+        error.message
+    );
+    assert_eq!(fs::read_to_string(&program).unwrap(), "copy");
+    assert!(!home.join(".parallax-plxd").exists());
+}
+
 /// A new plxd that can't move in puts the one it set aside back, so none goes missing.
 #[test]
 fn a_failed_move_in_puts_the_old_plxd_back() {

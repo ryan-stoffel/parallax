@@ -51,12 +51,14 @@ applyTheme();
 // Enriched Markdown's parser, so a message draws in its first frame once it's loaded
 // (MarkdownText). It loads in a few milliseconds, before any thread opens.
 void preloadParser();
-// A nightly build wears a night sky in the sidebar and on its send buttons (index.css).
-void window.parallax
-  .version()
-  .then((version) =>
-    document.documentElement.classList.toggle("nightly", version.includes("-nightly")),
-  );
+// A nightly build wears a night sky in the sidebar and on its send buttons, and a dev build
+// (0103) blueprint paper (index.css). `.stage` is either.
+void window.parallax.version().then((version) => {
+  const { classList } = document.documentElement;
+  classList.toggle("nightly", version.includes("-nightly"));
+  classList.toggle("dev", version.endsWith("-dev"));
+  classList.toggle("stage", version.includes("-nightly") || version.endsWith("-dev"));
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

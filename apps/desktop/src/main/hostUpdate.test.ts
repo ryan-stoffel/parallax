@@ -64,6 +64,9 @@ test("versions compare by their numbers, not their channel", () => {
   expect(isOlder("0.1.0", APP)).toBe(true);
   expect(isOlder(APP, APP)).toBe(false);
   expect(isOlder("dev", APP)).toBe(false);
+  // Nightly never updates Dev's plxd, and Dev never updates anyone's (0103).
+  expect(isOlder("0.1.0-dev", APP)).toBe(false);
+  expect(isOlder("0.1.0", "2610.10912.13045-dev")).toBe(false);
 });
 
 test("only an older remote plxd updates, once the local one runs the app's version", async () => {

@@ -53,8 +53,9 @@ use crate::paths::DataDir;
 /// and the scheduled task's name on Windows.
 pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.parallax.plxd";
 
-/// The environment variable that overrides the label when `--label` is not given. Only tests
-/// should set it, so a test run never touches a real install.
+/// The environment variable that overrides the label when `--label` is not given. Tests set it, so
+/// a test run never touches a real install, and so does Parallax (Dev), whose plxd serves its own
+/// data folder under its own label (0103).
 pub const SERVICE_LABEL_ENV: &str = "PLXD_SERVICE_LABEL";
 
 /// How long [`status`] and the conflict check in [`install`] wait for an `initialize` answer.
