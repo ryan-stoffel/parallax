@@ -7002,6 +7002,14 @@ export type ExportedThread = {
 	 */
 	permission?: string,
 	/**
+	 * Its context window in tokens, as `thread/start` takes it.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `thread/start` takes it.
+	 */
+	fast?: boolean,
+	/**
 	 * Whether it asks before acting.
 	 */
 	approvals: boolean,

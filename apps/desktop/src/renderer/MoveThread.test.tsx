@@ -88,6 +88,7 @@ test("a thread in a repository pushes its branch, moves onto it there, and is ar
     ["local", "agent/gitStatus", { runId: "t1" }],
     ["local", "repo/remote", { repo: "r1" }],
     ["local", "agent/push", { runId: "t1" }],
+    ["local", "repo/fetchBase", { repo: "r1", base: "parallax/fix" }],
     ["ssh:mini", "repo/match", { origin: "git@github.com:me/parallax.git" }],
     ["ssh:mini", "repo/fetchBase", { repo: "r9", base: "origin/parallax/fix" }],
     ["ssh:mini", "thread/receive", { thread: exported, repo: "r9", base: "origin/parallax/fix" }],
@@ -109,6 +110,24 @@ test("uncommitted changes stop the move before anything leaves this computer", a
   await act(() => vi.waitFor(() => expect(text()).toContain("uncommitted changes")));
   const methods = request.mock.calls.map(([, method]) => method);
   expect(methods).not.toContain("agent/push");
+  expect(methods).not.toContain("thread/receive");
+  expect(methods).not.toContain("thread/archive");
+});
+
+test("a fetch that leaves the other computer on an older commit stops the move", async () => {
+  const request = bridge({
+    "thread/export": ok({ runId: "t1", prompt: "Fix it", backend: "claude", approvals: true }),
+    "agent/gitStatus": ok({ branch: "parallax/fix", changes: 0, ahead: 1, origin: true }),
+    "repo/remote": ok({ url: "git@github.com:me/parallax.git" }),
+    "agent/push": ok({}),
+    "repo/match": ok({ repo: { id: "r9" } }),
+    // Offline, the other computer's fetch keeps what it fetched last.
+    "repo/fetchBase": (host) => ({ result: { commit: host === "local" ? "new" : "old" } }),
+  });
+  await open({ repo });
+  await moveHere();
+  await act(() => vi.waitFor(() => expect(text()).toContain("Mac mini couldn't fetch")));
+  const methods = request.mock.calls.map(([, method]) => method);
   expect(methods).not.toContain("thread/receive");
   expect(methods).not.toContain("thread/archive");
 });

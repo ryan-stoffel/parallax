@@ -90,12 +90,21 @@ export function MoveThread({
         const { url } = await call(hostId, "repo/remote", { repo: repo.id });
         if (!url) throw new Error(`${repo.name} has no origin to move through.`);
         await call(hostId, "agent/push", { runId });
+        // The commit it pushed, to check the other computer fetched it and not an older one.
+        const { commit } = await call(hostId, "repo/fetchBase", {
+          repo: repo.id,
+          base: status.branch,
+        });
         doing(`Finding the repository on ${where}`);
         const found = (await call(target.id, "repo/match", { origin: url })).repo;
         if (!found)
           throw new Error(`${where} doesn't have this repository. Clone it there, then move it.`);
         const base = `origin/${status.branch}`;
-        await call(target.id, "repo/fetchBase", { repo: found.id, base });
+        const fetched = await call(target.id, "repo/fetchBase", { repo: found.id, base });
+        if (fetched.commit !== commit)
+          throw new Error(
+            `${where} couldn't fetch ${status.branch}. Check it's online, then try again.`,
+          );
         place = { repo: found.id, base };
       }
       doing("Moving the conversation");

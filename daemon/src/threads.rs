@@ -894,6 +894,10 @@ pub(crate) async fn export(
         .into_iter()
         .map(|event| event.event)
         .collect();
+    // An import or a received thread that hasn't run here has no session yet, and its whole log is
+    // the history it copied, as a fork's prompt's turn is.
+    let mut parent = parent;
+    parent.forked |= parent.run.state.session_id.is_none();
     let (mut transcript, _) = transcript_until(&events, turn, first, &parent);
     // ponytail: drops whole events from the front; cut long tool output instead if long threads
     // lose too much.
@@ -916,6 +920,8 @@ pub(crate) async fn export(
         model: fields.model,
         effort: fields.effort,
         permission: fields.permission,
+        context_window: fields.context_window,
+        fast: fields.fast,
         approvals: fields.approvals,
         transcript,
     })
@@ -954,7 +960,8 @@ pub(crate) async fn receive(
             model: thread.model,
             effort: thread.effort.as_deref().and_then(option_value),
             permission: thread.permission.as_deref().and_then(option_value),
-            ..RunOptions::default()
+            context_window: thread.context_window,
+            fast: thread.fast,
         },
         approvals: thread.approvals,
         thread: Some(NewThread {

@@ -62,8 +62,16 @@ async fn a_moved_thread_continues_on_the_other_host() {
     assert_eq!(prompt, "Write the notes");
     assert_eq!(super::fork::follow_ups(&items), ["Now the tests"]);
 
-    let again = other.call::<ThreadReceive>(params).await.unwrap();
+    let again = other.call::<ThreadReceive>(params.clone()).await.unwrap();
     assert_eq!(again.thread.id, moved.thread.id, "receiving again finds it");
+    // Before it runs here, its whole log is the history it copied, so it moves on whole.
+    let onward = other
+        .call::<ThreadExport>(ThreadExportParams {
+            run_id: moved.thread.id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(onward.transcript, params.thread.transcript);
 
     other.subscribe(0, Some(scope(there.id))).await;
     other

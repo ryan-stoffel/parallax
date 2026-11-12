@@ -801,6 +801,14 @@ pub struct ExportedThread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<String>,
+    /// Its context window in tokens, as `thread/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, as `thread/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
     /// Whether it asks before acting.
     pub approvals: bool,
     /// Its `agent.output` items, one list per event, oldest first, cut as a
