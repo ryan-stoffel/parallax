@@ -19,6 +19,14 @@ async function fixture() {
   const user = accountOf("https://clerk.test", name);
   return { host, token, control, carrier, stub, user };
 }
+// Closes the test's sockets before removing the host, as reconnect.test.ts does. Removing it first
+// has the relay close the control socket while the test closes it too, and that crossed close can
+// leave workerd unable to shut down after the run (PLX-1536).
+async function closeThenUnregister(f: Awaited<ReturnType<typeof fixture>>) {
+  f.control.ws.close(); f.carrier.ws.close();
+  await Promise.all([f.control.closed, f.carrier.closed]);
+  await f.stub.unregister(f.user);
+}
 it("shares 16 durable claims with a legacy spare and refuses the 17th pending proof open", async () => {
   const f = await fixture();
   try {
@@ -30,7 +38,7 @@ it("shares 16 durable claims with a legacy spare and refuses the 17th pending pr
     const ledger = await runInDurableObject(f.stub, async (_, state) => state.storage.get<object>("streams"));
     expect(Object.keys(ledger!)).toHaveLength(16);
     for (const r of results) if (r.webSocket) { r.webSocket.accept(); r.webSocket.close(); }
-  } finally { await f.stub.unregister(f.user); f.control.ws.close(); f.carrier.ws.close(); await Promise.all([f.control.closed, f.carrier.closed]); }
+  } finally { await closeThenUnregister(f); }
 });
 it("forwards final bytes before FIN, accounts original frame minimum, and keeps carrier for a fresh stream", async () => {
   const f = await fixture();
@@ -63,5 +71,5 @@ it("forwards final bytes before FIN, accounts original frame minimum, and keeps 
       await expect.poll(async () => (await f.stub.status(f.user))?.usage.bytes).toBe((n + 1) * MIN_FRAME_BYTES);
       waiting = new Promise<void>(resolve => { release = resolve; });
     }
-  } finally { release(); spy.mockRestore(); await f.stub.unregister(f.user); f.control.ws.close(); f.carrier.ws.close(); await Promise.all([f.control.closed, f.carrier.closed]); }
+  } finally { release(); spy.mockRestore(); await closeThenUnregister(f); }
 });
