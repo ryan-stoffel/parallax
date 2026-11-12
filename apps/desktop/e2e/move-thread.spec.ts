@@ -52,8 +52,13 @@ test.afterEach(async () => {
 });
 
 test("a thread moves to another computer and its follow-up runs there", async () => {
-  const shot = (page: Page, name: string) =>
-    page.screenshot({ path: test.info().outputPath(`${name}.png`) });
+  // Once the page's animations end, as a dialog fades in.
+  const shot = async (page: Page, name: string) => {
+    await page.evaluate(
+      "Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {})))",
+    );
+    await page.screenshot({ path: test.info().outputPath(`${name}.png`) });
+  };
   const bin = fakeTailscale();
   const port = await freePort();
   process.env["PLXD_REMOTE_PORT"] = String(port);
