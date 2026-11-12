@@ -1275,6 +1275,73 @@ describe("spare placement (PLX-1540)", () => {
 
   it("changes nothing when the setting is unset or 0", async () => {
     for (const tries of [undefined, "0"]) expect((await placed(tries, [])).asked).toEqual([]);
+    // Nor is the control socket tagged with its colo.
+    const { host } = await online(undefined, "LAX");
+    const tags = await runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (_: HostRelay, state) =>
+      state.getTags(state.getWebSockets("host")[0]!),
+    );
+    expect(tags.some((tag) => tag.startsWith("colo:"))).toBe(false);
+  });
+
+  /** Holds each colo lookup until the test sets `answers` at its index, as `asked` lists them. A
+   *  plain value, since a promise made here can't be settled from another object. */
+  function heldLookups() {
+    const answers: string[] = [];
+    const asked: string[] = [];
+    const spy = vi.spyOn(StreamRelay.prototype, "colo").mockImplementation(async function (this: StreamRelay) {
+      const at = asked.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString()) - 1;
+      while (answers[at] === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
+      return answers[at];
+    });
+    return { answers, asked, spy };
+  }
+
+  it("lets a second spare request mid-placement supersede the first, so plxd gets one spare", async () => {
+    const { answers, asked, spy } = heldLookups();
+    const before = testEnv.SPARE_PLACEMENT_TRIES;
+    testEnv.SPARE_PLACEMENT_TRIES = "3";
+    try {
+      const { host, control } = await online(undefined, "LAX");
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      await expect.poll(() => asked.length).toBe(1);
+      // As plxd does after doubting its link: it drops the unannounced spare and asks again.
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      await expect.poll(() => asked.length).toBe(2);
+      // The first finishes first, and is dropped, so the first open is the second's.
+      answers[0] = "LAX";
+      answers[1] = "LAX";
+      const open = JSON.parse((await control.next()) as string) as Open;
+      expect(open).toMatchObject({ spare: true, stream: asked[1] });
+      expect(await openStreams(host)).toEqual({ [asked[1]!]: { spare: true } });
+      expect(await runInDurableObject(streamObject(asked[0]!), (_, state) => state.storage.list())).toEqual(new Map());
+    } finally {
+      testEnv.SPARE_PLACEMENT_TRIES = before;
+      spy.mockRestore();
+    }
+  });
+
+  it("drops a placement plxd reconnected during, so the new connection isn't sent the old spare", async () => {
+    const { answers, asked, spy } = heldLookups();
+    const before = testEnv.SPARE_PLACEMENT_TRIES;
+    testEnv.SPARE_PLACEMENT_TRIES = "3";
+    try {
+      const { host, control } = await online(undefined, "LAX");
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      await expect.poll(() => asked.length).toBe(1);
+      const again = (await connectHost(host, [], "LAX")).control;
+      expect(JSON.parse((await again.next()) as string)).toMatchObject({ t: "ready" });
+      answers[0] = "LAX";
+      // The new connection asks for its own spare, which is the first open it hears.
+      again.ws.send(JSON.stringify({ t: "spare" }));
+      await expect.poll(() => asked.length).toBe(2);
+      answers[1] = "LAX";
+      const open = JSON.parse((await again.next()) as string) as Open;
+      expect(open).toMatchObject({ spare: true, stream: asked[1] });
+      expect(await openStreams(host)).toEqual({ [asked[1]!]: { spare: true } });
+    } finally {
+      testEnv.SPARE_PLACEMENT_TRIES = before;
+      spy.mockRestore();
+    }
   });
 
   it("re-creates a spare away from the control socket's colo, up to the cap, and keeps the last", async () => {
@@ -1300,15 +1367,7 @@ describe("spare placement (PLX-1540)", () => {
   });
 
   it("never offers a spare until its placement ends, so a client arriving meanwhile gets its own stream", async () => {
-    // Each lookup waits until the test sets its answer. A plain value, since a promise made here
-    // can't be settled from another object.
-    const answers: string[] = [];
-    const asked: string[] = [];
-    const colo = vi.spyOn(StreamRelay.prototype, "colo").mockImplementation(async function (this: StreamRelay) {
-      const at = asked.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString()) - 1;
-      while (answers[at] === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
-      return answers[at];
-    });
+    const { answers, asked, spy: colo } = heldLookups();
     const before = testEnv.SPARE_PLACEMENT_TRIES;
     testEnv.SPARE_PLACEMENT_TRIES = "3";
     try {
