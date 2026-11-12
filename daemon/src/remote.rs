@@ -479,6 +479,10 @@ impl HostKey {
                 )
             })
             .map_err(io::Error::other)?;
+        // No session tickets: plxd's client makes a new config for each connect, so it never
+        // resumes. The tickets were a write of their own just before the 101, which a hop on the
+        // relay's path that leaves Nagle on held for the client's delayed ACK, 40 ms (PLX-1512).
+        config.send_tls13_tickets = 0;
         config.alpn_protocols = alpn_protocols();
         Ok(Arc::new(config))
     }
