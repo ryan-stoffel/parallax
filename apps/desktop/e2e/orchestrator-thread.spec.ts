@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, printFailure, type Launched } from "./launch";
@@ -18,9 +18,8 @@ test.afterEach(async () => {
   await close(launched);
 });
 
-test("an orchestrator's row pins and archives as a thread's does", async () => {
-  launched = await launch("agent.json");
-  const { page } = launched;
+/** Connects, then creates and starts the orchestrator "ember" in a new repository. */
+async function startEmber(page: Page) {
   const request = async <T>(method: string, params: object) => {
     const answer = (await page.evaluate(
       `window.parallax.request("local", ${JSON.stringify(method)}, ${JSON.stringify(params)})`,
@@ -52,6 +51,13 @@ test("an orchestrator's row pins and archives as a thread's does", async () => {
 
   // The requests above went around the app's state, so it reads them anew.
   await page.reload();
+  return { request, id, run };
+}
+
+test("an orchestrator's row pins and archives as a thread's does", async () => {
+  launched = await launch("agent.json");
+  const { page } = launched;
+  const { request, run } = await startEmber(page);
   // Working's drawer holds it while it works, folded until opened (0075).
   const working = page.locator("#sidebar details").filter({ hasText: /^Working/ });
   await working.locator("summary").click();
@@ -85,4 +91,31 @@ test("an orchestrator's row pins and archives as a thread's does", async () => {
   await expect.poll(async () => (await threadOf())?.archived).toBe(true);
   await expect(page.locator('#sidebar ul[aria-label="Threads"] li')).toHaveCount(0);
   if (proof) await page.screenshot({ path: path.join(proof, "orchestrator-archived.png") });
+});
+
+// The orchestrator tab's Plan follows the board while it's open (PLX-1539): the window's
+// subscription has to reach plxd with its project, which no fixture checks.
+test("an orchestrator's plan shows a board item as plxd adds it", async () => {
+  launched = await launch("agent.json");
+  const { page } = launched;
+  const { request, id } = await startEmber(page);
+
+  const working = page.locator("#sidebar details").filter({ hasText: /^Working/ });
+  await working.locator("summary").click();
+  await page.locator('#sidebar li[data-kind="orchestrator"]').filter({ hasText: "ember" }).click();
+  const plan = page.locator('aside[aria-label="Side panel"] section[aria-label="Plan"]');
+  await expect(plan).toBeVisible();
+  // Past the tab's own first read, so only an event can bring the item.
+  await page.waitForTimeout(1000);
+  await expect(plan).not.toContainText("one thread adds it");
+
+  await request("board/add", {
+    orchestrator: id,
+    text: "**Search command**: one thread adds it",
+    section: "now",
+  });
+  await expect(plan).toContainText("one thread adds it");
+  await expect(plan.getByRole("alert")).toHaveCount(0);
+  const proof = process.env["PLX_PROOF_DIR"];
+  if (proof) await page.screenshot({ path: path.join(proof, "orchestrator-plan.png") });
 });

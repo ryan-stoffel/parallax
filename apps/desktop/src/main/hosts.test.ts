@@ -28,6 +28,7 @@ const fake = vi.hoisted(() => {
     dispose() {
       this.disposed = true;
     }
+    subscribe = vi.fn((_params: unknown, _listener: unknown) => () => {});
     async request(method: string, params?: unknown) {
       const answer = answers.get(method);
       if (typeof answer === "function")
@@ -635,6 +636,18 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     ]);
   } finally {
     vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a window's subscription reaches plxd with its project, which shell needs", async () => {
+  fake.answers.clear();
+  const local = await start({});
+  try {
+    const params = { after: 7, logId: "log-1", project: "o-1", shell: true };
+    fake.handlers.get("parallax:subscribe")!({ sender: {} }, "local", "key-1", params);
+    expect(local.subscribe.mock.calls[0]?.[0]).toEqual(params);
+  } finally {
     rmSync(fake.userData, { recursive: true, force: true });
   }
 });
