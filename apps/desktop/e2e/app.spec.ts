@@ -357,7 +357,7 @@ test("shows the orchestrator's tasks in its side panel, opens their chats, and m
     })})`,
   );
   expect(task).not.toHaveProperty("error");
-  const working = panel.getByRole("region", { name: "Running" });
+  const working = panel.getByRole("region", { name: "Working" });
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
 
   // One the orchestrator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
