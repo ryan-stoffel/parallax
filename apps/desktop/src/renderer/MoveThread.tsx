@@ -31,8 +31,8 @@ async function call<M extends RendererMethod>(
 /**
  * Moves a thread to another of the user's computers (PLX-1538), a modal dialog open while it's
  * mounted. It lists the other connected computers whose plxd takes a moved thread (`threadMove`).
- * Moving one exports the thread here. A thread in a repository pushes its branch, and the other
- * computer finds its own copy of the repository by `origin` and fetches that branch. The other
+ * Moving one exports the thread here. For a thread in a repository, the other computer finds its
+ * own copy of the repository by `origin`, then this one pushes its branch, which the other fetches. The other
  * computer then receives the thread, in a new worktree from that branch, and this one is archived.
  * Its first message there tells a new session the conversation (0014).
  */
@@ -82,23 +82,24 @@ export function MoveThread({
       const thread = await call(hostId, "thread/export", { runId });
       let place: { repo: string; base: string } | undefined;
       if (repo && !repo.scratch) {
-        doing("Pushing its branch");
         const status = await call(hostId, "agent/gitStatus", { runId });
         if (status.changes)
           throw new Error("It has uncommitted changes. Commit or discard them, then move it.");
         if (!status.branch) throw new Error("Its folder has no branch checked out to move.");
         const { url } = await call(hostId, "repo/remote", { repo: repo.id });
         if (!url) throw new Error(`${repo.name} has no origin to move through.`);
+        // Found before anything is pushed, so a refusal leaves nothing behind.
+        doing(`Finding the repository on ${where}`);
+        const found = (await call(target.id, "repo/match", { origin: url })).repo;
+        if (!found)
+          throw new Error(`${where} doesn't have this repository. Clone it there, then move it.`);
+        doing("Pushing its branch");
         await call(hostId, "agent/push", { runId });
         // The commit it pushed, to check the other computer fetched it and not an older one.
         const { commit } = await call(hostId, "repo/fetchBase", {
           repo: repo.id,
           base: `refs/heads/${status.branch}`,
         });
-        doing(`Finding the repository on ${where}`);
-        const found = (await call(target.id, "repo/match", { origin: url })).repo;
-        if (!found)
-          throw new Error(`${where} doesn't have this repository. Clone it there, then move it.`);
         const base = `origin/${status.branch}`;
         const fetched = await call(target.id, "repo/fetchBase", { repo: found.id, base });
         if (fetched.commit !== commit)
