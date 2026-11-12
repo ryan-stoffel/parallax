@@ -137,22 +137,32 @@ async function loadKeys(options: VerifyOptions, url: string, noStore: boolean): 
   const maxAge = /max-age=(\d+)/.exec(res.headers.get("cache-control") ?? "")?.[1];
   const age = Number(res.headers.get("age")) || 0;
   const ttl = maxAge ? Math.max((Number(maxAge) - age) * 1000, REFETCH_MS) : TTL_MS;
-  const { keys } = (await res.json()) as { keys?: (JsonWebKey & { kid?: string })[] };
-  const imported = new Map<string, CryptoKey>();
-  for (const jwk of keys ?? []) {
-    if (jwk.kty !== "RSA" || !jwk.kid) continue;
-    imported.set(
-      jwk.kid,
-      await crypto.subtle.importKey(
-        "jwk",
-        jwk,
-        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-        false,
-        ["verify"],
-      ),
-    );
-  }
+  const imported = await importKeys(await res.text().catch(() => ""));
   return { ttl, keys: imported, fresh: noStore || !res.headers.has("age") };
+}
+
+/**
+ * The RS256 signing keys in a JWKS body, by `kid`. Throws `KeysUnavailable` when it isn't JSON or
+ * holds no usable key, as an HTML error page or an empty set answered 200 would, so that answer
+ * is taken for an outage and not for every token being bad.
+ */
+export async function importKeys(body: string): Promise<Map<string, CryptoKey>> {
+  let keys: unknown;
+  try {
+    keys = (JSON.parse(body) as { keys?: unknown })?.keys;
+  } catch {
+    throw new KeysUnavailable("JWKS isn't JSON.");
+  }
+  const imported = new Map<string, CryptoKey>();
+  for (const jwk of Array.isArray(keys) ? (keys as (JsonWebKey & { kid?: unknown })[]) : []) {
+    if (jwk?.kty !== "RSA" || typeof jwk.kid !== "string" || !jwk.kid) continue;
+    const key = await crypto.subtle
+      .importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"])
+      .catch(() => undefined);
+    if (key) imported.set(jwk.kid, key);
+  }
+  if (!imported.size) throw new KeysUnavailable("JWKS holds no usable key.");
+  return imported;
 }
 
 function bytes(base64url: string): Uint8Array<ArrayBuffer> {

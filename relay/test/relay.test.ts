@@ -170,6 +170,22 @@ describe("sign-in", () => {
       }
     });
 
+    it("never stores a 200 that isn't a JWKS with a usable key, and takes it for an outage", async () => {
+      for (const body of ["<html>Bad gateway</html>", "{}", '{"keys":[]}']) {
+        const issuer = `https://clerk-${crypto.randomUUID()}.test`;
+        const url = keysUrl();
+        const env = { ...testEnv, CLERK_JWKS: undefined, CLERK_ISSUER: issuer, CLERK_JWKS_URL: url } as Env;
+        const stub = clerk(() => new Response(body, { headers: { "cache-control": "public, max-age=14400" } }));
+        try {
+          const token = await session("user_bad_200", { iss: issuer });
+          await expect(verifySession(env, token)).rejects.toBeInstanceOf(KeysUnavailable);
+          expect(await caches.default.match(url)).toBeUndefined();
+        } finally {
+          stub.restore();
+        }
+      }
+    });
+
     it("never stores an outage, which still throws KeysUnavailable", async () => {
       const issuer = `https://clerk-${crypto.randomUUID()}.test`;
       const url = keysUrl();

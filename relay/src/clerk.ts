@@ -1,4 +1,4 @@
-import { KeysUnavailable, verifyClerkToken } from "@parallax/clerk-verify";
+import { importKeys, KeysUnavailable, verifyClerkToken } from "@parallax/clerk-verify";
 
 import type { Env } from "./index";
 
@@ -85,8 +85,9 @@ export async function verifySession(
 /**
  * How long a JWKS stays in the shared cache, at most: an hour, or Clerk's `max-age` when shorter.
  * Clerk sends four hours. An hour costs one fetch per data center and instance each hour, and
- * bounds how long a key Clerk removed keeps working, since isolates keep a copy only for what's
- * left of its hour.
+ * bounds how long a key Clerk removed keeps working to about 61 minutes: this hour, since isolates
+ * keep a copy only for what's left of it, plus clerk-verify's one-minute floor. Any staleness at
+ * Clerk's own CDN comes on top, since its `Age` isn't carried over.
  */
 const SHARED_TTL_S = 3600;
 
@@ -95,8 +96,9 @@ const SHARED_TTL_S = 3600;
  * fetched and stored there for [`SHARED_TTL_S`]. A stored copy answers with its `Age`, so the
  * isolate keeps it only for the rest of that time and refetches past it for a key it lacks
  * (`noStore`). That refetch replaces the stored copy, so a rotation reaches the data center's
- * other isolates too. `fetched` hears how long a fetch from Clerk took, and only then. A failed
- * fetch or a non-2xx answer is never stored, and the cache failing counts as a miss.
+ * other isolates too. `fetched` hears how long a fetch from Clerk took, and only then. Only a JWKS
+ * with a usable key is stored. A failed fetch or a non-2xx answer is returned unstored, a 2xx that
+ * isn't such a JWKS throws `KeysUnavailable` (PLX-1351), and the cache failing counts as a miss.
  */
 export async function sharedJwks(
   url: string,
@@ -123,7 +125,9 @@ export async function sharedJwks(
   if (!response.ok) return response;
   const maxAge = Number(/max-age=(\d+)/.exec(response.headers.get("cache-control") ?? "")?.[1]);
   const ttl = Number.isNaN(maxAge) ? SHARED_TTL_S : Math.min(maxAge, SHARED_TTL_S);
-  const body = await response.arrayBuffer();
+  const body = await response.text();
+  // A 200 that isn't a JWKS would sign out the whole data center for the hour if stored.
+  await importKeys(body);
   const headers = new Headers({
     "content-type": response.headers.get("content-type") ?? "application/json",
     "cache-control": `public, max-age=${ttl}`,

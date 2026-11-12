@@ -192,5 +192,10 @@ test("a JWKS that's down with none cached throws KeysUnavailable, unlike a refus
   await assert.rejects(verifyClerkToken(good, options), KeysUnavailable);
   const refused = { ...options, fetch: () => Promise.reject(new TypeError("fetch failed")) };
   await assert.rejects(verifyClerkToken(good, refused), KeysUnavailable);
+  // A 200 that isn't a JWKS with a usable key is an outage too, not a bad token.
+  for (const body of ["<html>Bad gateway</html>", "{}", '{"keys":[]}']) {
+    const bad = { ...options, fetch: (async () => new Response(body)) as typeof fetch };
+    await assert.rejects(verifyClerkToken(good, bad), KeysUnavailable);
+  }
   setDown(false);
 });
