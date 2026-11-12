@@ -2274,7 +2274,7 @@ export function orchestratorLoss(agents: number, kept: boolean): string {
 }
 
 /** `Date.now()`, rendering again each minute. */
-function useMinute() {
+export function useMinute() {
   const [, tick] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => tick((n) => n + 1), 60_000);

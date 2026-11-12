@@ -3,6 +3,7 @@ import { useEffect, useState, type SVGProps } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import type { SubscribeParams } from "../preload/bridge";
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
 import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -11,7 +12,7 @@ import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
 import { codeComponents, highlight } from "./AgentChat";
 
-/** The status board the orchestrator keeps, as `orchestrator.md` asks; the orchestrator tab leads with it. */
+/** The status board the orchestrator keeps, as `orchestrator.md` asks; the orchestrator tab shows it as its plan. */
 export const board = "notes.md";
 
 /** Applies one of an orchestrator's events to its context files: a changed file joins or replaces its row, by path. */
@@ -49,29 +50,31 @@ export function useOrchestratorContext(
     let unsubscribe = () => {};
 
     async function load() {
+      unsubscribe();
       // ponytail: `context/list` has no `seq` of its own (PLX-187), so subscribe after
       // `agent/list`'s, taken first: a change that lands before the list replays, harmlessly.
       const position = await window.parallax.request(hostId, "agent/list", {
         project: orchestrator,
       });
       if (stopped) return;
-      if ("error" in position) return setError(position.error.message);
+      if ("error" in position) return setError(describeError(position.error));
       const list = await window.parallax.request(hostId, "context/list", { project: orchestrator });
       if (stopped) return;
-      if ("error" in list) return setError(list.error.message);
+      if ("error" in list) return setError(describeError(list.error));
       setFiles(list.result.files);
       setError(undefined);
-      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
-      const since = {
+      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453). plxd
+      // refuses it without `project` (PLX-1340).
+      const since: SubscribeParams = {
         after: position.result.seq,
-        orchestrator,
+        project: orchestrator,
         shell: true,
         logId: position.logId,
       };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
-        if (message.type === "error") return setError(message.error.message);
+        if (message.type === "error") return setError(describeError(message.error));
         setFiles((prev) => applyContextEvent(prev, message.event.event));
       });
     }

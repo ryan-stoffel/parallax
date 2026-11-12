@@ -4,8 +4,10 @@ import {
   ChevronLeft,
   CircleAlert,
   CircleCheck,
+  GitBranch,
   LoaderCircle,
   MessageCircleQuestion,
+  ShieldQuestion,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -25,7 +27,7 @@ import { notify } from "./notifications";
 import { OpenHint } from "./OpenHint";
 import { clockOptions } from "./prefs";
 import type { OrchestratorAgentsView } from "./OrchestratorAgents";
-import { age, ProjectIcon } from "./Sidebar";
+import { age, useMinute } from "./Sidebar";
 import { titleOf } from "./threads";
 import { IconButton } from "./ui";
 import type { Approval } from "./transcript";
@@ -44,17 +46,14 @@ interface Row {
   approval?: Approval;
 }
 
-const dayMs = 24 * 60 * 60 * 1000;
-
 /**
- * An orchestrator's home in the side panel, set like Cursor's orchestrator page. Its head is the
- * orchestrator's icon, name, and how many of its threads are open, a chip for each open state, and
- * a book that opens All files, its context folder as a tree. Then where it stands: the
- * orchestrator's status board, its tasks as circles and its pull requests, issues, and other files
- * linked. Then Running: the children working or waiting on the user, each with what it last said, a
- * question taking its answer in place. Then the log: each finished child once, newest first, under
- * its day, with its diff and the time it finished. A finish is bright until it's opened, which
- * marks what it reported read (0043).
+ * An orchestrator's home in the side panel, in the order the user acts on it (0083). Its headline
+ * says what is open, beside a book that opens All files, its context folder as a tree. Then its
+ * threads, read from their runs so they are never behind: Needs you
+ * (a question answered in place, a permission request, or an unread failure), Working, and To
+ * review, the finishes not opened yet. Then Plan, the status board the orchestrator writes, with
+ * when it last changed. Then Earlier, the finishes already opened. Opening a finish marks what it
+ * reported read (0043).
  */
 export function OrchestratorHome({
   hostId,
@@ -78,9 +77,12 @@ export function OrchestratorHome({
 }) {
   const [openPath, setOpenPath] = useState<string>();
   const [browsing, setBrowsing] = useState(false);
+  const now = useMinute();
   const rows = rowsOf(orchestrator, agents, inbox, answerable, titles);
-  const live = rows.filter((r) => r.group === "working" || r.group === "waiting");
-  const log = rows.filter((r) => r.group === "ready" || r.group === "resolved");
+  const waiting = rows.filter((r) => r.group === "waiting");
+  const working = rows.filter((r) => r.group === "working");
+  const ready = rows.filter((r) => r.group === "ready");
+  const earlier = rows.filter((r) => r.group === "resolved");
   const open = (row: Row) => {
     onOpen(row.run.id);
     const read = row.unread.filter((i) => i.kind !== "needsYou").map((i) => i.id);
@@ -98,6 +100,7 @@ export function OrchestratorHome({
   const { files, error } = context;
   const opened = files.find((f) => f.path === openPath);
   const notes = files.find((f) => f.path === board);
+  const { lead, rest } = headline(rows);
 
   if (opened)
     return (
@@ -129,65 +132,104 @@ export function OrchestratorHome({
     );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
-      <header className="flex items-center gap-3 px-1 pt-5">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-surface">
-          <ProjectIcon icon={orchestrator.icon} className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="truncate text-heading leading-tight font-semibold tracking-tight">
-            {orchestrator.name}
-          </h2>
-          <p className="mt-0.5 text-body text-muted-foreground">{openLine(rows)}</p>
+      <header className="flex items-start gap-3 px-1 pt-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-heading leading-tight font-semibold tracking-tight">{lead}</h2>
+          {rest && <p className="mt-1 text-body text-muted-foreground">{rest}</p>}
         </div>
         {files.length > 0 && (
-          <span className="ml-auto self-start">
-            <IconButton label="All files" onClick={() => setBrowsing(true)}>
-              <BookOpen />
-            </IconButton>
-          </span>
+          <IconButton label="All files" onClick={() => setBrowsing(true)}>
+            <BookOpen />
+          </IconButton>
         )}
       </header>
-      <OpenCounts rows={rows} />
-      <section aria-label="Where it stands" className="px-1">
-        {notes ? (
-          <ContextBody
-            hostId={hostId}
-            orchestrator={orchestrator.id}
-            files={files}
-            file={notes}
-            onOpen={setOpenPath}
-          />
-        ) : (
-          <p className="pt-5 text-body text-muted-foreground">
-            The orchestrator keeps a status board here once it starts on the work.
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="pt-1.5 text-body text-danger">
-            {error}
-          </p>
-        )}
-      </section>
-      {live.length > 0 && (
-        <section aria-label="Running">
-          <h3 className={sectionHeading}>Running</h3>
+      {waiting.length > 0 && (
+        <section aria-label="Needs you">
+          <h3 className={sectionHeading}>Needs you</h3>
           <ul className={group}>
-            {live.map((row) => (
-              <LiveRow key={row.run.id} row={row} onOpen={() => open(row)} onAnswer={answer(row)} />
+            {waiting.map((row) => (
+              <WaitingRow
+                key={row.run.id}
+                row={row}
+                now={now}
+                onOpen={() => open(row)}
+                onAnswer={answer(row)}
+              />
             ))}
           </ul>
         </section>
       )}
-      {daysOf(log).map(({ label, rows }) => (
-        <section key={label} aria-label={label}>
-          <h3 className={sectionHeading}>{label}</h3>
+      {working.length > 0 && (
+        <section aria-label="Working">
+          <h3 className={sectionHeading}>Working</h3>
           <ul className={group}>
-            {rows.map((row) => (
-              <LogRow key={row.run.id} row={row} onOpen={() => open(row)} />
+            {working.map((row) => (
+              <li key={row.run.id}>
+                <ChildButton
+                  icon={<WorkingMark />}
+                  title={plainTitle(row.title)}
+                  state="Working"
+                  detail={facts(row.run)}
+                  end={age(row.run.updatedAt, now)}
+                  onOpen={() => open(row)}
+                />
+              </li>
             ))}
           </ul>
         </section>
-      ))}
+      )}
+      {ready.length > 0 && (
+        <section aria-label="To review">
+          <h3 className={sectionHeading}>To review</h3>
+          <ul className={group}>
+            {ready.map((row) => (
+              <FinishedRow key={row.run.id} row={row} now={now} onOpen={() => open(row)} />
+            ))}
+          </ul>
+        </section>
+      )}
+      <section aria-label="Plan">
+        <h3 className={`${sectionHeading} flex items-baseline justify-between gap-3`}>
+          Plan
+          {notes && (
+            <span className="text-meta font-normal tracking-normal normal-case">
+              Updated {updated(notes.modifiedAt, now)}
+            </span>
+          )}
+        </h3>
+        <div className="px-1">
+          {notes ? (
+            <ContextBody
+              hostId={hostId}
+              orchestrator={orchestrator.id}
+              files={files}
+              file={notes}
+              onOpen={setOpenPath}
+            />
+          ) : (
+            !error && (
+              <p className="text-body text-muted-foreground">
+                The orchestrator writes its plan here once it starts on the work.
+              </p>
+            )
+          )}
+          {error && (
+            <p role="alert" className="text-body text-danger">
+              Couldn't load the plan. {error}
+            </p>
+          )}
+        </div>
+      </section>
+      {earlier.length > 0 && (
+        <section aria-label="Earlier">
+          <h3 className={sectionHeading}>Earlier</h3>
+          <ul className={group}>
+            {earlier.map((row) => (
+              <FinishedRow key={row.run.id} row={row} now={now} onOpen={() => open(row)} />
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
@@ -197,65 +239,50 @@ const sectionHeading =
   "px-1 pt-6 pb-2 text-caption font-medium tracking-[0.08em] text-faint-foreground uppercase";
 const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
 
-/**
- * How many of an orchestrator's threads are open, working, waiting, or done but unread, and how
- * many finished in the last week.
- */
-export function openLine(rows: readonly Pick<Row, "group" | "run">[], now = Date.now()): string {
-  const open = rows.filter((r) => r.group !== "resolved").length;
-  const done = rows.filter(
-    (r) =>
-      (r.group === "ready" || r.group === "resolved") &&
-      now - Date.parse(r.run.updatedAt) < 7 * dayMs,
-  ).length;
-  const first = open > 0 ? `${open} open ${open === 1 ? "thread" : "threads"}` : "No open threads";
-  return done > 0 ? `${first} · ${done} done this week` : first;
-}
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * The open threads by state, as a row of chips under the head, each with its rows' icon: working,
- * needing the user, and done but unread. Only states with threads show.
+ * The tab's headline: the most pressing open state and how many threads are in it, then the other
+ * open states. With nothing open it says so.
  */
-function OpenCounts({ rows }: { rows: readonly Row[] }) {
-  const count = (g: Group) => rows.filter((r) => r.group === g).length;
-  const chips = [
-    { label: "working", n: count("working"), icon: <WorkingMark /> },
+export function headline(rows: readonly Pick<Row, "group">[]): { lead: string; rest?: string } {
+  const n = (g: Group) => rows.filter((r) => r.group === g).length;
+  const states = [
     {
-      label: count("waiting") === 1 ? "needs you" : "need you",
-      n: count("waiting"),
-      icon: <MessageCircleQuestion className="text-warning" />,
+      n: n("waiting"),
+      lead: count(n("waiting"), "thread needs you", "threads need you"),
+      rest: count(n("waiting"), "needs you", "need you"),
     },
-    { label: "to review", n: count("ready"), icon: <CircleCheck className="text-added" /> },
-  ].filter((c) => c.n > 0);
-  if (chips.length === 0) return null;
-  return (
-    <ul aria-label="Open threads" className="mt-3 flex flex-wrap gap-1.5 px-1">
-      {chips.map((c) => (
-        <li
-          key={c.label}
-          className="flex h-6 items-center gap-1.5 rounded-full border border-border bg-surface pr-2.5 pl-2 text-meta text-muted-foreground [&_svg]:size-3.5"
-        >
-          <span aria-hidden className="grid">
-            {c.icon}
-          </span>
-          <span className="font-medium text-foreground tabular-nums">{c.n}</span>
-          {c.label}
-        </li>
-      ))}
-    </ul>
-  );
+    {
+      n: n("working"),
+      lead: count(n("working"), "thread working", "threads working"),
+      rest: `${n("working")} working`,
+    },
+    {
+      n: n("ready"),
+      lead: count(n("ready"), "thread to review", "threads to review"),
+      rest: `${n("ready")} to review`,
+    },
+  ].filter((s) => s.n > 0);
+  const [first, ...others] = states;
+  if (!first)
+    return rows.length > 0
+      ? { lead: "Nothing open", rest: count(rows.length, "thread finished", "threads finished") }
+      : { lead: "No threads yet", rest: "Threads the orchestrator starts show up here." };
+  return { lead: first.lead, rest: others.map((s) => s.rest).join(", ") || undefined };
 }
 
-/** Finished rows under their day, Today, Yesterday, or the date, newest first. */
-function daysOf(rows: readonly Row[]): { label: string; rows: Row[] }[] {
-  const days: { label: string; rows: Row[] }[] = [];
-  for (const row of rows.toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt))) {
-    const label = dayLabel(Date.parse(row.run.updatedAt));
-    if (days.at(-1)?.label === label) days.at(-1)!.rows.push(row);
-    else days.push({ label, rows: [row] });
-  }
-  return days;
-}
+/** "just now", "6m ago", or "2d ago": how long since `at`. */
+const updated = (at: string, now: number) => {
+  const since = age(at, now);
+  return since === "now" ? "just now" : `${since} ago`;
+};
+
+/** A finish's clock time today, else its day: "10:16 AM", "Yesterday", or "Oct 20". */
+const finished = (at: string, now: number) => {
+  const day = dayLabel(Date.parse(at), now, { month: "short", day: "numeric" });
+  return day === "Today" ? new Date(at).toLocaleTimeString(locale(), clockOptions()) : day;
+};
 
 /** 1234 as "1.2k", for a diff's counts in a row. */
 const short = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`);
@@ -271,8 +298,8 @@ export const plainTitle = (title: string) =>
 
 /**
  * Each child of `orchestrator` once, newest first, with its group: waiting on the user (a question,
- * an approval, or an unread failure) or working, which the orchestrator tab shows in Running; or
- * finished, ready while its news is unread and resolved once read, which it shows in the log.
+ * an approval, or an unread failure), working, or finished: ready while its news is unread and
+ * resolved once read.
  */
 function rowsOf(
   orchestrator: Orchestrator,
@@ -340,46 +367,68 @@ function subjectOf(row: Row): string | undefined {
 }
 
 /**
- * A child that works or waits on the user: its mark, its title, and what it last said; or, waiting,
- * Needs you, and its question to answer in place.
+ * A run's branch, its diff, and its pull requests' numbers, as its row's second line. Nothing for
+ * a run with none of them.
  */
-function LiveRow({
+function facts(run: AgentRun): ReactNode {
+  const { branch, diff, pullRequests = [] } = run;
+  if (!branch && !diff && pullRequests.length === 0) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      {branch && (
+        <span className="flex min-w-0 items-center gap-1">
+          <GitBranch aria-hidden className="size-3 shrink-0" />
+          <span className="truncate">{branch}</span>
+        </span>
+      )}
+      {diff && (
+        <span className="shrink-0 tabular-nums">
+          <span className="text-diff-added">+{short(diff.insertions)}</span>{" "}
+          <span className="text-diff-removed">−{short(diff.deletions)}</span>
+        </span>
+      )}
+      {pullRequests.map((url) => (
+        <span key={url} className="shrink-0 tabular-nums">
+          #{url.split("/").at(-1)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * A child that waits on the user: what it asks, wants to run, or failed on, and how long ago. A
+ * question takes its answer in place.
+ */
+function WaitingRow({
   row,
+  now,
   onOpen,
   onAnswer,
 }: {
   row: Row;
+  now: number;
   onOpen: () => void;
   onAnswer: (text: string) => Promise<string | undefined>;
 }) {
-  const waiting = row.group === "waiting";
   const failed = row.attention === "failed";
   const asking = row.question && row.question.status !== "answered";
-  const state = waiting ? (failed ? "Failed" : "Needs you") : "Working";
   return (
     <li>
       <ChildButton
         icon={
-          !waiting ? (
-            <WorkingMark />
-          ) : failed ? (
+          failed ? (
             <CircleAlert className="text-danger" />
+          ) : row.approval && !asking ? (
+            <ShieldQuestion className="text-warning" />
           ) : (
             <MessageCircleQuestion className="text-warning" />
           )
         }
         title={plainTitle(row.title)}
-        state={state}
+        state={failed ? "Failed" : "Needs you"}
         detail={asking ? undefined : subjectOf(row)}
-        end={
-          waiting ? (
-            <span className={failed ? "text-danger" : "text-warning"}>{state}</span>
-          ) : (
-            <span className="font-mono tabular-nums">
-              {age(row.latest?.createdAt ?? row.run.updatedAt)}
-            </span>
-          )
-        }
+        end={age(row.latest?.createdAt ?? row.run.updatedAt, now)}
         onOpen={onOpen}
       />
       {asking && row.question && (
@@ -394,13 +443,12 @@ function LiveRow({
 }
 
 /**
- * A finished child in the log: its check, its title, its diff, and when it finished. Bright while
- * what it reported is unread; dim once read.
+ * A finished child: its check or alert, its title, its branch and diff, and when it finished.
+ * Bright while what it reported is unread; dim once read.
  */
-function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
+function FinishedRow({ row, now, onOpen }: { row: Row; now: number; onOpen: () => void }) {
   const unread = row.group === "ready";
   const failed = row.attention === "failed";
-  const diff = row.run.diff;
   return (
     <li>
       <ChildButton
@@ -414,18 +462,8 @@ function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
         title={plainTitle(row.title)}
         dim={!unread}
         state={failed ? "Failed" : "Done"}
-        detail={
-          diff
-            ? `${diff.files} ${diff.files === 1 ? "file" : "files"}, +${short(diff.insertions)} −${short(diff.deletions)}`
-            : failed
-              ? "Failed"
-              : undefined
-        }
-        end={
-          <span aria-hidden className="font-mono tabular-nums">
-            {new Date(row.run.updatedAt).toLocaleTimeString(locale(), clockOptions())}
-          </span>
-        }
+        detail={facts(row.run)}
+        end={finished(row.run.updatedAt, now)}
         onOpen={onOpen}
       />
     </li>
@@ -433,9 +471,9 @@ function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
 }
 
 /**
- * A child's row: its state's icon, its title, a line under it, and one thing at its end, which
- * gives way on hover to the arrow that says the row opens its chat. Screen readers hear `state`
- * after the title in place of the icon.
+ * A child's row: its state's icon, its title, a line under it, and a time at its end, which gives
+ * way on hover to the arrow that says the row opens its chat. Screen readers hear `state` after
+ * the title in place of the icon.
  */
 function ChildButton({
   icon,
@@ -450,8 +488,8 @@ function ChildButton({
   title: string;
   dim?: boolean;
   state: string;
-  detail?: string;
-  end: ReactNode;
+  detail?: ReactNode;
+  end: string;
   onOpen: () => void;
 }) {
   return (
@@ -475,10 +513,10 @@ function ChildButton({
           <span className="block truncate text-meta leading-5 text-muted-foreground">{detail}</span>
         )}
       </span>
-      <span className="relative shrink-0 pt-0.5 text-meta text-faint-foreground">
+      <span className="relative shrink-0 pt-0.5 text-meta text-faint-foreground tabular-nums">
         <span
           aria-hidden
-          className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
+          className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0 motion-reduce:transition-none"
         >
           {end}
         </span>
@@ -491,8 +529,8 @@ function ChildButton({
 }
 
 /**
- * A child's question, answered in place as an app asks one: the question, what the child went
- * with as the first choice, and a box for any other answer. Picking the choice sends it.
+ * A child's question, answered in place: the question, a button that keeps what the child went
+ * with, and a box for any other answer.
  */
 function QuestionBox({
   question,
@@ -515,20 +553,17 @@ function QuestionBox({
   };
   return (
     <div className="mr-3 mb-3 ml-10 overflow-hidden rounded-lg border border-border bg-background">
-      <p className="px-3.5 pt-3 pb-2.5 text-body leading-snug text-foreground">{question}</p>
-      <div className="flex flex-col gap-1 px-1.5 pb-1.5">
+      <p className="px-3 pt-2.5 pb-2 text-body leading-snug text-foreground">{question}</p>
+      <div className="flex flex-col border-t border-border">
         {assumption && (
           <button
             type="button"
             disabled={busy}
             onClick={() => void send(assumption)}
-            className="group/choice flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-body hover:bg-hover disabled:opacity-50"
+            className="flex w-full items-baseline gap-3 border-b border-border px-3 py-2 text-left text-body hover:bg-hover disabled:opacity-50"
           >
-            <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-caption text-muted-foreground group-hover/choice:border-foreground/25 group-hover/choice:text-foreground">
-              1
-            </span>
             <span className="min-w-0 flex-1">{assumption}</span>
-            <span className="shrink-0 text-meta text-faint-foreground">Its pick so far</span>
+            <span className="shrink-0 text-meta text-muted-foreground">Keep its pick</span>
           </button>
         )}
         <form
@@ -536,14 +571,11 @@ function QuestionBox({
             e.preventDefault();
             void send(text);
           }}
-          className="flex items-center gap-2.5 rounded-lg px-2 py-1 focus-within:bg-hover"
+          className="flex items-center gap-2 py-1 pr-1.5 pl-3"
         >
-          <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-caption text-muted-foreground">
-            {assumption ? 2 : 1}
-          </span>
           <input
             aria-label={`Answer: ${question}`}
-            placeholder={assumption ? "Something else" : "Your answer"}
+            placeholder={assumption ? "Or answer something else" : "Your answer"}
             value={text}
             disabled={busy}
             onChange={(e) => setText(e.target.value)}
