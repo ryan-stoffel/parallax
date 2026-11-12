@@ -72,6 +72,10 @@ export interface Env {
   REQUIRE_ALLOWED_USERS?: string;
   /** Those user ids, comma-separated. Missing or empty lists nobody. Staging's secret. */
   ALLOWED_USERS?: string;
+  /** How many stream objects a spare may try, so it runs in the data center plxd's control
+   *  socket entered (PLX-1540): a number from 1 to 3, where 1 only looks up and logs where the first one ran.
+   *  Unset or 0, the relay never looks. Staging's var. */
+  SPARE_PLACEMENT_TRIES?: string;
   /** The APNs auth key (.p8, PEM), its key id, and the Apple team id, as secrets. Unset, pushes
    *  only log. */
   APNS_KEY?: string;

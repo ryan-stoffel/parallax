@@ -34,6 +34,11 @@ const TICKET_LIFETIME = 30_000;
 const HOOK_TIMEOUT = 10_000;
 /** How many clients' streams a host may have open at once, its spare included. */
 export const MAX_STREAMS = 16;
+/** The most stream objects one spare may try in [`HostRelay`]'s placement, whatever
+ *  `SPARE_PLACEMENT_TRIES` says: at most 2 dropped objects and 3 colo lookups per spare. */
+export const MAX_PLACEMENT_TRIES = 3;
+/** The control socket's tag naming the data center it entered, such as `colo:LAX`. */
+const COLO_TAG = "colo:";
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -149,6 +154,9 @@ export class HostRelay extends DurableObject<Env> {
   private delivering = false;
   /** Today's bytes through this host's streams, as saved. */
   private traffic?: { day: string; bytes: number };
+  /** Counts plxd's spare requests, so a placement a later one superseded reserves nothing. In
+   *  memory, since a placement in flight keeps the object awake. */
+  private spareRequests = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -201,16 +209,26 @@ export class HostRelay extends DurableObject<Env> {
    * it, and counted as open. A spare waits for the next client.
    */
   protected async newStream(user: string, spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
+    // Before the reservation, so a client never waits on it: one arriving now takes a new stream.
+    // Off, nothing here awaits.
+    const home = spare ? this.placementHome() : undefined;
+    const placed = home ? await this.placeSpare(home) : undefined;
     const reserved = await this.ctx.blockConcurrencyWhile(async () => {
       const owner = await this.owner();
       if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
       const host = this.host();
       if (!host) return { status: 503, error: "host_offline" } as Refusal;
       const proof = await this.ctx.storage.get<number>("lastProof");
+      // Placement let other events in. A later spare request, or plxd reconnecting, supersedes
+      // this one, as it would have canceled its reservation on `develop`, so it reserves nothing.
+      if (placed && (placed.request !== this.spareRequests || placed.proof !== proof)) {
+        logEvent("spare_superseded", this.context());
+        return { status: 409, error: "superseded" } as Refusal;
+      }
       const streams = await this.streams();
       if (Object.keys(streams).length >= MAX_STREAMS)
         return { status: 429, error: "too_many_streams" } as Refusal;
-      const id = this.env.STREAMS.newUniqueId();
+      const id = placed?.id ?? this.env.STREAMS.newUniqueId();
       const stream = id.toString();
       // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
       streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
@@ -245,6 +263,41 @@ export class HostRelay extends DurableObject<Env> {
       await this.forgetStream(stream);
       throw error;
     }
+  }
+
+  /**
+   * A spare's stream object in the data center plxd's control socket entered, when
+   * `SPARE_PLACEMENT_TRIES` allows (PLX-1540). Both ends' frames enter there, often LAX for a host
+   * in Southern California, but Cloudflare places a new unique id where it likes, often SJC, and
+   * every frame then crosses between the two. This object isn't on that path, and itself often
+   * runs at SJC, so its own colo isn't the target. Each try makes an object and asks its colo, and
+   * one in another colo is dropped, unused and with nothing stored, for another, up to the
+   * setting. The last is kept, and so is the current one when its lookup fails. Answers which spare
+   * request and control connection it was for, which [`newStream`] checks before it reserves.
+   */
+  private async placeSpare(home: string) {
+    const request = this.spareRequests;
+    const proof = await this.ctx.storage.get<number>("lastProof");
+    for (let attempt = 1; ; attempt++) {
+      const id = this.env.STREAMS.newUniqueId();
+      const colo = await this.env.STREAMS.get(id).colo().catch(() => null);
+      if (!colo || colo === home || attempt >= this.placementTries() || request !== this.spareRequests) {
+        logEvent("spare_placed", { ...this.context(), home, colo, tries: attempt });
+        return { id, request, proof };
+      }
+    }
+  }
+
+  /** How many stream objects a spare may try, from `SPARE_PLACEMENT_TRIES`: 0 is off. */
+  private placementTries() {
+    return Math.min(Math.max(Number(this.env.SPARE_PLACEMENT_TRIES) || 0, 0), MAX_PLACEMENT_TRIES);
+  }
+
+  /** The colo plxd's control socket entered, when placement is on and it's known. */
+  private placementHome() {
+    if (this.placementTries() < 1) return undefined;
+    const socket = this.host();
+    return socket && this.ctx.getTags(socket).find((tag) => tag.startsWith(COLO_TAG))?.slice(COLO_TAG.length);
   }
 
   /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
@@ -329,7 +382,7 @@ export class HostRelay extends DurableObject<Env> {
     return {
       object: "host",
       id: short(this.ctx.id.toString()),
-      host: ws && this.ctx.getTags(ws).find((tag) => tag !== "host"),
+      host: ws && this.ctx.getTags(ws).find((tag) => tag !== "host" && !tag.startsWith(COLO_TAG)),
     };
   }
 
@@ -527,7 +580,7 @@ export class HostRelay extends DurableObject<Env> {
       "host.fetch",
       () => this.context(),
       () =>
-        this.hostSocket(request.headers.get(PROOF_HEADER) ?? "", request.headers.get(STREAMS_HEADER)),
+        this.hostSocket(request.headers.get(PROOF_HEADER) ?? "", request.headers.get(STREAMS_HEADER), request.cf?.colo),
     );
   }
 
@@ -536,9 +589,10 @@ export class HostRelay extends DurableObject<Env> {
    * key. The relay takes it only within [`PROOF_PAST`] and [`PROOF_FUTURE`] of its own clock and
    * newer than the last one it took, so a proof works once. No socket opens without one, so
    * strangers who know the host id, which is in every webhook URL, have nothing to hold open or
-   * push out. `held` lists the streams plxd still holds, for [`settleStreams`].
+   * push out. `held` lists the streams plxd still holds, for [`settleStreams`]. `colo` is the data
+   * center the socket entered, kept as a tag for placing spares when placement is on.
    */
-  private async hostSocket(proof: string, held: string | null) {
+  private async hostSocket(proof: string, held: string | null, colo: unknown) {
     const owner = await this.owner();
     if (!owner) return json(404, { error: "not_registered" });
     const [at = "", signature = ""] = proof.split(".");
@@ -566,7 +620,10 @@ export class HostRelay extends DurableObject<Env> {
     const kept = await this.settleStreams(owner.hostId, held);
     const [client, server] = Object.values(new WebSocketPair());
     // The second tag names the host in this socket's log lines, with no storage read to fail.
-    this.ctx.acceptWebSocket(server!, ["host", short(owner.hostId)]);
+    const tags = ["host", short(owner.hostId)];
+    if (this.placementTries() > 0 && typeof colo === "string" && /^[A-Z]{3}$/.test(colo))
+      tags.push(`${COLO_TAG}${colo}`);
+    this.ctx.acceptWebSocket(server!, tags);
     logEvent("host_connected", {
       ...this.context(server!),
       open_before: openBefore,
@@ -637,6 +694,8 @@ export class HostRelay extends DurableObject<Env> {
       const owner = await this.owner();
       if (!owner || !this.limits.allow("spares", LIMITS.spares)) return;
       await this.ctx.blockConcurrencyWhile(async () => {
+        // Supersedes any spare request still placing (PLX-1540).
+        this.spareRequests++;
         const streams = await this.streams();
         for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
         await this.ctx.storage.put<Streams>("streams", streams);
