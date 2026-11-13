@@ -1,5 +1,7 @@
+import { t } from "i18next";
 import { Braces, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Trans } from "react-i18next";
 
 import { IconButton, Segmented } from "../ui";
 import {
@@ -79,16 +81,44 @@ export function ColorSettings({
 
   const count = Object.keys(changed).length;
   return (
-    <Section title="Colors">
+    <Section title={t("Colors")}>
       <Row
-        title="Customize"
-        description={`${theme.name}, the ${mode} theme. ${count ? `${count} changed. ` : ""}Each theme keeps its own changes.`}
+        title={t("Customize")}
+        description={
+          mode === "light"
+            ? count
+              ? t(
+                  "{{theme}}, the light theme. {{count}} changed. Each theme keeps its own changes.",
+                  {
+                    theme: theme.name,
+                    count,
+                    defaultValue_one:
+                      "{{theme}}, the light theme. {{count}} changed. Each theme keeps its own changes.",
+                  },
+                )
+              : t("{{theme}}, the light theme. Each theme keeps its own changes.", {
+                  theme: theme.name,
+                })
+            : count
+              ? t(
+                  "{{theme}}, the dark theme. {{count}} changed. Each theme keeps its own changes.",
+                  {
+                    theme: theme.name,
+                    count,
+                    defaultValue_one:
+                      "{{theme}}, the dark theme. {{count}} changed. Each theme keeps its own changes.",
+                  },
+                )
+              : t("{{theme}}, the dark theme. Each theme keeps its own changes.", {
+                  theme: theme.name,
+                })
+        }
       >
         <Segmented
-          label="Theme to change"
+          label={t("Theme to change")}
           options={[
-            { value: "light", name: "Light" },
-            { value: "dark", name: "Dark" },
+            { value: "light", name: t("Light") },
+            { value: "dark", name: t("Dark") },
           ]}
           value={mode}
           onChange={(m) => {
@@ -106,10 +136,10 @@ export function ColorSettings({
                 key={token}
                 className={`flex h-11 cursor-pointer items-center gap-3 border-border px-4 hover:bg-hover ${i % 2 ? "" : "border-r"} ${i < Object.keys(colorTokens).length - 2 ? "border-b" : ""}`}
               >
-                <span className="min-w-0 flex-1 truncate text-body">{name}</span>
+                <span className="min-w-0 flex-1 truncate text-body">{t(name)}</span>
                 {changed[token] && (
                   <IconButton
-                    label={`Reset ${name}`}
+                    label={t("Reset {{name}}", { name: t(name) })}
                     onClick={(e) => {
                       e.preventDefault();
                       setColor(token);
@@ -123,7 +153,7 @@ export function ColorSettings({
                 </span>
                 <input
                   type="color"
-                  aria-label={name}
+                  aria-label={t(name)}
                   value={toHex(value)}
                   onChange={(e) => setColor(token, e.target.value)}
                   className="size-5 shrink-0 cursor-pointer appearance-none rounded-full border border-border bg-transparent p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch-wrapper]:p-0"
@@ -135,13 +165,15 @@ export function ColorSettings({
       ) : (
         <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
           <p className="text-body text-muted-foreground">
-            Token names like <code>accent</code> or <code>sidebar</code>, or VS Code&apos;s color
-            keys like <code>editor.background</code>, <code>sideBar.background</code>, and{" "}
-            <code>focusBorder</code>. Any CSS color, including see-through ones like{" "}
-            <code>#ffffff14</code>.
+            <Trans>
+              Token names like <code>accent</code> or <code>sidebar</code>, or VS Code&apos;s color
+              keys like <code>editor.background</code>, <code>sideBar.background</code>, and{" "}
+              <code>focusBorder</code>. Any CSS color, including see-through ones like{" "}
+              <code>#ffffff14</code>.
+            </Trans>
           </p>
           <textarea
-            aria-label="Colors as JSON"
+            aria-label={t("Colors as JSON")}
             spellCheck={false}
             rows={10}
             value={json}
@@ -157,10 +189,10 @@ export function ColorSettings({
           )}
           <span className="flex justify-end gap-2">
             <button type="button" className={quietButton} onClick={closeJson}>
-              Cancel
+              {t("Cancel")}
             </button>
             <button type="button" className={primaryButton} onClick={() => applyJson(json)}>
-              Apply
+              {t("Apply")}
             </button>
           </span>
         </div>
@@ -184,7 +216,7 @@ export function ColorSettings({
           }
         >
           <Braces aria-hidden className="size-3.5" />
-          {json === undefined ? "Edit as JSON" : "Close JSON"}
+          {json === undefined ? t("Edit as JSON") : t("Close JSON")}
         </button>
         <button
           type="button"
@@ -192,7 +224,7 @@ export function ColorSettings({
           className={`${quietButton} disabled:opacity-40`}
           onClick={() => save({})}
         >
-          Reset all
+          {t("Reset all")}
         </button>
       </div>
     </Section>

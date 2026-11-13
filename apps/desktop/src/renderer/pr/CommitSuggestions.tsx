@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useRef, useState } from "react";
 
 import { ConfirmDialog } from "../ui";
@@ -35,10 +36,17 @@ export function CommitSuggestions({
   return (
     <ConfirmDialog
       ref={dialog}
-      title={count === 1 ? "Commit suggestion" : `Commit ${count} suggestions`}
-      action="Commit changes"
+      title={
+        count === 1
+          ? t("Commit suggestion")
+          : t("Commit {{count}} suggestions", {
+              count,
+              defaultValue_one: "Commit {{count}} suggestion",
+            })
+      }
+      action={t("Commit changes")}
       safe
-      busy={busy ? "Committing…" : undefined}
+      busy={busy ? t("Committing…") : undefined}
       onConfirm={() => {
         if (!message.trim()) return;
         setBusy(true);
@@ -49,7 +57,7 @@ export function CommitSuggestions({
       }}
     >
       <textarea
-        aria-label="Commit message"
+        aria-label={t("Commit message")}
         value={message}
         rows={2}
         onChange={(e) => setMessage(e.target.value)}

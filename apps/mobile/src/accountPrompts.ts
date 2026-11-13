@@ -1,5 +1,6 @@
 // The dialogs of approving devices and computers for account sign-in (0091): iOS's own alerts.
 
+import { t } from "i18next";
 import {  } from "react-native";
 
 import type { RouteChoices } from "../../desktop/src/preload/routeList";
@@ -18,12 +19,12 @@ export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)
  */
 export function askSetupCode(name: string, onCode: (code: string) => void, onAsk?: () => void) {
   showPrompt(
-    `Set up ${name}`,
-    "Type the 6-digit code from Show setup code in its Settings > Connections, or from plx connect.",
+    t("Set up {{name}}", { name }),
+    t("Type the 6-digit code from Show setup code in its Settings > Connections, or from plx connect."),
     [
-      { text: "Cancel", style: "cancel" },
-      ...(onAsk ? [{ text: "Compare Codes Instead", onPress: onAsk }] : []),
-      { text: "Set Up", onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
+      { text: t("Cancel"), style: "cancel" },
+      ...(onAsk ? [{ text: t("Compare Codes Instead"), onPress: onAsk }] : []),
+      { text: t("Set Up"), onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
     ],
     "plain-text",
     "",
@@ -42,13 +43,13 @@ export function setUpComputer(
   handlers: { onWaiting: (code: string) => void; done: () => void; failed: (message: string) => void },
 ) {
   const failed = (e: unknown) => {
-    showAlert(`Couldn't set up ${name}`, (e as Error).message);
+    showAlert(t("Couldn't set up {{name}}", { name }), (e as Error).message);
     handlers.failed((e as Error).message);
   };
   askSetupCode(
     name,
     (code) => {
-      if (code.length !== 6) return failed(new Error("The code has 6 digits."));
+      if (code.length !== 6) return failed(new Error(t("The code has 6 digits.")));
       accounts.setup(hostId, choices, code).then(handlers.done, failed);
     },
     () =>
@@ -70,11 +71,11 @@ export function setUpComputer(
 export function askToAllow(name: string, code: string): Promise<boolean> {
   return new Promise((resolve) =>
     showAlert(
-      `Add ${name}?`,
-      `${formatCode(code)}\n\nAllow it only if ${name} shows this code. Another code, or none, means something else is answering.`,
+      t("Add {{name}}?", { name }),
+      `${formatCode(code)}\n\n${t("Allow it only if {{name}} shows this code. Another code, or none, means something else is answering.", { name })}`,
       [
-        { text: "Deny", style: "destructive", onPress: () => resolve(false) },
-        { text: "Allow", onPress: () => resolve(true) },
+        { text: t("Deny"), style: "destructive", onPress: () => resolve(false) },
+        { text: t("Allow"), onPress: () => resolve(true) },
       ],
     ),
   );
@@ -94,9 +95,9 @@ export function enterSetupCode(
     askSetupCode(name, (code) => {
       const failed = (e: unknown) => {
         handlers.ended();
-        showAlert(`Couldn't set up ${name}`, (e as Error).message);
+        showAlert(t("Couldn't set up {{name}}", { name }), (e as Error).message);
       };
-      if (code.length !== 6) return showAlert(`Couldn't set up ${name}`, "The code has 6 digits.");
+      if (code.length !== 6) return showAlert(t("Couldn't set up {{name}}", { name }), t("The code has 6 digits."));
       handlers.started();
       accounts.setup(hostId, { routes: [] }, code).then(() => {
         handlers.ended();
@@ -104,9 +105,9 @@ export function enterSetupCode(
       }, failed);
     });
   if (computers.length === 1) return enter(computers[0]!);
-  showAlert("Which computer shows the code?", undefined, [
+  showAlert(t("Which computer shows the code?"), undefined, [
     ...computers.map((computer) => ({ text: computer.name, onPress: () => enter(computer) })),
-    { text: "Cancel", style: "cancel" as const },
+    { text: t("Cancel"), style: "cancel" as const },
   ]);
 }
 
@@ -150,30 +151,32 @@ export async function allowThisPhone(
  */
 export function showWaiting(name: string, code: string, onAllow: () => void) {
   showAlert(
-    "Approve this phone",
-    `${formatCode(code)}\n\nOn a computer or phone that already uses ${name}, allow this ${PHONE}. If you're setting up ${name} and it shows this code, tap Allow.`,
+    t("Approve this phone"),
+    `${formatCode(code)}\n\n${t("On a computer or phone that already uses {{name}}, allow this {{phone}}. If you're setting up {{name}} and it shows this code, tap Allow.", { name, phone: PHONE })}`,
     [
-      { text: "Not Now", style: "cancel" },
-      { text: "Allow", onPress: onAllow },
+      { text: t("Not Now"), style: "cancel" },
+      { text: t("Allow"), onPress: onAllow },
     ],
   );
 }
 
 /** The user allowed `name`'s code here, and `name` must confirm too, as its setup named no device. */
 export function showConfirm(name: string) {
-  showAlert("Confirm on that computer", `Press Enter in ${name}'s terminal, or Allow in its Parallax, to finish.`, [
-    { text: "OK" },
-  ]);
+  showAlert(
+    t("Confirm on that computer"),
+    t("Press Enter in {{name}}'s terminal, or Allow in its Parallax, to finish.", { name }),
+    [{ text: t("OK") }],
+  );
 }
 
 /** Another device asks to use the user's computers: "Allow <device>? <code>". */
 export function confirmDevice(device: string, code: string, onAllow: () => void, onDeny: () => void) {
   showAlert(
-    `Allow ${device}?`,
-    `${formatCode(code)}\n\nAllow it only if ${device} shows the same code. It gets full control of your computers.`,
+    t("Allow {{device}}?", { device }),
+    `${formatCode(code)}\n\n${t("Allow it only if {{device}} shows the same code. It gets full control of your computers.", { device })}`,
     [
-      { text: "Deny", style: "destructive", onPress: onDeny },
-      { text: "Allow", onPress: onAllow },
+      { text: t("Deny"), style: "destructive", onPress: onDeny },
+      { text: t("Allow"), onPress: onAllow },
     ],
   );
 }

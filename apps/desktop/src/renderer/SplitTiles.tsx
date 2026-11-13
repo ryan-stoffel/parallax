@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { PanelTop, X } from "lucide-react";
 import {
   useLayoutEffect,
@@ -10,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { msg } from "../i18n";
 import { ThreadTabs, type TabDrop, type TabItem } from "./ThreadTabs";
 import {
   allCells,
@@ -65,7 +67,7 @@ export interface TileItem {
 /** Where a drag over the window would land: a new pane in a zone, or a tab in a pane. */
 export type TileDrop = { zone: Zone } | { paneId: string };
 
-/** A landing, and the box that previews it. */
+/** A landing, and the box that previews it, with its label in English for `t`. */
 type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
 
 /**
@@ -252,7 +254,7 @@ export function SplitTiles({
       paneId: items[activeIn(tile)]!.paneId,
       cells: tile.cells,
       rect: rectOf(tile.cells, shown),
-      label: "Add as a tab",
+      label: msg("Add as a tab"),
     };
   };
   const over = (e: DragEvent<HTMLElement>) => {
@@ -402,12 +404,12 @@ export function SplitTiles({
             key={vertical ? "cut-x" : "cut-y"}
             role="separator"
             tabIndex={0}
-            aria-label="Resize threads"
+            aria-label={t("Resize threads")}
             aria-orientation={vertical ? "vertical" : "horizontal"}
             aria-valuenow={Math.round(at * 100)}
             aria-valuemin={20}
             aria-valuemax={80}
-            title="Drag to resize, double-click to even out"
+            title={t("Drag to resize, double-click to even out")}
             style={style}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
@@ -451,7 +453,7 @@ export function SplitTiles({
         >
           <span className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-body font-medium text-foreground shadow-composer [&_svg]:size-4">
             {"zone" in target ? <ZoneGlyph cells={target.cells} /> : <PanelTop />}
-            {tabs || "zone" in target ? target.label : "Open here"}
+            {tabs || "zone" in target ? t(target.label) : t("Open here")}
           </span>
         </div>
       )}
@@ -484,7 +486,7 @@ function TileHeader({
       style={{ ...placed(rect), height: headerHeight }}
       className={`absolute z-[2] flex items-stretch border-b border-border bg-pane transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${rect.left > 0 ? "border-l" : ""} ${rect.top > 0 ? "border-t" : ""}`}
     >
-      <div role="tablist" aria-label="Threads" className="flex min-w-0 flex-1 items-stretch">
+      <div role="tablist" aria-label={t("Threads")} className="flex min-w-0 flex-1 items-stretch">
         {panes.map((pane) => {
           const tab = pane.tabs.find((t) => t.id === pane.active)!;
           const isShown = pane.paneId === shown;
@@ -514,8 +516,8 @@ function TileHeader({
               </button>
               <button
                 type="button"
-                aria-label={`Close ${tab.title}`}
-                title="Close this tile"
+                aria-label={t("Close {{title}}", { title: tab.title })}
+                title={t("Close this tile")}
                 onClick={() => onClose(tab.id)}
                 className={`grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5 ${stacked && !isShown ? "absolute right-1 bg-pane opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100" : "mx-1"}`}
               >

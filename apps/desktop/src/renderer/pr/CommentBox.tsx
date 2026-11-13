@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useRef, useState } from "react";
 
 import type { CommentTarget } from "../diffRows";
@@ -9,9 +10,14 @@ import { suggestionBlock } from "./suggestions";
 /** What a comment box's lines are called. */
 export function targetName(target: CommentTarget) {
   const r = target.range;
-  if (!r) return "Whole file";
-  const lines = r.start === r.end ? `Line ${r.end}` : `Lines ${r.start} to ${r.end}`;
-  return r.side === "left" ? `${lines}, old file` : lines;
+  if (!r) return t("Whole file");
+  if (r.start === r.end)
+    return r.side === "left"
+      ? t("Line {{line}}, old file", { line: r.end })
+      : t("Line {{line}}", { line: r.end });
+  return r.side === "left"
+    ? t("Lines {{start}} to {{end}}, old file", { start: r.start, end: r.end })
+    : t("Lines {{start}} to {{end}}", { start: r.start, end: r.end });
 }
 
 /**
@@ -68,7 +74,7 @@ export function CommentBox({
   };
   return (
     <form
-      aria-label={`Comment on ${targetName(target)}`}
+      aria-label={t("Comment on {{lines}}", { lines: targetName(target) })}
       className="overflow-hidden rounded-xl border border-border bg-surface font-sans shadow-xs focus-within:border-faint-foreground/60"
       onSubmit={(e) => {
         e.preventDefault();
@@ -78,8 +84,8 @@ export function CommentBox({
       <p className="px-3 pt-2 text-meta text-faint-foreground">{targetName(target)}</p>
       <textarea
         ref={field}
-        aria-label="Comment"
-        placeholder="Leave a comment"
+        aria-label={t("Comment", { context: "noun" })}
+        placeholder={t("Leave a comment")}
         rows={2}
         value={body}
         onChange={(e) => setBody(e.target.value)}
@@ -92,7 +98,12 @@ export function CommentBox({
       <div className="flex flex-wrap items-center justify-end gap-1.5 px-2 pb-2">
         {lines && (
           <span className="mr-auto">
-            <IconButton size="md" label="Suggest a change" disabled={!!sending} onClick={suggest}>
+            <IconButton
+              size="md"
+              label={t("Suggest a change")}
+              disabled={!!sending}
+              onClick={suggest}
+            >
               <icons.suggest aria-hidden />
             </IconButton>
           </span>
@@ -105,7 +116,7 @@ export function CommentBox({
             onCancel();
           }}
         >
-          Cancel
+          {t("Cancel")}
         </Button>
         {!pending && (
           <Button
@@ -114,11 +125,11 @@ export function CommentBox({
             disabled={!text || !!sending}
             onClick={() => void send("single")}
           >
-            {sending === "single" ? "Posting…" : "Add single comment"}
+            {sending === "single" ? t("Posting…") : t("Add single comment")}
           </Button>
         )}
         <Button size="sm" variant="primary" type="submit" disabled={!text || !!sending}>
-          {sending === "review" ? "Adding…" : pending ? "Add to review" : "Start a review"}
+          {sending === "review" ? t("Adding…") : pending ? t("Add to review") : t("Start a review")}
         </Button>
       </div>
     </form>

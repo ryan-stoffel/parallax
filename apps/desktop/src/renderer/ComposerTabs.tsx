@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import type { ReactNode } from "react";
 
 /** One tab over the composer: `node` as its own row, `compact` as an item beside others. */
@@ -26,7 +27,7 @@ export function ComposerTabs({
   return (
     <div
       role="group"
-      aria-label="Composer tabs"
+      aria-label={t("Composer tabs")}
       className="composer-tabs flex min-w-0 items-center gap-1 overflow-hidden"
     >
       {tabs.map((tab, i) => (

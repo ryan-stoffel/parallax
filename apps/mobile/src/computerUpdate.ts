@@ -4,6 +4,7 @@
 // real connection state, not the shown one, since plxd restarts for longer than the shown state's
 // grace.
 
+import { t } from "i18next";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { HostUpdater } from "../../desktop/src/main/hostUpdate";
@@ -104,10 +105,10 @@ export const sameChannel = (a: string, b: string) => a.endsWith("-nightly") === 
  */
 export async function restartCutsOff(id: string): Promise<string | undefined> {
   const health = await window.parallax.request(id, "host/health", {});
-  if (!("result" in health)) return "any running threads";
+  if (!("result" in health)) return t("any running threads");
   const running = health.result.runningAgents;
   if (running === 0) return undefined;
-  return running === 1 ? "1 running thread" : `${running} running threads`;
+  return t("{{count}} running threads", { count: running, defaultValue_one: "{{count}} running thread" });
 }
 
 /** A computer's update: plxd downloading it, restarting into it, or waiting for its agents. */

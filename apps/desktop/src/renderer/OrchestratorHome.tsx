@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowUp,
   ChevronDown,
@@ -120,12 +121,12 @@ export function OrchestratorHome({
         </div>
         <p className="mt-1.5 text-body text-muted-foreground">{headline(rows)}</p>
       </header>
-      <Card label="Threads">
+      <Card label={t("Threads")}>
         {rows.length === 0 && (
-          <p className={empty}>Threads the orchestrator starts show up here.</p>
+          <p className={empty}>{t("Threads the orchestrator starts show up here.")}</p>
         )}
         {waiting.length > 0 && (
-          <ThreadGroup label="Needs you">
+          <ThreadGroup label={t("Needs you")}>
             {waiting.map((row) => (
               <WaitingRow
                 key={row.run.id}
@@ -138,13 +139,13 @@ export function OrchestratorHome({
           </ThreadGroup>
         )}
         {working.length > 0 && (
-          <ThreadGroup label="Working">
+          <ThreadGroup label={t("Working")}>
             {working.map((row) => (
               <li key={row.run.id} className={tile}>
                 <ChildButton
                   icon={<WorkingMark />}
                   title={plainTitle(row.title)}
-                  state="Working"
+                  state={t("Working")}
                   detail={facts(row.run)}
                   end={age(row.run.updatedAt, now)}
                   onOpen={() => open(row)}
@@ -154,14 +155,14 @@ export function OrchestratorHome({
           </ThreadGroup>
         )}
         {ready.length > 0 && (
-          <ThreadGroup label="To review">
+          <ThreadGroup label={t("To review")}>
             {ready.map((row) => (
               <FinishedRow key={row.run.id} row={row} now={now} onOpen={() => open(row)} />
             ))}
           </ThreadGroup>
         )}
         {earlier.length > 0 && (
-          <section aria-label="Earlier" className="mt-4 first:mt-0">
+          <section aria-label={t("Earlier")} className="mt-4 first:mt-0">
             <details className="group/earlier">
               <summary
                 className={`${tile} flex cursor-default list-none items-center gap-2 px-3 py-2 text-body hover:bg-selected [&::-webkit-details-marker]:hidden`}
@@ -170,7 +171,7 @@ export function OrchestratorHome({
                   aria-hidden
                   className="size-3.5 shrink-0 text-faint-foreground group-open/earlier:rotate-90"
                 />
-                <span className="flex-1">Earlier</span>
+                <span className="flex-1">{t("Earlier")}</span>
                 <span className="text-meta text-faint-foreground tabular-nums">
                   {earlier.length}
                 </span>
@@ -184,7 +185,10 @@ export function OrchestratorHome({
           </section>
         )}
       </Card>
-      <Card label="Plan" meta={notes && `Updated ${updated(notes.modifiedAt, now)}`}>
+      <Card
+        label={t("Plan")}
+        meta={notes && t("Updated {{time}}", { time: updated(notes.modifiedAt, now) })}
+      >
         {notes ? (
           <ContextBody
             hostId={hostId}
@@ -196,21 +200,21 @@ export function OrchestratorHome({
         ) : (
           !error && (
             <p className={empty}>
-              The orchestrator writes its plan here once it starts on the work.
+              {t("The orchestrator writes its plan here once it starts on the work.")}
             </p>
           )
         )}
         {error && (
           <p role="alert" className="text-body text-danger">
-            Couldn't load the plan. {error}
+            {t("Couldn't load the plan. {{error}}", { error })}
           </p>
         )}
       </Card>
-      <Card label="Context">
+      <Card label={t("Context")}>
         {files.length > 0 ? (
           <AllFiles files={files} onOpen={setOpenPath} />
         ) : (
-          <p className={empty}>Files the orchestrator saves show up here.</p>
+          <p className={empty}>{t("Files the orchestrator saves show up here.")}</p>
         )}
       </Card>
     </div>
@@ -253,34 +257,49 @@ function ThreadGroup({ label, children }: { label: string; children: ReactNode }
   );
 }
 
-const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
 /**
  * What is open, as one sentence under the orchestrator's name: the most pressing state and how many
  * threads are in it, then the other open states. With nothing open it says so.
  */
 export function headline(rows: readonly Pick<Row, "group">[]): string {
   const n = (g: Group) => rows.filter((r) => r.group === g).length;
+  // Each state's count, how it reads leading the sentence, and how it reads after the first.
   const states = [
-    [n("waiting"), count(n("waiting"), "thread needs you", "threads need you"), "need you"],
-    [n("working"), count(n("working"), "thread working", "threads working"), "working"],
-    [n("ready"), count(n("ready"), "thread to review", "threads to review"), "to review"],
+    [
+      n("waiting"),
+      (count: number) =>
+        t("{{count}} threads need you", { count, defaultValue_one: "{{count}} thread needs you" }),
+      (count: number) => t("{{count}} need you", { count }),
+    ],
+    [
+      n("working"),
+      (count: number) =>
+        t("{{count}} threads working", { count, defaultValue_one: "{{count}} thread working" }),
+      (count: number) => t("{{count}} working", { count }),
+    ],
+    [
+      n("ready"),
+      (count: number) =>
+        t("{{count}} threads to review", { count, defaultValue_one: "{{count}} thread to review" }),
+      (count: number) => t("{{count}} to review", { count }),
+    ],
   ] as const;
   const open = states.filter(([n]) => n > 0);
-  if (open.length === 0) return rows.length > 0 ? "Nothing open" : "No threads yet";
-  return open.map(([n, lead, rest], i) => (i === 0 ? lead : `${n} ${rest}`)).join(", ");
+  if (open.length === 0) return rows.length > 0 ? t("Nothing open") : t("No threads yet");
+  return open.map(([n, lead, rest], i) => (i === 0 ? lead(n) : rest(n))).join(", ");
 }
 
 /** "just now", "6m ago", or "2d ago": how long since `at`. */
-const updated = (at: string, now: number) => {
-  const since = age(at, now);
-  return since === "now" ? "just now" : `${since} ago`;
-};
+const updated = (at: string, now: number) =>
+  now - Date.parse(at) < 60_000 ? t("just now") : t("{{age}} ago", { age: age(at, now) });
 
 /** A finish's clock time today, else its day: "10:16 AM", "Yesterday", or "Oct 20". */
 const finished = (at: string, now: number) => {
-  const day = dayLabel(Date.parse(at), now, { month: "short", day: "numeric" });
-  return day === "Today" ? new Date(at).toLocaleTimeString(locale(), clockOptions()) : day;
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  return Date.parse(at) >= today.getTime()
+    ? new Date(at).toLocaleTimeString(locale(), clockOptions())
+    : dayLabel(Date.parse(at), now, { month: "short", day: "numeric" });
 };
 
 /** 1234 as "1.2k", for a diff's counts in a row. */
@@ -358,7 +377,10 @@ function subjectOf(row: Row): string | undefined {
       typeof input["command"] === "string"
         ? input["command"]
         : undefined;
-    return `Wants to run ${row.approval.request.toolName}${command ? `: ${command}` : ""}`;
+    const tool = row.approval.request.toolName;
+    return command
+      ? t("Wants to run {{tool}}: {{command}}", { tool, command })
+      : t("Wants to run {{tool}}", { tool });
   }
   const text = row.latest?.text;
   if (!text) return undefined;
@@ -425,7 +447,7 @@ function WaitingRow({
           )
         }
         title={plainTitle(row.title)}
-        state={failed ? "Failed" : "Needs you"}
+        state={failed ? t("Failed") : t("Needs you")}
         detail={asking ? undefined : subjectOf(row)}
         end={age(row.latest?.createdAt ?? row.run.updatedAt, now)}
         onOpen={onOpen}
@@ -460,7 +482,7 @@ function FinishedRow({ row, now, onOpen }: { row: Row; now: number; onOpen: () =
         }
         title={plainTitle(row.title)}
         dim={!unread}
-        state={failed ? "Failed" : "Done"}
+        state={failed ? t("Failed") : t("Done")}
         detail={facts(row.run)}
         end={finished(row.run.updatedAt, now)}
         onOpen={onOpen}
@@ -547,7 +569,7 @@ function QuestionBox({
     setBusy(true);
     const failed = await onAnswer(answer.trim());
     setBusy(false);
-    if (failed) notify({ tone: "error", title: "Couldn't send your answer", body: failed });
+    if (failed) notify({ tone: "error", title: t("Couldn't send your answer"), body: failed });
     else setText("");
   };
   return (
@@ -564,7 +586,7 @@ function QuestionBox({
             className="flex w-full items-baseline gap-3 border-b border-border px-3 py-2 text-left text-body hover:bg-hover disabled:opacity-50"
           >
             <span className="min-w-0 flex-1">{assumption}</span>
-            <span className="shrink-0 text-meta text-muted-foreground">Keep its pick</span>
+            <span className="shrink-0 text-meta text-muted-foreground">{t("Keep its pick")}</span>
           </button>
         )}
         <form
@@ -575,8 +597,8 @@ function QuestionBox({
           className="flex items-center gap-2 py-1 pr-1.5 pl-3"
         >
           <input
-            aria-label={`Answer: ${question}`}
-            placeholder={assumption ? "Or answer something else" : "Your answer"}
+            aria-label={t("Answer: {{question}}", { question })}
+            placeholder={assumption ? t("Or answer something else") : t("Your answer")}
             value={text}
             disabled={busy}
             onChange={(e) => setText(e.target.value)}
@@ -584,7 +606,7 @@ function QuestionBox({
           />
           <button
             type="submit"
-            aria-label="Send answer"
+            aria-label={t("Send answer")}
             disabled={busy || !text.trim()}
             className="send-sky grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
           >

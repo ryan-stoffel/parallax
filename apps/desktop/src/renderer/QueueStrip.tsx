@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowDown,
   ArrowUp,
@@ -58,7 +59,7 @@ export function QueueStrip({
     if ("error" in answer)
       return notify({
         tone: "error",
-        title: "Couldn't change the queue",
+        title: t("Couldn't change the queue"),
         body: answer.error.message,
       });
     setEditing(undefined);
@@ -76,12 +77,12 @@ export function QueueStrip({
 
   if (!messages.length) return null;
   const list = (
-    <section aria-label="Queued messages" className="text-body">
+    <section aria-label={t("Queued messages")} className="text-body">
       <div className="flex items-center justify-between py-2 pr-3.5 pl-4 text-faint-foreground">
         <span>
-          Queued{" "}
+          {t("Queued")}{" "}
           <span className="ml-1 rounded-sm bg-hover px-1.5 text-foreground">{messages.length}</span>
-          {held && <span className="ml-2">Paused</span>}
+          {held && <span className="ml-2">{t("Paused")}</span>}
         </span>
         {held ? (
           <button
@@ -90,10 +91,10 @@ export function QueueStrip({
             onClick={() => void change({ type: "queue.resume", threadId: runId })}
             className="font-medium text-foreground disabled:opacity-40"
           >
-            Resume
+            {t("Resume")}
           </button>
         ) : (
-          <span>Next turn</span>
+          <span>{t("Next turn")}</span>
         )}
       </div>
       <ol className="max-h-48 overflow-y-auto">
@@ -122,7 +123,7 @@ export function QueueStrip({
               >
                 <textarea
                   autoFocus
-                  aria-label="Edit queued message"
+                  aria-label={t("Edit queued message")}
                   value={text}
                   disabled={disabled}
                   onChange={(e) => setText(e.target.value)}
@@ -142,14 +143,14 @@ export function QueueStrip({
                     onClick={() => setEditing(undefined)}
                     className="text-muted-foreground"
                   >
-                    Discard edit
+                    {t("Discard edit")}
                   </button>
                   <button
                     type="submit"
                     disabled={disabled || (!text.trim() && !m.images)}
                     className="font-medium text-foreground disabled:opacity-40"
                   >
-                    Save
+                    {t("Save")}
                   </button>
                 </div>
               </form>
@@ -160,8 +161,8 @@ export function QueueStrip({
                   className={`${action} cursor-grab`}
                   disabled={disabled}
                   draggable={!disabled}
-                  aria-label={`Drag queued message ${index + 1}`}
-                  title="Drag to reorder"
+                  aria-label={t("Drag queued message {{number}}", { number: index + 1 })}
+                  title={t("Drag to reorder")}
                   onDragStart={(e) => {
                     e.dataTransfer.setData("application/x-parallax-queue", m.id);
                     e.dataTransfer.effectAllowed = "move";
@@ -170,11 +171,11 @@ export function QueueStrip({
                   <GripVertical aria-hidden />
                 </button>
                 <span className="min-w-0 flex-1 truncate" title={m.text}>
-                  {m.text || "Image message"}
+                  {m.text || t("Image message")}
                 </span>
                 {m.images > 0 && (
                   <span
-                    aria-label={`${m.images} images attached`}
+                    aria-label={t("{{count}} images attached", { count: m.images })}
                     className="flex items-center gap-1 text-faint-foreground"
                   >
                     <Image aria-hidden className="size-3" />
@@ -183,7 +184,7 @@ export function QueueStrip({
                 )}
                 {m.threads.length > 0 && (
                   <span
-                    aria-label={`${m.threads.length} threads attached`}
+                    aria-label={t("{{count}} threads attached", { count: m.threads.length })}
                     className="flex items-center gap-1 text-faint-foreground"
                   >
                     <Link aria-hidden className="size-3" />
@@ -194,7 +195,7 @@ export function QueueStrip({
                   type="button"
                   className={action}
                   disabled={disabled || index === 0}
-                  aria-label={`Move queued message ${index + 1} up`}
+                  aria-label={t("Move queued message {{number}} up", { number: index + 1 })}
                   onClick={() => move(m.id, index - 1)}
                 >
                   <ArrowUp aria-hidden />
@@ -203,7 +204,7 @@ export function QueueStrip({
                   type="button"
                   className={action}
                   disabled={disabled || index === messages.length - 1}
-                  aria-label={`Move queued message ${index + 1} down`}
+                  aria-label={t("Move queued message {{number}} down", { number: index + 1 })}
                   onClick={() => move(m.id, index + 1)}
                 >
                   <ArrowDown aria-hidden />
@@ -212,7 +213,7 @@ export function QueueStrip({
                   type="button"
                   className={action}
                   disabled={disabled}
-                  aria-label={`Edit queued message ${index + 1}`}
+                  aria-label={t("Edit queued message {{number}}", { number: index + 1 })}
                   onClick={() => {
                     setEditing(m.id);
                     setText(m.text);
@@ -224,8 +225,8 @@ export function QueueStrip({
                   type="button"
                   className={action}
                   disabled={disabled || !running}
-                  aria-label={`Steer queued message ${index + 1} now`}
-                  title="Steer now"
+                  aria-label={t("Steer queued message {{number}} now", { number: index + 1 })}
+                  title={t("Steer now")}
                   onClick={() =>
                     void change({
                       type: "queued-message.promote-to-steer",
@@ -240,7 +241,7 @@ export function QueueStrip({
                   type="button"
                   className={action}
                   disabled={disabled}
-                  aria-label={`Cancel queued message ${index + 1}`}
+                  aria-label={t("Cancel queued message {{number}}", { number: index + 1 })}
                   onClick={() =>
                     void change({ type: "queued-run.cancel", threadId: runId, runId: m.id })
                   }
@@ -260,14 +261,14 @@ export function QueueStrip({
       <button
         type="button"
         popoverTarget={id}
-        title="Show the queued messages"
+        title={t("Show the queued messages")}
         className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
       >
-        Queued
+        {t("Queued")}
         <span className="rounded-sm bg-hover px-1.5 text-foreground tabular-nums">
           {messages.length}
         </span>
-        {held && <span className="text-faint-foreground">Paused</span>}
+        {held && <span className="text-faint-foreground">{t("Paused")}</span>}
       </button>
       <div
         id={id}

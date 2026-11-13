@@ -1,3 +1,6 @@
+import { t } from "i18next";
+
+import { msg } from "../i18n";
 import { stored } from "./stored";
 import type { KeyPress } from "./ui";
 
@@ -44,27 +47,37 @@ export type When = "always" | "!terminalFocus" | "terminalFocus" | "!inputFocus"
 
 /** Each `When`, as Settings > Keybindings' menu offers it. */
 export const whenOptions: { value: When; label: string; detail: string }[] = [
-  { value: "always", label: "Always", detail: "Anywhere in the app." },
+  { value: "always", label: msg("Always"), detail: msg("Anywhere in the app.") },
   {
     value: "!terminalFocus",
     label: "!terminalFocus",
-    detail: "Unless a terminal has focus, so the shell gets the keys there.",
+    detail: msg("Unless a terminal has focus, so the shell gets the keys there."),
   },
-  { value: "terminalFocus", label: "terminalFocus", detail: "Only while a terminal has focus." },
+  {
+    value: "terminalFocus",
+    label: "terminalFocus",
+    detail: msg("Only while a terminal has focus."),
+  },
   {
     value: "!inputFocus",
     label: "!inputFocus",
-    detail: "Unless you're typing in a field or the composer.",
+    detail: msg("Unless you're typing in a field or the composer."),
   },
   {
     value: "inputFocus",
     label: "inputFocus",
-    detail: "Only while typing in a field or the composer.",
+    detail: msg("Only while typing in a field or the composer."),
   },
 ];
 
 /** A heading in Settings > Keybindings, in its order. */
-export const commandCategories = ["Navigation", "Threads", "Panels", "Code", "Appearance"] as const;
+export const commandCategories = [
+  msg("Navigation"),
+  msg("Threads"),
+  msg("Panels"),
+  msg("Code"),
+  msg("Appearance"),
+] as const;
 
 /**
  * Every rebindable command, in Settings > Keybindings' order, as "Area: Action", with its default
@@ -81,108 +94,118 @@ export const commands: {
   // The command menu and its file pages (PLX-993).
   {
     id: "commandMenu",
-    name: "Command Menu: Toggle",
+    name: msg("Command Menu: Toggle"),
     category: "Navigation",
     default: "Mod+KeyK",
   },
-  { id: "goToFile", name: "File Picker: Toggle", category: "Navigation", default: "Mod+KeyP" },
+  { id: "goToFile", name: msg("File Picker: Toggle"), category: "Navigation", default: "Mod+KeyP" },
   {
     id: "searchContents",
-    name: "Project Search: Toggle",
+    name: msg("Project Search: Toggle"),
     category: "Navigation",
     default: "Mod+Shift+KeyF",
   },
-  { id: "settings", name: "Settings: Open", category: "Navigation", default: "Mod+Comma" },
-  { id: "settingsKeybinds", name: "Settings: Open Keybindings", category: "Navigation" },
-  { id: "settingsProviders", name: "Settings: Open Providers", category: "Navigation" },
-  { id: "settingsProjects", name: "Settings: Open Projects", category: "Navigation" },
-  { id: "usage", name: "Usage: Open", category: "Navigation", default: "Mod+Alt+KeyU" },
+  { id: "settings", name: msg("Settings: Open"), category: "Navigation", default: "Mod+Comma" },
+  { id: "settingsKeybinds", name: msg("Settings: Open Keybindings"), category: "Navigation" },
+  { id: "settingsProviders", name: msg("Settings: Open Providers"), category: "Navigation" },
+  { id: "settingsProjects", name: msg("Settings: Open Projects"), category: "Navigation" },
+  { id: "usage", name: msg("Usage: Open"), category: "Navigation", default: "Mod+Alt+KeyU" },
   // The threads opened in this window, as a browser's history (PLX-789).
-  { id: "back", name: "History: Back", category: "Navigation", default: "Mod+BracketLeft" },
-  { id: "forward", name: "History: Forward", category: "Navigation", default: "Mod+BracketRight" },
-  { id: "newThread", name: "Thread: New", category: "Threads", default: "Mod+KeyN" },
+  { id: "back", name: msg("History: Back"), category: "Navigation", default: "Mod+BracketLeft" },
+  {
+    id: "forward",
+    name: msg("History: Forward"),
+    category: "Navigation",
+    default: "Mod+BracketRight",
+  },
+  { id: "newThread", name: msg("Thread: New"), category: "Threads", default: "Mod+KeyN" },
   {
     id: "noRepoThread",
-    name: "Thread: New Without Repo",
+    name: msg("Thread: New Without Repo"),
     category: "Threads",
     default: "Mod+Shift+KeyN",
   },
   {
     id: "newOrchestrator",
-    name: "Thread: New Orchestrator",
+    name: msg("Thread: New Orchestrator"),
     category: "Threads",
     default: "Mod+Shift+KeyO",
   },
-  { id: "find", name: "Thread: Find", category: "Threads", default: "Mod+KeyF" },
+  { id: "find", name: msg("Thread: Find"), category: "Threads", default: "Mod+KeyF" },
   // A thread's lineage (0041): from a parent, next and previous open its first and last child.
   {
     id: "parentThread",
-    name: "Thread: Go to Parent",
+    name: msg("Thread: Go to Parent"),
     category: "Threads",
     default: "Mod+Alt+ArrowUp",
   },
   {
     id: "nextThread",
-    name: "Thread: Next Sibling",
+    name: msg("Thread: Next Sibling"),
     category: "Threads",
     default: "Mod+Alt+ArrowRight",
   },
   {
     id: "previousThread",
-    name: "Thread: Previous Sibling",
+    name: msg("Thread: Previous Sibling"),
     category: "Threads",
     default: "Mod+Alt+ArrowLeft",
   },
   // The top bar's tabs (PLX-1289).
-  { id: "newTab", name: "Tab: New", category: "Threads", default: "Mod+KeyT" },
-  { id: "closeTab", name: "Tab: Close", category: "Threads", default: "Mod+KeyW" },
-  { id: "nextTab", name: "Tab: Next", category: "Threads", default: "Ctrl+Tab" },
-  { id: "previousTab", name: "Tab: Previous", category: "Threads", default: "Ctrl+Shift+Tab" },
+  { id: "newTab", name: msg("Tab: New"), category: "Threads", default: "Mod+KeyT" },
+  { id: "closeTab", name: msg("Tab: Close"), category: "Threads", default: "Mod+KeyW" },
+  { id: "nextTab", name: msg("Tab: Next"), category: "Threads", default: "Ctrl+Tab" },
+  { id: "previousTab", name: msg("Tab: Previous"), category: "Threads", default: "Ctrl+Shift+Tab" },
   // The split's threads (PLX-587, PLX-1082), each by its place. The first two keep their old ids so
   // a saved rebinding still applies. Off macOS, Ctrl+1 to Ctrl+4 open sidebar rows.
   {
     id: "leftThread",
-    name: "Split: Focus Thread 1",
+    name: msg("Split: Focus Thread 1"),
     category: "Threads",
     default: "Ctrl+Digit1",
     elsewhere: "Ctrl+Shift+Digit1",
   },
   {
     id: "rightThread",
-    name: "Split: Focus Thread 2",
+    name: msg("Split: Focus Thread 2"),
     category: "Threads",
     default: "Ctrl+Digit2",
     elsewhere: "Ctrl+Shift+Digit2",
   },
   {
     id: "thirdThread",
-    name: "Split: Focus Thread 3",
+    name: msg("Split: Focus Thread 3"),
     category: "Threads",
     default: "Ctrl+Digit3",
     elsewhere: "Ctrl+Shift+Digit3",
   },
   {
     id: "fourthThread",
-    name: "Split: Focus Thread 4",
+    name: msg("Split: Focus Thread 4"),
     category: "Threads",
     default: "Ctrl+Digit4",
     elsewhere: "Ctrl+Shift+Digit4",
   },
-  { id: "sidebar", name: "Sidebar: Toggle", category: "Panels", default: "Mod+KeyS" },
-  { id: "panel", name: "Side Panel: Toggle", category: "Panels", default: "Mod+Alt+KeyB" },
-  { id: "browser", name: "Browser: Toggle", category: "Panels", default: "Mod+Shift+KeyB" },
-  { id: "terminal", name: "Terminal: Toggle", category: "Panels", default: "Mod+KeyJ" },
-  { id: "open", name: "Folder: Open in Default App", category: "Code", default: "Mod+Alt+KeyO" },
+  { id: "sidebar", name: msg("Sidebar: Toggle"), category: "Panels", default: "Mod+KeyS" },
+  { id: "panel", name: msg("Side Panel: Toggle"), category: "Panels", default: "Mod+Alt+KeyB" },
+  { id: "browser", name: msg("Browser: Toggle"), category: "Panels", default: "Mod+Shift+KeyB" },
+  { id: "terminal", name: msg("Terminal: Toggle"), category: "Panels", default: "Mod+KeyJ" },
+  {
+    id: "open",
+    name: msg("Folder: Open in Default App"),
+    category: "Code",
+    default: "Mod+Alt+KeyO",
+  },
   {
     id: "openPr",
-    name: "Pull Request: Open on GitHub",
+    name: msg("Pull Request: Open on GitHub"),
     category: "Code",
     default: "Mod+Shift+KeyP",
   },
-  { id: "cycleAppearance", name: "Appearance: Cycle", category: "Appearance" },
-  { id: "toggleWordWrap", name: "Appearance: Toggle Word Wrap", category: "Appearance" },
-  { id: "textLarger", name: "Appearance: Larger Text", category: "Appearance" },
-  { id: "textSmaller", name: "Appearance: Smaller Text", category: "Appearance" },
+  { id: "cycleAppearance", name: msg("Appearance: Cycle"), category: "Appearance" },
+  { id: "toggleWordWrap", name: msg("Appearance: Toggle Word Wrap"), category: "Appearance" },
+  { id: "textLarger", name: msg("Appearance: Larger Text"), category: "Appearance" },
+  { id: "textSmaller", name: msg("Appearance: Smaller Text"), category: "Appearance" },
 ];
 
 /** The commands that focus the split's threads, by their place in it. */
@@ -356,8 +379,9 @@ const keyShape = /^((Ctrl|Alt|Shift|Meta|Mod)\+)+[A-Z][A-Za-z0-9]+$/;
 function refusal(key: string): string | undefined {
   const parts = key.split("+");
   const code = parts.at(-1)!;
-  if (!parts.includes("Ctrl") && !parts.includes("Meta")) return `${key} needs Mod, Ctrl, or Meta`;
-  if (editingKeys.includes(code)) return `${key} is an editing shortcut`;
+  if (!parts.includes("Ctrl") && !parts.includes("Meta"))
+    return t("{{key}} needs Mod, Ctrl, or Meta", { key });
+  if (editingKeys.includes(code)) return t("{{key}} is an editing shortcut", { key });
   const mod = window.parallax.platform === "darwin" ? "Meta" : "Ctrl";
   // As `rowShortcut` reads a press: whatever else is held, but Shift or Alt.
   if (
@@ -366,7 +390,7 @@ function refusal(key: string): string | undefined {
     !parts.includes("Shift") &&
     !parts.includes("Alt")
   )
-    return `${key} opens a sidebar row`;
+    return t("{{key}} opens a sidebar row", { key });
   return undefined;
 }
 
@@ -383,21 +407,21 @@ export function applyBindingsJson(text: string): string[] {
     return [(error as Error).message];
   }
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
-    return ["Expected an object of commands."];
+    return [t("Expected an object of commands.")];
   const errors: string[] = [];
   const next: Overrides = { ...overrides.get() };
   for (const [id, value] of Object.entries(raw)) {
     if (!known(id)) {
-      errors.push(`Unknown command: ${id}`);
+      errors.push(t("Unknown command: {{id}}", { id }));
       continue;
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      errors.push(`${id}: an object with key and when`);
+      errors.push(t("{{id}}: an object with key and when", { id }));
       continue;
     }
     const { key, when } = value as { key?: unknown; when?: unknown };
     if (key !== undefined && key !== null && !(typeof key === "string" && keyShape.test(key))) {
-      errors.push(`${id}: a key like "Mod+KeyK", or null for none`);
+      errors.push(t('{{id}}: a key like "Mod+KeyK", or null for none', { id }));
       continue;
     }
     const resolved = typeof key === "string" ? resolve(key) : key;
@@ -407,7 +431,7 @@ export function applyBindingsJson(text: string): string[] {
       continue;
     }
     if (when !== undefined && !isWhen(when)) {
-      errors.push(`${id}: unknown when ${JSON.stringify(when)}`);
+      errors.push(t("{{id}}: unknown when {{when}}", { id, when: JSON.stringify(when) }));
       continue;
     }
     // Only what differs from the default is saved, and what's left out stays as it is.
@@ -431,7 +455,14 @@ export function applyBindingsJson(text: string): string[] {
     const key = bindingOf(c.id);
     if (!key) continue;
     const owner = owners.get(key);
-    if (owner) errors.push(`${formatKeybinding(key)} is on both ${owner} and ${c.id}`);
+    if (owner)
+      errors.push(
+        t("{{key}} is on both {{first}} and {{second}}", {
+          key: formatKeybinding(key),
+          first: owner,
+          second: c.id,
+        }),
+      );
     owners.set(key, c.id);
   }
   if (errors.length) overrides.set(before);

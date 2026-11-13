@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
+import { msg } from "../i18n";
 import type { ConnectionState, HostResponse, RpcError } from "../preload/bridge";
 import { openDocx, type Docx } from "./docx";
 import { describeError } from "./errors";
@@ -36,11 +38,11 @@ export interface Loaded {
 }
 
 export const kinds: Record<Exclude<DocKind, MediaKind>, string> = {
-  docx: "Document",
-  pdf: "Document",
-  xlsx: "Spreadsheet",
-  pptx: "Presentation",
-  file: "File",
+  docx: msg("Document"),
+  pdf: msg("Document"),
+  xlsx: msg("Spreadsheet"),
+  pptx: msg("Presentation"),
+  file: msg("File"),
 };
 
 /** A file's type in a badge: its kind, or for a plain file its extension. */
@@ -51,10 +53,11 @@ export const typeOf = (doc: DocRef) =>
 
 /** `bytes` as a size people read: 512 bytes, 12 KB, 3.4 MB, 1.0 GB. */
 export function sizeOf(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes < 1024)
+    return t("{{count}} bytes", { count: bytes, defaultValue_one: "{{count}} byte" });
+  if (bytes < 1024 * 1024) return t("{{size}} KB", { size: Math.round(bytes / 1024) });
+  if (bytes < 1024 ** 3) return t("{{size}} MB", { size: (bytes / 1024 / 1024).toFixed(1) });
+  return t("{{size}} GB", { size: (bytes / 1024 ** 3).toFixed(1) });
 }
 
 /** A file's name as a title: no extension, and spaces for underscores and hyphens. */
@@ -88,7 +91,7 @@ export async function openPdf(bytes: Uint8Array): Promise<PDFDocumentProxy> {
 /** Why a request to `hostId` failed, for people: the host being offline, or plxd's reason. */
 export async function failure(hostId: string, error: RpcError): Promise<string> {
   const state = await window.parallax.connectionState(hostId).catch(() => undefined);
-  return state?.status === "connected" ? describeError(error) : "The host is offline.";
+  return state?.status === "connected" ? describeError(error) : t("The host is offline.");
 }
 
 /** Run `runId`'s html_render page or recording `attachmentId` (PLX-639), from `agent/image`. */
@@ -208,7 +211,7 @@ export async function readSlices(
     const piece = fromBase64(data);
     // Rewritten, grown, or cut short since the first slice.
     if (size !== bytes.length || at + piece.length > size || (piece.length === 0 && at < size))
-      throw new Error("This file changed while it was read. Try again.");
+      throw new Error(t("This file changed while it was read. Try again."));
     bytes.set(piece, at);
     at += piece.length;
     if (size > progressFrom) onProgress?.(at / size);
@@ -229,9 +232,9 @@ export function readWorking(
     );
     if ("error" in answer) throw new Error(await failure(hostId, answer.error));
     const file = answer.result;
-    if (!file.exists) throw new Error("This file isn't in the thread's folder anymore.");
+    if (!file.exists) throw new Error(t("This file isn't in the thread's folder anymore."));
     if (file.tooLarge || file.content == null)
-      throw new Error("This file is too large to open here.");
+      throw new Error(t("This file is too large to open here."));
     return { data: file.content, size: file.size };
   };
   return readSlices(hostId, slice, onProgress);
@@ -246,7 +249,7 @@ export async function workingSize(hostId: string, runId: string, path: string): 
     sizeOnly: true,
   });
   if ("error" in answer) throw new Error(await failure(hostId, answer.error));
-  if (!answer.result.exists) throw new Error("This file isn't in the thread's folder anymore.");
+  if (!answer.result.exists) throw new Error(t("This file isn't in the thread's folder anymore."));
   return answer.result.size ?? 0;
 }
 

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 
 import { ParallaxMark } from "./logos";
@@ -23,10 +24,10 @@ export class CrashBoundary extends Component<{ children: ReactNode }, { details?
       this.props.children
     ) : (
       <CrashScreen
-        title="Parallax hit a problem"
-        message="This window stopped working. Your threads are saved and agents keep running."
+        title={t("Parallax hit a problem")}
+        message={t("This window stopped working. Your threads are saved and agents keep running.")}
         details={this.state.details}
-        action={{ label: "Reload", onClick: () => window.location.reload() }}
+        action={{ label: t("Reload"), onClick: () => window.location.reload() }}
       />
     );
   }
@@ -99,7 +100,7 @@ export function CrashScreen({
               {action.label}
             </Button>
             <Button variant="outline" onClick={copy}>
-              {copied ? "Copied" : "Copy error"}
+              {copied ? t("Copied") : t("Copy error")}
             </Button>
           </div>
           <div className="mt-4 flex items-center gap-3 text-meta text-faint-foreground">
@@ -109,13 +110,13 @@ export function CrashScreen({
               onClick={() => setOpen(!open)}
               className="hover:text-foreground"
             >
-              {open ? "Hide details" : "Show details"}
+              {open ? t("Hide details") : t("Show details")}
             </button>
             {onDismiss && (
               <>
                 <span aria-hidden>·</span>
                 <button type="button" onClick={onDismiss} className="hover:text-foreground">
-                  Continue anyway
+                  {t("Continue anyway")}
                 </button>
               </>
             )}

@@ -1,6 +1,7 @@
 // The sidebar's favorites (pins.ts, 0075): pinned threads moved up, as squares that fill the row,
 // above the pinned threads, as Arc's favorites sit above its tabs. Orchestrators list as rows
 // (PLX-1043).
+import { t } from "i18next";
 import { ArrowLeft, ArrowRight, ArrowUpRight, StarOff } from "lucide-react";
 import {
   useId,
@@ -12,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { msg } from "../i18n";
 import type { Attention } from "./attention";
 import { draggedPin, pinDragType, setDraggedPin } from "./pins";
 import { MenuKey } from "./Sidebar";
@@ -49,15 +51,18 @@ const favoriteDragType = "application/x-parallax-favorite";
 
 // A thread's dot, and its words for a screen reader and the tooltip: only for what finished,
 // failed, or waits on the user. Work in progress shows nothing, as the Working drawer keeps it out
-// of sight.
+// of sight. The words are English here, shown with `t`.
 const dots: Partial<Record<Attention, { color: string; words: string }>> = {
-  needsYou: { color: "bg-warning", words: "needs you" },
-  failed: { color: "bg-danger", words: "failed" },
-  done: { color: "bg-added", words: "done" },
+  needsYou: { color: "bg-warning", words: msg("needs you") },
+  failed: { color: "bg-danger", words: msg("failed") },
+  done: { color: "bg-added", words: msg("done") },
 };
 
 /** What a favorite's dot says, for a screen reader and the tooltip. */
-const wordsOf = (f: Favorite) => dots[f.attention]?.words;
+const wordsOf = (f: Favorite) => {
+  const words = dots[f.attention]?.words;
+  return words && t(words);
+};
 
 /**
  * The favorites: squares, as many to a row as fit and stretched to fill it, so two take half the
@@ -159,7 +164,7 @@ export function Favorites({
   return (
     <>
       <ul
-        aria-label="Favorites"
+        aria-label={t("Favorites")}
         onDragOver={(e) => {
           if (reordering(e)) return e.preventDefault();
           if (!accepts(e)) return;
@@ -289,13 +294,13 @@ export function Favorites({
         ))}
         {over && (
           <li className="grow-in grid h-11 place-items-center rounded-xl border border-dashed border-accent/50 text-meta font-medium text-accent">
-            Favorite
+            {t("Favorite")}
           </li>
         )}
       </ul>
       <Menu
         id={menuId}
-        label="Favorite"
+        label={t("Favorite")}
         className="pop-in min-w-48 p-1"
         onClose={() => setMenuFor(undefined)}
       >
@@ -308,7 +313,7 @@ export function Favorites({
               onClick={close(() => onOpen(editing.key))}
             >
               <ArrowUpRight aria-hidden />
-              Open
+              {t("Open")}
               <MenuKey>↵</MenuKey>
             </button>
             {onReorder && items.length > 1 && (
@@ -321,7 +326,7 @@ export function Favorites({
                   onClick={close(() => step(editing.key, -1))}
                 >
                   <ArrowLeft aria-hidden />
-                  Move left
+                  {t("Move left")}
                   <MenuKey>{`${alt}←`}</MenuKey>
                 </button>
                 <button
@@ -332,7 +337,7 @@ export function Favorites({
                   onClick={close(() => step(editing.key, 1))}
                 >
                   <ArrowRight aria-hidden />
-                  Move right
+                  {t("Move right")}
                   <MenuKey>{`${alt}→`}</MenuKey>
                 </button>
               </>
@@ -344,7 +349,7 @@ export function Favorites({
               onClick={close(() => onRemove(editing.key))}
             >
               <StarOff aria-hidden />
-              Remove from favorites
+              {t("Remove from favorites")}
             </button>
             {editing.actions && editing.actions.length > 0 && <hr className="my-1 border-border" />}
             {editing.actions?.map((a) => (

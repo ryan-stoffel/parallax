@@ -2,6 +2,9 @@
 // desktop's pickers and the mobile app's composer list them. Pure, so both apps share it; models.ts
 // adds this device's choices and the host's providers.
 
+import { t } from "i18next";
+
+import { msg } from "../i18n";
 import type { AgentEffort, AgentPermission, ProviderInfo } from "../protocol/generated/protocol";
 
 // The models each worker backend's CLI took on 2026-10-12, and what to send for each. A
@@ -240,7 +243,7 @@ export function instanceModels(info: ProviderInfo): Model[] {
     ...instance.models.map((m) => ({ ...m, contexts: [] })),
   ];
   if (info.hub && !listed.length) return [];
-  return (listed.length ? listed : [{ id: "", name: "Default model", contexts: [] }])
+  return (listed.length ? listed : [{ id: "", name: t("Default model"), contexts: [] }])
     .filter((m) => !seen.has(m.id) && !!seen.add(m.id))
     .map((m) => ({
       ...m,
@@ -251,30 +254,45 @@ export function instanceModels(info: ProviderInfo): Model[] {
 
 /**
  * Each reasoning effort plxd takes, a line about it, and how fast EffortMenu's sheen sweeps: the
- * smaller, the faster.
+ * smaller, the faster. Names and lines are English, shown through `t`.
  */
 export const effortLevels: { value: AgentEffort; name: string; blurb: string; speed: number }[] = [
-  { value: "low", name: "Low", blurb: "A little thought first", speed: 3 },
-  { value: "medium", name: "Medium", blurb: "Thinks it over", speed: 2 },
-  { value: "high", name: "High", blurb: "Digs in on the hard parts", speed: 1.3 },
-  { value: "xhigh", name: "Extra high", blurb: "Takes its time on the hardest parts", speed: 0.8 },
-  { value: "max", name: "Max", blurb: "Everything it's got", speed: 0.4 },
+  { value: "low", name: msg("Low"), blurb: msg("A little thought first"), speed: 3 },
+  { value: "medium", name: msg("Medium"), blurb: msg("Thinks it over"), speed: 2 },
+  { value: "high", name: msg("High"), blurb: msg("Digs in on the hard parts"), speed: 1.3 },
+  {
+    value: "xhigh",
+    name: msg("Extra high"),
+    blurb: msg("Takes its time on the hardest parts"),
+    speed: 0.8,
+  },
+  { value: "max", name: msg("Max"), blurb: msg("Everything it's got"), speed: 0.4 },
 ];
 
 // One set of access levels for every provider (0054), from most to least supervised. Each backend
 // maps the ones it can honor, and a thread is full Claude Code in every mode (0034). An
 // orchestrator's worker keeps its sandbox in every mode but Full access (0013). What would prompt
 // comes to the chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
+// Labels and descriptions are English, shown through `t`.
 export const accessLevels: Record<AgentPermission, { label: string; description: string }> = {
-  manual: { label: "Supervised", description: "Asks you before commands and file changes." },
+  manual: {
+    label: msg("Supervised"),
+    description: msg("Asks you before commands and file changes."),
+  },
   edit: {
-    label: "Auto-accept edits",
-    description: "Accepts file edits, asks before other actions.",
+    label: msg("Auto-accept edits"),
+    description: msg("Accepts file edits, asks before other actions."),
   },
   auto: {
-    label: "Auto",
-    description: "The provider approves routine actions for you and blocks the risky ones.",
+    label: msg("Auto"),
+    description: msg("The provider approves routine actions for you and blocks the risky ones."),
   },
-  plan: { label: "Plan", description: "Explores and writes a plan without editing files." },
-  bypass: { label: "Full access", description: "Runs commands and edits files without asking." },
+  plan: {
+    label: msg("Plan"),
+    description: msg("Explores and writes a plan without editing files."),
+  },
+  bypass: {
+    label: msg("Full access"),
+    description: msg("Runs commands and edits files without asking."),
+  },
 };

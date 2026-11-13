@@ -2,6 +2,7 @@
 // every turn or for one turn, from the checkpoints plxd captures as each turn ends, each file with
 // its lines added and removed, folding on a tap. Reverting to a turn stays on the desktop.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import { ChevronRight, CircleAlert, FileDiff, FileText, History } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from "react-native";
@@ -56,10 +57,10 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
   const connection = computer?.state;
   const unavailable =
     connection?.status !== "connected"
-      ? `${computer?.machine.name ?? "This computer"} isn't connected.`
+      ? t("{{name}} isn't connected.", { name: computer?.machine.name ?? t("This computer") })
       : "checkpoints" in connection.capabilities
         ? undefined
-        : "Update Parallax on this computer to see a thread's changes.";
+        : t("Update Parallax on this computer to see a thread's changes.");
   const prompt = computer?.view.state.runs[runId]?.prompt ?? "";
 
   const [runs, setRuns] = useState<ThreadRun[] | { error: string }>();
@@ -140,11 +141,11 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
   // What's already read stays through a lost connection, and is read again when it's back.
   const empty =
     unavailable && !diff ? (
-      <Empty icon={FileDiff} title="Changes aren't available" note={unavailable} />
+      <Empty icon={FileDiff} title={t("Changes aren't available")} note={unavailable} />
     ) : runs && "error" in runs ? (
-      <Empty icon={CircleAlert} title="Couldn't load the changes" note={runs.error} />
+      <Empty icon={CircleAlert} title={t("Couldn't load the changes")} note={runs.error} />
     ) : runs && latest === undefined ? (
-      <Empty icon={FileDiff} title="No changes yet" note="Edits from this thread show up here for review." />
+      <Empty icon={FileDiff} title={t("No changes yet")} note={t("Edits from this thread show up here for review.")} />
     ) : undefined;
   const loading = !unavailable && (!runs || (latest !== undefined && !shown));
 
@@ -165,7 +166,7 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
                   <Section>
                     <Row
                       icon={History}
-                      title={turn?.label ?? "All turns"}
+                      title={turn?.label ?? t("All turns")}
                       detail={turn?.description}
                       chevron={!unavailable}
                       last
@@ -183,8 +184,8 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
                   <View style={styles.summary}>
                     <T muted style={{ fontSize: 14 }}>
                       {files.length === 0
-                        ? "No files changed."
-                        : `${files.length} changed ${files.length === 1 ? "file" : "files"}`}
+                        ? t("No files changed.")
+                        : t("{{count}} changed files", { count: files.length, defaultValue_one: "{{count}} changed file" })}
                     </T>
                     {files.length > 0 && (
                       <DiffStats
@@ -196,7 +197,7 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
                 )}
                 {diff?.truncated && (
                   <T style={{ color: c.warning, fontSize: 14 }}>
-                    This diff was too long, so it's cut short and later files may be missing.
+                    {t("This diff was too long, so it's cut short and later files may be missing.")}
                   </T>
                 )}
               </>
@@ -205,10 +206,10 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
         }
       />
       <Choices
-        title="Turn"
+        title={t("Turn")}
         open={picking}
         value={String(ordinal ?? "all")}
-        options={[{ value: "all", label: "All turns" }, ...choices]}
+        options={[{ value: "all", label: t("All turns") }, ...choices]}
         onChoose={(value) => {
           setShownTurn(value === "all" ? "all" : Number(value));
           setFolded(new Set());

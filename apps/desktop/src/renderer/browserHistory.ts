@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { stored } from "./stored";
 
 // The browser's history (PLX-976): every page a browser's own tab visits, shared by every browser
@@ -69,9 +71,9 @@ export function byDay(
     // A day's name once per day, not per visit, as History can hold thousands.
     const name =
       day === today
-        ? "Today"
+        ? t("Today")
         : day === start(today - 1)
-          ? "Yesterday"
+          ? t("Yesterday")
           : new Date(day).toLocaleDateString(undefined, {
               weekday: "long",
               month: "long",

@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { chunksOf, failure } from "./documents";
 import { fromBase64 } from "./ooxml";
 
@@ -141,7 +143,7 @@ function textOf(
     text: raw.replace(/\r\n?/g, "\n"),
     eol: crlf > 0 && !mixed ? "\r\n" : "\n",
     bom,
-    ...(mixed && { readOnly: "This file mixes line endings, so it can't be edited here." }),
+    ...(mixed && { readOnly: t("This file mixes line endings, so it can't be edited here.") }),
   };
 }
 
@@ -293,11 +295,11 @@ export class OpenFiles {
     if ("error" in answer)
       return { kind: "error", error: await failure(this.hostId, answer.error) };
     const read = answer.result;
-    if (!read.exists) return { kind: "note", note: "This file isn't there anymore." };
+    if (!read.exists) return { kind: "note", note: t("This file isn't there anymore.") };
     if (read.tooLarge || read.content == null)
       return {
         kind: "note",
-        note: "This file is too large to show.",
+        note: t("This file is too large to show."),
         large: !!(await chunksOf(this.hostId)),
       };
     const bytes = fromBase64(read.content);
@@ -310,14 +312,14 @@ export class OpenFiles {
         video: extension in videoTypes,
       };
     const text = textOf(bytes);
-    if (!text) return { kind: "note", note: "This is a binary file.", bytes };
+    if (!text) return { kind: "note", note: t("This is a binary file."), bytes };
     const readOnly =
       text.readOnly ??
       (link
-        ? "This is a link, and this shows where it points."
+        ? t("This is a link, and this shows where it points.")
         : this.writable && read.sha256
           ? undefined
-          : "Update Parallax on this host to edit files.");
+          : t("Update Parallax on this host to edit files."));
     return {
       kind: "text",
       ...text,

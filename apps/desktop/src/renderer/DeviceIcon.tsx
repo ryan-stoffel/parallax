@@ -1,5 +1,6 @@
 import { Laptop, Monitor, Server, type LucideProps } from "lucide-react";
 
+import { msg } from "../i18n";
 import type { DeviceIcon as DeviceIconName } from "../preload/bridge";
 
 /** A mini PC, such as a Mac mini, drawn like lucide's icons: a low box with a light. */
@@ -26,12 +27,12 @@ function MiniPc(props: LucideProps) {
 
 const icons = { laptop: Laptop, desktop: Monitor, mini: MiniPc, server: Server };
 
-/** What each icon is, for people. */
+/** What each icon is, for people, in English: show it with `t`. */
 export const deviceIconNames: Record<DeviceIconName, string> = {
-  laptop: "Laptop",
-  desktop: "PC",
-  mini: "Mini PC",
-  server: "Server",
+  laptop: msg("Laptop"),
+  desktop: msg("PC"),
+  mini: msg("Mini PC"),
+  server: msg("Server"),
 };
 
 /** A Parallax Connect device's icon (0056). */

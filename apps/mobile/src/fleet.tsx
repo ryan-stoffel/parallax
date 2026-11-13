@@ -6,6 +6,7 @@
 // 15 seconds while it's in front. It sets them up or asks to use them, asks the user to allow other devices that ask,
 // copies who's approved between the computers this phone uses, and drops those the relay marks removed.
 import { File } from "expo-file-system";
+import { t } from "i18next";
 import {
   createContext,
   useContext,
@@ -124,7 +125,8 @@ function outboxFor(host: () => Fleet, id: string): Outbox {
     send,
     (messages) => file.write(JSON.stringify(messages)),
     // A dialog, not a notice: the saved copy is gone, so this is the last sight of what was typed.
-    (m, error) => showAlert("Message not sent", `“${m.text}”: ${error.message}`, [{ text: "OK" }]),
+    (m, error) =>
+      showAlert(t("Message not sent"), t("“{{text}}”: {{reason}}", { text: m.text, reason: error.message }), [{ text: t("OK") }]),
   );
   async function send(m: Outgoing): Promise<Sent> {
     const connection = host().hosts.get(id);
@@ -281,7 +283,7 @@ export function FleetProvider({
       gate(id, { kind: "waiting", code });
       if (shownCode.current === code) return;
       shownCode.current = code;
-      showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? "your computers", code, allow);
+      showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? t("your computers"), code, allow);
     });
     asking.current = false;
     setStopped(accounts.askingStopped);
@@ -423,7 +425,7 @@ export function FleetProvider({
         asked.add(pending.id);
         const decide = (method: "access/approve" | "access/deny") =>
           void host.request(method, { request: pending.id }).then((done) => {
-            if ("error" in done) showAlert("Couldn't answer the request", done.error.message);
+            if ("error" in done) showAlert(t("Couldn't answer the request"), done.error.message);
             // Approved here, it's approved on the computers that accept this one's lists.
             else if (method === "access/approve") void share();
           });
@@ -590,7 +592,7 @@ export function FleetProvider({
     setUp,
     editRoutes: (id, edit) => {
       const account = setup.machines.find((m) => m.id === id)?.account;
-      if (!account) return "That computer isn't on this phone anymore.";
+      if (!account) return t("That computer isn't on this phone anymore.");
       const next = editOnPhone(account.hostId, account, edit);
       if ("error" in next) return next.error;
       const edited = { ...account, ...next };
@@ -604,19 +606,19 @@ export function FleetProvider({
     routeOf: (id) => fleet.route(id),
     async revoke(id, session) {
       const answer = await fleet.hosts.get(id)?.request("remote/revoke", { id: session });
-      if (!answer) return { error: "That computer isn't connected." };
+      if (!answer) return { error: t("That computer isn't connected.") };
       if ("error" in answer) return { error: answer.error.message };
       void share();
       return answer.result as RemoteSessionsResult;
     },
     async updateHost(id, version, now) {
       const answer = await fleet.hosts.get(id)?.request("host/update", { version, ...(now && { now }) });
-      if (!answer) return { error: { code: -32602, message: "That computer isn't in Parallax anymore." } };
+      if (!answer) return { error: { code: -32602, message: t("That computer isn't in Parallax anymore.") } };
       return answer as RpcResponse<HostUpdateResult>;
     },
     async makeReadOnly(id, session) {
       const answer = await fleet.hosts.get(id)?.request("access/setReadOnly", { id: session });
-      if (!answer) return { error: "That computer isn't connected." };
+      if (!answer) return { error: t("That computer isn't connected.") };
       if ("error" in answer) return { error: answer.error.message };
       void share();
       return answer.result as RemoteSessionsResult;

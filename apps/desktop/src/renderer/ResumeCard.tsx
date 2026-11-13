@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { AlarmClock } from "lucide-react";
 import { useState } from "react";
 
@@ -43,8 +44,8 @@ export function ResumeCard({
         tone: "error",
         title:
           method === "agent/resumeNow"
-            ? "Couldn't resume the thread"
-            : "Couldn't cancel the thread",
+            ? t("Couldn't resume the thread")
+            : t("Couldn't cancel the thread"),
         body: answer.error.message,
       });
   };
@@ -53,14 +54,16 @@ export function ResumeCard({
     "rounded-md px-2.5 py-1 text-body font-medium enabled:hover:bg-hover disabled:opacity-50";
   return (
     <section
-      aria-label="Usage limit"
+      aria-label={t("Usage limit")}
       className="flex items-center gap-3 rounded-lg border border-warning/30 px-3.5 py-2.5 text-body"
     >
       <AlarmClock aria-hidden className="size-4 shrink-0 text-warning" />
       <div className="min-w-0 flex-1">
         <p className="font-medium">
-          Usage limit reached.{" "}
-          {run.resumeAt ? `Resumes at ${resumeTime(run.resumeAt)}` : "It resumes once it resets."}
+          {t("Usage limit reached.")}{" "}
+          {run.resumeAt
+            ? t("Resumes at {{time}}", { time: resumeTime(run.resumeAt) })
+            : t("It resumes once it resets.")}
         </p>
       </div>
       <button
@@ -70,7 +73,7 @@ export function ResumeCard({
         onClick={() => void act("agent/resumeNow")}
         className={`${button} border border-border`}
       >
-        Resume now
+        {t("Resume now")}
       </button>
       <button
         type="button"
@@ -79,7 +82,7 @@ export function ResumeCard({
         onClick={() => void act("agent/cancel")}
         className={`${button} text-muted-foreground`}
       >
-        Cancel
+        {t("Cancel")}
       </button>
     </section>
   );

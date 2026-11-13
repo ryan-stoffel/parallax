@@ -15,8 +15,10 @@ import {
   RotateCw,
   Search,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { t } from "i18next";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 
+import { msg } from "../../i18n";
 import type { UpdateState } from "../../preload/bridge";
 import { useCopy } from "../AgentChat";
 import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
@@ -45,6 +47,10 @@ type Licenses = { packages: Package[]; texts: string[] };
 
 const groups = ["All", "App", "plxd", "Sidecars"] as const;
 
+/** A package group's name as shown. */
+const groupName = (group: (typeof groups)[number]) =>
+  ({ All: t("All"), App: t("App"), plxd: "plxd", Sidecars: t("Sidecars") })[group];
+
 /**
  * Settings > About: Parallax's version and whether a newer one is out, where to get involved, and
  * what it's made from.
@@ -67,16 +73,16 @@ export function AboutSettings() {
     return (
       <>
         <div className="mb-6 flex items-center gap-2">
-          <IconButton label="Back to About" onClick={() => setCredits(undefined)}>
+          <IconButton label={t("Back to About")} onClick={() => setCredits(undefined)}>
             <ArrowLeft aria-hidden />
           </IconButton>
           <h1 className="text-heading font-semibold">
             {
               {
-                code: "Code",
-                fonts: "Fonts",
-                artwork: "Logos and icons",
-                models: "Models",
+                code: t("Code"),
+                fonts: t("Fonts"),
+                artwork: t("Logos and icons"),
+                models: t("Models"),
               }[credits]
             }
           </h1>
@@ -86,7 +92,7 @@ export function AboutSettings() {
         ) : credits === "models" ? (
           <ModelNotices />
         ) : (
-          <Section title="Notices">
+          <Section title={t("Notices")}>
             {(credits === "fonts" ? notices : artwork).map((n) => (
               <NoticeRow key={n.name} name={n.name} license={n.license} text={n.text} />
             ))}
@@ -111,7 +117,7 @@ export function AboutSettings() {
         <div className="min-w-0">
           <h1 className="text-heading font-semibold">Parallax</h1>
           <p className="text-body text-muted-foreground">
-            Run coding agents on computers you own, and check on them from anywhere.
+            {t("Run coding agents on computers you own, and check on them from anywhere.")}
           </p>
           <div data-setting="version" className="mt-1">
             {version && <CopyVersion version={version} />}
@@ -121,44 +127,48 @@ export function AboutSettings() {
 
       <UpdateCard version={version} />
 
-      <section aria-label="Get involved" data-setting={anchorOf("Get involved")} className="mb-10">
-        <h2 className="mb-3 text-reading font-semibold">Get involved</h2>
+      <section
+        aria-label={t("Get involved")}
+        data-setting={anchorOf("Get involved")}
+        className="mb-10"
+      >
+        <h2 className="mb-3 text-reading font-semibold">{t("Get involved")}</h2>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-2">
           <LinkTile
             href={`${repository}/issues/new?${bugReport.toString()}`}
             icon={<Bug aria-hidden className="text-danger" />}
-            title="Report a bug"
-            detail="Open a GitHub issue with your version."
+            title={t("Report a bug")}
+            detail={t("Open a GitHub issue with your version.")}
           />
           <LinkTile
             href={`${repository}/discussions/new?category=ideas`}
             icon={<Lightbulb aria-hidden className="text-project-yellow" />}
-            title="Share an idea"
-            detail="Start a discussion on GitHub."
+            title={t("Share an idea")}
+            detail={t("Start a discussion on GitHub.")}
           />
           <LinkTile
             href={repository}
             icon={<GitHubStarIcon />}
-            title="Star on GitHub"
-            detail="A star helps people find Parallax."
+            title={t("Star on GitHub")}
+            detail={t("A star helps people find Parallax.")}
           />
           <LinkTile
             href="https://ko-fi.com/parallax_team"
             icon={<KoFiLogo />}
-            title="Support on Ko-fi"
-            detail="Help fund the work."
+            title={t("Support on Ko-fi")}
+            detail={t("Help fund the work.")}
           />
         </div>
       </section>
 
-      <Section title="This computer">
+      <Section title={t("This computer")}>
         {connection?.status === "connected" && (
           <Row title="plxd">
             <Value>{connection.plxd}</Value>
           </Row>
         )}
         {os && (
-          <Row title="Operating system">
+          <Row title={t("Operating system")}>
             <Value>{os}</Value>
           </Row>
         )}
@@ -174,34 +184,37 @@ export function AboutSettings() {
         )}
       </Section>
 
-      <Section title="Open source">
-        <Row title="License" description="Parallax is free and open source.">
+      <Section title={t("Open source")}>
+        <Row title={t("License")} description={t("Parallax is free and open source.")}>
           <OutLink href={`${repository}/blob/develop/LICENSE`}>Apache License 2.0</OutLink>
         </Row>
-        <Row title="Source code" description="Where Parallax is built, in the open.">
+        <Row title={t("Source code")} description={t("Where Parallax is built, in the open.")}>
           <OutLink href={repository}>ryan-stoffel/parallax</OutLink>
         </Row>
       </Section>
 
-      <Section title="Licenses and credits">
+      <Section title={t("Licenses and credits")}>
         <ChoiceRow
-          title="Code"
-          detail="The packages in the app and plxd, each with its license"
+          title={t("Code")}
+          detail={t("The packages in the app and plxd, each with its license")}
           onClick={() => setCredits("code")}
         />
         <ChoiceRow
-          title="Fonts"
-          detail={`${notices.length} fonts that ship with Parallax`}
+          title={t("Fonts")}
+          detail={t("{{count}} fonts that ship with Parallax", {
+            count: notices.length,
+            defaultValue_one: "{{count}} font that ships with Parallax",
+          })}
           onClick={() => setCredits("fonts")}
         />
         <ChoiceRow
-          title="Logos and icons"
-          detail="Whose marks these are, and where they come from"
+          title={t("Logos and icons")}
+          detail={t("Whose marks these are, and where they come from")}
           onClick={() => setCredits("artwork")}
         />
         <ChoiceRow
-          title="Models"
-          detail="Voice dictation's speech model and the Device panel's device models"
+          title={t("Models")}
+          detail={t("Voice dictation's speech model and the Device panel's device models")}
           onClick={() => setCredits("models")}
         />
       </Section>
@@ -215,8 +228,8 @@ function CopyVersion({ version }: { version: string }) {
   return (
     <button
       type="button"
-      aria-label={`Copy version ${version}`}
-      title="Copy version"
+      aria-label={t("Copy version {{version}}", { version })}
+      title={t("Copy version")}
       onClick={() => copy(version)}
       className="group -ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-meta text-muted-foreground hover:bg-hover hover:text-foreground"
     >
@@ -233,8 +246,8 @@ function CopyVersion({ version }: { version: string }) {
   );
 }
 
-// What About says when the sidebar's Update button can't review a restart for it.
-const inSidebar = "Restart from the Update button in the sidebar.";
+// What About says when the sidebar's Update button can't review a restart for it, shown with `t`.
+const inSidebar = msg("Restart from the Update button in the sidebar.");
 
 /**
  * The updater as About knows it: its `state` from main, and the last press's `answer` from
@@ -275,9 +288,9 @@ function updateView(
   checking: boolean,
   version?: string,
 ): UpdateView {
-  const off = { icon: "off", title: "Updates aren't available in this build" } as const;
+  const off = { icon: "off", title: t("Updates aren't available in this build") } as const;
   if (!window.parallax.updatable)
-    return { ...off, detail: "Only the packaged app updates itself." };
+    return { ...off, detail: t("Only the packaged app updates itself.") };
   const { available, progress, ready, note, unsupported } = state;
   if (unsupported) return { ...off, detail: note };
   // The updater's line about a check or download that failed.
@@ -286,62 +299,80 @@ function updateView(
   if (progress !== undefined)
     return {
       icon: "release",
-      title: `Downloading ${available?.version ?? "the update"}…`,
+      title: available
+        ? t("Downloading {{version}}…", { version: available.version })
+        : t("Downloading the update…"),
       progress,
-      button: { label: "Downloading…", primary: true, busy: true },
+      button: { label: t("Downloading…"), primary: true, busy: true },
     };
   if (available && ready !== undefined) {
     const view = {
-      title: `Parallax ${available.version} is ready to install`,
-      button: { label: "Restart to install", primary: true },
+      title: t("Parallax {{version}} is ready to install", { version: available.version }),
+      button: { label: t("Restart to install"), primary: true },
     };
-    if (answer === inSidebar) return { icon: "restart", detail: inSidebar, ...view };
-    return { icon: "restart", detail: "Parallax restarts to finish.", ...failure, ...view };
+    if (answer === inSidebar) return { icon: "restart", detail: t(inSidebar), ...view };
+    return { icon: "restart", detail: t("Parallax restarts to finish."), ...failure, ...view };
   }
   if (available)
     return {
       icon: "release",
-      title: `Parallax ${available.version} is available`,
+      title: t("Parallax {{version}} is available", { version: available.version }),
       notes: available.url,
       ...failure,
-      button: { label: "Download", primary: true, busy: checking },
+      button: { label: t("Download"), primary: true, busy: checking },
     };
   // Under `pnpm dev`, the commits to take. `update` answers why it didn't take them.
   if (ready !== undefined)
     return {
       icon: "release",
       title: ready[0]!.toUpperCase() + ready.slice(1),
-      detail: answer ?? "Update moves this checkout to main and rebuilds it.",
-      button: { label: checking ? "Updating…" : "Update", primary: true, busy: checking },
+      detail: answer ?? t("Update moves this checkout to main and rebuilds it."),
+      button: { label: checking ? t("Updating…") : t("Update"), primary: true, busy: checking },
     };
-  const idle = "Parallax checks for new releases on its own.";
+  const idle = t("Parallax checks for new releases on its own.");
   if (checking)
     return {
       icon: "check",
-      title: "Checking for updates…",
+      title: t("Checking for updates…"),
       detail: idle,
-      button: { label: "Checking…", busy: true },
+      button: { label: t("Checking…"), busy: true },
     };
   if (failure)
-    return { ...failure, title: "Couldn't check for updates", button: { label: "Try again" } };
-  const button = { label: "Check for updates" };
+    return {
+      ...failure,
+      title: t("Couldn't check for updates"),
+      button: { label: t("Try again") },
+    };
+  const button = { label: t("Check for updates") };
   // `update` answers "Up to date" when nothing is newer, and otherwise why it didn't update.
   if (answer !== "Up to date")
-    return { icon: "check", title: "Updates", detail: answer ?? idle, button };
-  const ago = checkedAt && age(checkedAt);
-  const checked = ago && (ago === "now" ? "Checked just now." : `Checked ${ago} ago.`);
+    return { icon: "check", title: t("Updates"), detail: answer ?? idle, button };
+  const checked =
+    checkedAt &&
+    (Date.now() - Date.parse(checkedAt) < 60_000
+      ? t("Checked just now.")
+      : t("Checked {{ago}} ago.", { ago: age(checkedAt) }));
   return {
     icon: "current",
-    title: "Parallax is up to date",
-    detail: [version && `${version} is the latest.`, checked].filter(Boolean).join(" "),
+    title: t("Parallax is up to date"),
+    detail: [version && t("{{version}} is the latest.", { version }), checked]
+      .filter(Boolean)
+      .join(" "),
     button,
   };
 }
 
 // The card's button: one width whatever it reads, which its widest labels set from ::before and
-// ::after, so the card holds still while a check runs.
+// ::after (`widestLabels`), so the card holds still while a check runs.
 const updateButton =
-  "col-start-2 inline-flex shrink-0 flex-col items-center justify-self-start rounded-md border px-2.5 py-1 text-body whitespace-nowrap disabled:opacity-50 @md:col-start-3 before:invisible before:h-0 before:font-medium before:content-['Check_for_updates'] after:invisible after:h-0 after:font-medium after:content-['Restart_to_install']";
+  "col-start-2 inline-flex shrink-0 flex-col items-center justify-self-start rounded-md border px-2.5 py-1 text-body whitespace-nowrap disabled:opacity-50 @md:col-start-3 before:invisible before:h-0 before:font-medium before:content-(--widest-a) after:invisible after:h-0 after:font-medium after:content-(--widest-b)";
+
+/** The update button's widest labels in the app's language, as the CSS strings `updateButton` reads. */
+const widestLabels = () =>
+  ({
+    "--widest-a": JSON.stringify(t("Check for updates")),
+    "--widest-b": JSON.stringify(t("Restart to install")),
+  }) as CSSProperties;
 
 /**
  * The updates card under the header (PLX-1522): where Parallax stands with its updates, and one
@@ -379,7 +410,7 @@ function UpdateCard({ version }: { version?: string }) {
   };
   return (
     <section
-      aria-label="Updates"
+      aria-label={t("Updates")}
       data-setting="check-for-updates"
       className="@container mb-10 scroll-mt-6 rounded-xl border border-border/50 bg-(--pane-card) p-3"
     >
@@ -397,7 +428,7 @@ function UpdateCard({ version }: { version?: string }) {
             <div className="flex items-center gap-2 text-meta text-muted-foreground">
               <div
                 role="progressbar"
-                aria-label="Download"
+                aria-label={t("Download")}
                 aria-valuenow={view.progress}
                 className="h-1 max-w-64 flex-1 overflow-hidden rounded-full bg-selected"
               >
@@ -424,7 +455,7 @@ function UpdateCard({ version }: { version?: string }) {
                 rel="noreferrer"
                 className="flex w-fit animate-fade-in items-center gap-1 text-meta text-muted-foreground hover:text-foreground hover:underline"
               >
-                What's new
+                {t("What's new")}
                 <ArrowUpRight aria-hidden className="size-3" />
               </a>
             )
@@ -435,6 +466,7 @@ function UpdateCard({ version }: { version?: string }) {
             type="button"
             disabled={button.busy}
             onClick={() => void press()}
+            style={widestLabels()}
             className={`${updateButton} ${
               button.primary
                 ? "border-transparent bg-primary font-medium text-primary-foreground enabled:hover:opacity-90"
@@ -553,9 +585,13 @@ function ModelNotices() {
     void import("../assets/devices/NOTICE.md?raw").then((m) => setDevices(m.default));
   }, []);
   return (
-    <Section title="Notices">
-      <NoticeRow name="Voice dictation" license="Apache-2.0" text={voice ?? "Loading…"} />
-      <NoticeRow name="Device models" license="See notice" text={devices ?? "Loading…"} />
+    <Section title={t("Notices")}>
+      <NoticeRow name={t("Voice dictation")} license="Apache-2.0" text={voice ?? t("Loading…")} />
+      <NoticeRow
+        name={t("Device models")}
+        license={t("See notice")}
+        text={devices ?? t("Loading…")}
+      />
     </Section>
   );
 }
@@ -577,16 +613,24 @@ function CodeLicenses() {
   return (
     <>
       <p className="mb-4 text-body text-muted-foreground">
-        What ships in Parallax. Sidecars are listed from their lockfiles, so they show a license
-        name without its text.
+        {t(
+          "What ships in Parallax. Sidecars are listed from their lockfiles, so they show a license name without its text.",
+        )}
       </p>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <label className={`${searchField} min-w-48 flex-1`}>
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
             type="search"
-            aria-label="Search packages"
-            placeholder={licenses ? `Search ${licenses.packages.length} packages` : "Loading…"}
+            aria-label={t("Search packages")}
+            placeholder={
+              licenses
+                ? t("Search {{count}} packages", {
+                    count: licenses.packages.length,
+                    defaultValue_one: "Search {{count}} package",
+                  })
+                : t("Loading…")
+            }
             value={query}
             spellCheck={false}
             onChange={(e) => setQuery(e.target.value)}
@@ -594,8 +638,8 @@ function CodeLicenses() {
           />
         </label>
         <Segmented
-          label="Where it's used"
-          options={groups.map((g) => ({ value: g, name: g }))}
+          label={t("Where it's used")}
+          options={groups.map((g) => ({ value: g, name: groupName(g) }))}
           value={group}
           onChange={setGroup}
         />
@@ -610,7 +654,7 @@ function CodeLicenses() {
           />
         ))}
         {shown?.length === 0 && (
-          <p className="px-4 py-3 text-body text-muted-foreground">No packages match.</p>
+          <p className="px-4 py-3 text-body text-muted-foreground">{t("No packages match.")}</p>
         )}
       </div>
     </>
@@ -638,7 +682,7 @@ function PackageRow({
           {entry.name}{" "}
           <span className="font-mono text-meta font-normal text-faint-foreground">
             {entry.version}
-            {showGroup && ` · ${entry.group}`}
+            {showGroup && ` · ${groupName(entry.group)}`}
           </span>
         </span>
         <span className="shrink-0 font-mono text-meta text-muted-foreground">{entry.license}</span>
@@ -661,7 +705,7 @@ function PackageRow({
             ))
           ) : (
             <p className="mt-1 text-meta text-muted-foreground">
-              This package's own files have its license text.
+              {t("This package's own files have its license text.")}
             </p>
           )}
         </div>

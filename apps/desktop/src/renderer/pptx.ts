@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { emuToPx, find, imageUrl, kid, kids, readXml, rels, unzip, type Parts } from "./ooxml";
 
 /**
@@ -19,7 +21,7 @@ export interface Pptx {
 export function openPptx(bytes: Uint8Array): Pptx {
   const parts = unzip(bytes);
   const presentation = readXml(parts, "ppt/presentation.xml");
-  if (!presentation) throw new Error("This file has no PowerPoint presentation in it.");
+  if (!presentation) throw new Error(t("This file has no PowerPoint presentation in it."));
   const size = find(presentation, "p:sldSz");
   const targets = rels(parts, "ppt/presentation.xml");
   const slides = [...presentation.getElementsByTagName("p:sldId")]
@@ -351,7 +353,7 @@ export function renderSlide(pptx: Pptx, index: number): HTMLElement {
           frame.style.display = "grid";
           frame.style.placeItems = "center";
           frame.style.color = "#777";
-          frame.textContent = "Chart";
+          frame.textContent = t("Chart");
         }
         into.append(frame);
         return;

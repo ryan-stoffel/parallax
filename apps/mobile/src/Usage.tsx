@@ -5,11 +5,13 @@
 // button, or a pull, asks every computer again.
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { RefreshCw, RotateCw } from "lucide-react-native";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Svg, { Line, Path } from "react-native-svg";
 
+import { msg } from "../../desktop/src/i18n";
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
 import type { UsageLimitWindow } from "../../desktop/src/protocol/generated/protocol";
 import { dayKey } from "../../desktop/src/renderer/profile";
@@ -20,8 +22,6 @@ import {
   limitMeter,
   niceTop,
   percent,
-  plural,
-  rangeWords,
   ranges,
   stack,
   summarize,
@@ -50,11 +50,15 @@ import {
 } from "./usageData";
 
 type Choice = "cost" | "tokens" | "limits";
+/** The views, named with `msg`: `Segmented` shows names with `t`. */
 const views: { value: Choice; name: string }[] = [
-  { value: "cost", name: "Cost" },
-  { value: "tokens", name: "Tokens" },
-  { value: "limits", name: "Limits" },
+  { value: "cost", name: msg("Cost") },
+  { value: "tokens", name: msg("Tokens") },
+  { value: "limits", name: msg("Limits") },
 ];
+
+/** How many days each range spans, for its words. */
+const rangeDays: Record<Range, number> = { today: 1, "7d": 7, "30d": 30, "90d": 90 };
 
 /** How often Limits asks each computer's CLIs for their windows again, as the desktop does. */
 const LIMITS_POLL_MS = 60_000;
@@ -62,9 +66,9 @@ const LIMITS_POLL_MS = 60_000;
 /** A computer that isn't answering: its status, as the desktop words it, or undefined once connected. */
 function statusOf(state: ConnectionState): string | undefined {
   if (state.status === "connected") return undefined;
-  if (state.updating) return "Updating…";
-  if (state.status === "connecting") return "Connecting…";
-  return state.retrying ? "Reconnecting…" : "Disconnected";
+  if (state.updating) return t("Updating…");
+  if (state.status === "connecting") return t("Connecting…");
+  return state.retrying ? t("Reconnecting…") : t("Disconnected");
 }
 
 /** One computer's part of Limits: its accounts once it answers, or why it has none. */
@@ -162,7 +166,7 @@ export function UsageScreen() {
     () =>
       navigation.setOptions({
         headerRight: () => (
-          <GlassButton label="Refresh usage" onPress={() => void latest.current("button")}>
+          <GlassButton label={t("Refresh usage")} onPress={() => void latest.current("button")}>
             {refreshing === "button" ? (
               <ActivityIndicator color={c.foreground} />
             ) : (
@@ -182,10 +186,10 @@ export function UsageScreen() {
       refreshControl={<RefreshControl refreshing={refreshing === "pull"} onRefresh={() => void refresh("pull")} />}
     >
       <View style={styles.controls}>
-        <Segmented label="Usage view" options={views} value={view} onChange={setView} />
+        <Segmented label={t("Usage view")} options={views} value={view} onChange={setView} />
         {view !== "limits" && (
           <Segmented
-            label="Usage range"
+            label={t("Usage range")}
             options={ranges}
             value={range}
             onChange={(next) => {
@@ -197,7 +201,7 @@ export function UsageScreen() {
       </View>
       <View style={styles.page}>
         {computers.length === 0 ? (
-          <Empty title="No computers">Pair a computer in Settings to see its usage here.</Empty>
+          <Empty title={t("No computers")}>{t("Pair a computer in Settings to see its usage here.")}</Empty>
         ) : view === "limits" ? (
           <Limits computers={computers} answers={limits} />
         ) : (
@@ -208,7 +212,7 @@ export function UsageScreen() {
   );
 }
 
-/** A row of choices, one chosen, as iOS's segmented control draws it. */
+/** A row of choices, one chosen, as iOS's segmented control draws it. Names are marked with `msg`. */
 function Segmented<V extends string>({
   label,
   options,
@@ -238,7 +242,7 @@ function Segmented<V extends string>({
             style={[styles.segment, chosen && [styles.chosen, { backgroundColor: c.surface, borderColor: c.border }]]}
           >
             <T medium={chosen} muted={!chosen} numberOfLines={1} style={{ fontSize: 13.5 }}>
-              {o.name}
+              {t(o.name)}
             </T>
           </Pressable>
         );
@@ -284,11 +288,11 @@ function History({
   if (frame) held.current = frame;
   const shown = frame ?? (waiting ? held.current : undefined);
   if (shown) return <Dashboard frame={shown} stale={!frame} view={view} by={by} onBy={setBy} />;
-  if (waiting) return <Empty title="Loading usage…" />;
+  if (waiting) return <Empty title={t("Loading usage…")} />;
   const problem = computers.map((m) => answer(m.machine.id)).find((a) => a && "problem" in a);
   return (
-    <Empty title="No usage">
-      {problem && "problem" in problem ? problem.problem : "None of your computers is connected."}
+    <Empty title={t("No usage")}>
+      {problem && "problem" in problem ? problem.problem : t("None of your computers is connected.")}
     </Empty>
   );
 }
@@ -308,7 +312,7 @@ const chartFills = (c: Colors) => [c.accent, mix(c.accent, 0.65, c.surface), mix
 
 const dayName = (start: number, long: boolean, n: number) =>
   new Date(start).toLocaleString(
-    "en",
+    undefined,
     long ? { weekday: "short", month: "short", day: "numeric" } : n <= 7 ? { weekday: "short" } : { month: "short", day: "numeric" },
   );
 
@@ -335,7 +339,7 @@ function Dashboard({
   const { range, span } = frame;
   const { starts } = span;
   const today = range === "today";
-  const words = rangeWords[range];
+  const days = rangeDays[range];
   const summary = summarize(frame.days, starts, span.previous, span.partial, frame.sessions);
   const [picked, setPicked] = useState<number>();
   const cost = view === "cost";
@@ -345,14 +349,18 @@ function Dashboard({
   const unreported = (m: Measures) => cost && m.cost === 0 && m.unpriced > 0;
   const shown = (m: Measures) => (unreported(m) ? "—" : format(measure(m)));
   const other = (m: Measures) =>
-    cost ? `${tokenCount.format(tokensOf(m))} tokens` : m.cost > 0 ? dollars(m.cost) : "no reported cost";
+    cost
+      ? t("{{tokens}} tokens", { tokens: tokenCount.format(tokensOf(m)) })
+      : m.cost > 0
+        ? dollars(m.cost)
+        : t("no reported cost");
   const whole = measure(summary.total);
-  const what = cost ? "cost" : "tokens";
+  const shareOf = (share: string) => (cost ? t("{{share}} of cost", { share }) : t("{{share}} of tokens", { share }));
 
   if (tokensOf(summary.total) === 0)
     return (
-      <Empty title={`No usage ${words.past}`}>
-        Claude Code, Codex, and Cursor usage on your computers shows here.
+      <Empty title={today ? t("No usage today") : t("No usage in the past {{count}} days", { count: days })}>
+        {t("Claude Code, Codex, and Cursor usage on your computers shows here.")}
       </Empty>
     );
 
@@ -362,13 +370,24 @@ function Dashboard({
   const sessions = summary.sessions;
   const processed = tokensOf(summary.total);
 
-  let note = plural(summary.backends.length, "provider");
-  if (!today) note += ` · ${plural(summary.byBucket.filter((m) => tokensOf(m) > 0).length, "active day")}`;
+  const notes = [t("{{count}} providers", { count: summary.backends.length, defaultValue_one: "{{count}} provider" })];
+  if (!today)
+    notes.push(
+      t("{{count}} active days", {
+        count: summary.byBucket.filter((m) => tokensOf(m) > 0).length,
+        defaultValue_one: "{{count}} active day",
+      }),
+    );
   if (cost && summary.total.unpriced > 0)
-    note += ` · ${percent(summary.total.unpriced, processed)} of tokens have no reported cost`;
+    notes.push(t("{{share}} of tokens have no reported cost", { share: percent(summary.total.unpriced, processed) }));
+  const note = notes.join(" · ");
   const chartTitle = today
-    ? `${cost ? "Cost" : "Processed tokens"} by model today`
-    : `Daily ${cost ? "cost" : "processed tokens"}`;
+    ? cost
+      ? t("Cost by model today")
+      : t("Processed tokens by model today")
+    : cost
+      ? t("Daily cost")
+      : t("Daily processed tokens");
   const none = (
     <T faint style={styles.big}>
       —
@@ -379,7 +398,7 @@ function Dashboard({
     <View accessibilityState={{ busy: stale }} style={[styles.stack, stale && { opacity: 0.45 }]}>
       <Card>
         <T muted style={styles.label}>
-          {cost ? "Total cost" : "Processed tokens"}
+          {cost ? t("Total cost") : t("Processed tokens")}
         </T>
         {whole > 0 ? <T style={styles.hero}>{shown(summary.total)}</T> : none}
         <T muted style={styles.note}>
@@ -390,16 +409,23 @@ function Dashboard({
       <View style={styles.pair}>
         <Card style={{ flex: 1 }}>
           <T muted style={styles.label}>
-            Sessions
+            {t("Sessions")}
           </T>
           {sessions ? <T style={styles.big}>{sessions.total.toLocaleString("en")}</T> : none}
           <T muted style={styles.note}>
-            {sessions ? `${Math.round(sessions.previous).toLocaleString("en")} ${words.previous}` : "Not counted"}
+            {!sessions
+              ? t("Not counted")
+              : today
+                ? t("{{sessions}} yesterday", { sessions: Math.round(sessions.previous).toLocaleString("en") })
+                : t("{{sessions}} in the previous {{count}} days", {
+                    sessions: Math.round(sessions.previous).toLocaleString("en"),
+                    count: days,
+                  })}
           </T>
         </Card>
         <Card style={{ flex: 1 }}>
           <T muted style={styles.label}>
-            Busiest model
+            {t("Busiest model")}
           </T>
           {lead ? (
             <View style={styles.lead}>
@@ -412,7 +438,9 @@ function Dashboard({
             none
           )}
           <T muted style={styles.note}>
-            {lead ? `${percent(measure(lead.model.total), whole)} of ${what} · ${shown(lead.model.total)}` : "No model reported a cost"}
+            {lead
+              ? `${shareOf(percent(measure(lead.model.total), whole))} · ${shown(lead.model.total)}`
+              : t("No model reported a cost")}
           </T>
         </Card>
       </View>
@@ -421,11 +449,11 @@ function Dashboard({
         <View style={styles.kinds}>
           {(
             [
-              ["Processed tokens", processed],
-              ["Cached input", summary.total.cacheRead],
-              ["Uncached input", summary.total.input],
-              ["Cache writes", summary.total.cacheWrite],
-              ["Output", summary.total.output],
+              [t("Processed tokens"), processed],
+              [t("Cached input"), summary.total.cacheRead],
+              [t("Uncached input"), summary.total.input],
+              [t("Cache writes"), summary.total.cacheWrite],
+              [t("Output"), summary.total.output],
             ] as const
           ).map(([label, n], i) => (
             <View
@@ -445,7 +473,7 @@ function Dashboard({
                   {tokenCount.format(n)}
                 </T>
                 <T faint numberOfLines={1} style={{ fontSize: 12, flexShrink: 1 }}>
-                  {i === 0 ? "every kind" : percent(n, processed)}
+                  {i === 0 ? t("every kind") : percent(n, processed)}
                 </T>
               </View>
             </View>
@@ -456,8 +484,8 @@ function Dashboard({
       <Card>
         <T medium>{chartTitle}</T>
         {whole === 0 ? (
-          <Empty title="No vendor reported a cost in this range" plain>
-            Tokens still count: see them under Tokens.
+          <Empty title={t("No vendor reported a cost in this range")} plain>
+            {t("Tokens still count: see them under Tokens.")}
           </Empty>
         ) : today ? (
           // One day is one bar, so Today shows only how it splits.
@@ -486,7 +514,7 @@ function Dashboard({
 
       <View style={{ gap: 10 }}>
         <T muted medium style={styles.heading}>
-          Providers
+          {t("Providers")}
         </T>
         {summary.backends.map(({ backend, total }) => {
           const share = unreported(total) || whole === 0 ? undefined : measure(total) / whole;
@@ -501,7 +529,7 @@ function Dashboard({
               <T style={{ ...styles.big, marginTop: 10 }}>{shown(total)}</T>
               <Meter share={share} color={fills[0]!} />
               <T muted numberOfLines={1} style={styles.note}>
-                {share === undefined ? "No reported cost" : `${percent(share, 1)} of ${what}`} · {other(total)}
+                {share === undefined ? t("No reported cost") : shareOf(percent(share, 1))} · {other(total)}
               </T>
             </Card>
           );
@@ -511,7 +539,7 @@ function Dashboard({
       <Breakdown
         by={today ? "model" : by}
         onBy={today ? undefined : onBy}
-        what={cost ? "Cost" : "Tokens"}
+        what={cost ? t("Cost") : t("Tokens")}
         rows={
           today || by === "model"
             ? rows.map(({ model, share, part }) => ({
@@ -521,7 +549,7 @@ function Dashboard({
                 value: shown(model.total),
                 share,
                 fill: fills[part]!,
-                other: unreported(model.total) ? `No reported cost · ${other(model.total)}` : other(model.total),
+                other: unreported(model.total) ? t("No reported cost · {{other}}", { other: other(model.total) }) : other(model.total),
               }))
             : starts
                 .map((start, i) => ({ start, total: summary.byBucket[i]! }))
@@ -629,7 +657,7 @@ function Bars({
           </>
         ) : (
           <T faint style={{ fontSize: 12 }}>
-            Touch a bar to see its day.
+            {t("Touch a bar to see its day.")}
           </T>
         )}
       </View>
@@ -709,7 +737,7 @@ function Bars({
           {average > 0 && (
             <View style={[styles.average, { top: y(average) - 9, backgroundColor: c.surface, borderColor: c.border }]}>
               <T muted style={{ fontSize: 10.5, lineHeight: 14 }}>
-                avg {format(average)}
+                {t("avg {{value}}", { value: format(average) })}
               </T>
             </View>
           )}
@@ -828,15 +856,15 @@ function Breakdown({
     <Card>
       <View style={styles.breakdownTop}>
         <T medium style={{ flex: 1 }}>
-          Breakdown
+          {t("Breakdown")}
         </T>
         {onBy && (
           <View style={{ width: 150 }}>
             <Segmented
-              label="Breakdown by"
+              label={t("Breakdown by")}
               options={[
-                { value: "model", name: "Model" },
-                { value: "time", name: "Day" },
+                { value: "model", name: msg("Model") },
+                { value: "time", name: msg("Day") },
               ]}
               value={by}
               onChange={onBy}
@@ -846,10 +874,10 @@ function Breakdown({
       </View>
       <View style={[styles.breakdownHead, { borderColor: c.border }]}>
         <T faint style={{ flex: 1, fontSize: 12 }}>
-          {by === "model" ? "Model" : "Day"}
+          {by === "model" ? t("Model") : t("Day")}
         </T>
         <T faint style={{ fontSize: 12 }}>
-          {what} · Share
+          {what} · {t("Share")}
         </T>
       </View>
       {(all ? rows : rows.slice(0, BREAKDOWN_ROWS)).map((r, i, shown) => (
@@ -880,7 +908,7 @@ function Breakdown({
       {hidden > 0 && (
         <Pressable accessibilityRole="button" onPress={() => setAll(!all)} style={[styles.more, { borderTopColor: c.border }]}>
           <T muted medium style={{ fontSize: 13 }}>
-            {all ? "Show less" : `Show ${hidden} more`}
+            {all ? t("Show less") : t("Show {{count}} more", { count: hidden })}
           </T>
         </Pressable>
       )}
@@ -929,7 +957,7 @@ function Limits({ computers, answers }: { computers: Computer[]; answers: Record
             {limits.length === 0 ? (
               <Card>
                 <T muted style={{ fontSize: 13 }}>
-                  {problem ? `Couldn't read its limits: ${problem}` : "No limits for this login."}
+                  {problem ? t("Couldn't read its limits: {{problem}}", { problem }) : t("No limits for this login.")}
                 </T>
               </Card>
             ) : (
@@ -938,10 +966,10 @@ function Limits({ computers, answers }: { computers: Computer[]; answers: Record
           </View>
         ))
       ) : waiting ? (
-        <Empty title="Loading…" />
+        <Empty title={t("Loading…")} />
       ) : answered ? (
-        <Empty title="No subscriptions">
-          Limits show here for Claude Code and Codex once they're set up in Settings &gt; Providers.
+        <Empty title={t("No subscriptions")}>
+          {t("Limits show here for Claude Code and Codex once they're set up in Settings > Providers.")}
         </Empty>
       ) : null}
     </View>
@@ -972,14 +1000,14 @@ function LimitMeter({ limit, backend, now }: { limit: UsageLimitWindow; backend?
           {left === undefined ? "—" : `${left}%`}
         </T>
         <T muted style={{ fontSize: 13 }}>
-          {left === undefined ? "use not reported" : "left"}
+          {left === undefined ? t("use not reported") : t("left", { context: "share of a limit" })}
         </T>
       </View>
       <View
         accessible={left !== undefined}
         accessibilityRole="progressbar"
         accessibilityLabel={name}
-        accessibilityValue={left === undefined ? undefined : { min: 0, max: 100, now: left, text: `${left}% left` }}
+        accessibilityValue={left === undefined ? undefined : { min: 0, max: 100, now: left, text: t("{{percent}}% left", { percent: left }) }}
         style={[styles.limitBar, { backgroundColor: c.selected }]}
       >
         {!!left && <View style={{ width: `${left}%`, height: "100%", borderRadius: 8, backgroundColor: meterFill(c, tone, backend) }} />}

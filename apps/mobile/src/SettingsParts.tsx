@@ -2,6 +2,7 @@
 // its label, the page, the computer it applies to with a picker for another, a computer's host
 // settings, rows for a switch, a select, a text field, and a line of text, a row's text action,
 // and failures as alerts.
+import { t } from "i18next";
 import { ChevronsUpDown } from "lucide-react-native";
 import { useEffect, useState, type ReactNode } from "react";
 import { ScrollView, StyleSheet, Switch, View } from "react-native";
@@ -102,7 +103,7 @@ export function SelectRow<V extends string>({
         right={
           <View style={styles.select}>
             <T muted numberOfLines={1} style={{ flexShrink: 1 }}>
-              {options.find((o) => o.value === value)?.label ?? "None"}
+              {options.find((o) => o.value === value)?.label ?? t("None")}
             </T>
             <Icon icon={ChevronsUpDown} size={14} color={c.faintForeground} />
           </View>
@@ -136,23 +137,23 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
   const [open, setOpen] = useState(false);
   const more = computers.length > 1;
   return (
-    <Section footer={`Changes here apply to ${m.machine.name}.`}>
+    <Section footer={t("Changes here apply to {{computer}}.", { computer: m.machine.name })}>
       <Row
         leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
         title={m.machine.name}
-        detail={m.state.updating || restarting(m.machine.id, m.connectedNow) ? "Updating…" : m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
+        detail={m.state.updating || restarting(m.machine.id, m.connectedNow) ? t("Updating…") : m.shownConnected ? t("Connected") : m.state.status === "failed" ? m.state.error.message : t("Connecting…")}
         last
         onPress={more ? () => setOpen(true) : undefined}
         right={more ? <Icon icon={ChevronsUpDown} size={16} color={c.faintForeground} /> : undefined}
       />
       <Choices
-        title="Computer"
+        title={t("Computer")}
         open={open}
         value={m.machine.id}
         options={computers.map((x) => ({
           value: x.machine.id,
           label: x.machine.name,
-          description: x.shownConnected ? "Connected" : "Not connected",
+          description: x.shownConnected ? t("Connected") : t("Not connected"),
         }))}
         onChoose={onChange}
         onClose={() => setOpen(false)}

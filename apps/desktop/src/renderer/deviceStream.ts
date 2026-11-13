@@ -5,6 +5,8 @@
 // Android sends SEMU-framed H.264 and takes JSON input on one control stream. Frames decode with
 // WebCodecs onto a canvas.
 
+import { t } from "i18next";
+
 import type { DevicePlatform, DeviceStreamKind } from "../protocol/generated/protocol";
 import { simulatorAvcConfig } from "./avcConfig";
 
@@ -331,7 +333,7 @@ export function createDeviceStream(
   const connecting = (detail?: string) => {
     firstFrame = false;
     frameTimer ??= setTimeout(
-      () => fail("No video came from the device. Try again."),
+      () => fail(t("No video came from the device. Try again.")),
       FIRST_FRAME_MS,
     );
     status("connecting", detail);
@@ -372,7 +374,7 @@ export function createDeviceStream(
     const support = await VideoDecoder.isConfigSupported(full).catch(() => ({ supported: false }));
     if (!current() || epoch !== decoderEpoch) return false;
     if (!support.supported) {
-      fail(`This computer can't decode the device's ${config.codec} video.`);
+      fail(t("This computer can't decode the device's {{codec}} video.", { codec: config.codec }));
       return false;
     }
     install(full);
@@ -624,7 +626,7 @@ export function createDeviceStream(
     generation++;
     describeRetries = 0;
     if (!("VideoDecoder" in globalThis)) {
-      return fail("This window can't decode video.");
+      return fail(t("This window can't decode video."));
     }
     connecting();
     if (ios) {

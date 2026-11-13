@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useRef, useState } from "react";
 
 import type { PrReviewEvent, PrWrite } from "../../protocol/generated/protocol";
@@ -35,7 +36,7 @@ export function ReviewForm({
   if (!write)
     return (
       <p className="text-meta text-faint-foreground">
-        Commenting and reviewing need a newer plxd on this host.
+        {t("Commenting and reviewing need a newer plxd on this host.")}
       </p>
     );
   const send = async (kind: string, w: PrWrite) => {
@@ -61,7 +62,7 @@ export function ReviewForm({
   const canSay = !!text || pending > 0;
   return (
     <form
-      aria-label="Comment"
+      aria-label={t("Comment", { context: "noun" })}
       className={
         bare
           ? ""
@@ -75,12 +76,15 @@ export function ReviewForm({
       {pending > 0 && (
         <p className="flex items-center gap-1.5 border-b border-border px-3 py-2 text-meta text-muted-foreground">
           <icons.comment aria-hidden className="size-3.5" />
-          Sends with {pending} pending {pending === 1 ? "comment" : "comments"}
+          {t("Sends with {{count}} pending comments", {
+            count: pending,
+            defaultValue_one: "Sends with {{count}} pending comment",
+          })}
         </p>
       )}
       <textarea
-        aria-label="Comment"
-        placeholder={pending > 0 ? "Add a summary, optional" : "Leave a comment"}
+        aria-label={t("Comment", { context: "noun" })}
+        placeholder={pending > 0 ? t("Add a summary, optional") : t("Leave a comment")}
         rows={3}
         value={body}
         onChange={(e) => setBody(e.target.value)}
@@ -98,7 +102,7 @@ export function ReviewForm({
             onClick={() => discard.current?.showModal()}
           >
             <icons.delete aria-hidden />
-            Discard
+            {t("Discard")}
           </Button>
         )}
         {open && (
@@ -109,7 +113,7 @@ export function ReviewForm({
               onClick={() => void review("changes", "requestChanges")}
             >
               <icons.error aria-hidden />
-              {sending === "changes" ? "Sending…" : "Request changes"}
+              {sending === "changes" ? t("Sending…") : t("Request changes")}
             </Button>
             <Button
               size="sm"
@@ -117,28 +121,30 @@ export function ReviewForm({
               onClick={() => void review("approve", "approve")}
             >
               <icons.success aria-hidden />
-              {sending === "approve" ? "Sending…" : "Approve"}
+              {sending === "approve" ? t("Sending…") : t("Approve")}
             </Button>
           </>
         )}
         <Button size="sm" variant="primary" type="submit" disabled={!canSay || !!sending}>
-          {sending === "comment" ? "Sending…" : "Comment"}
+          {sending === "comment" ? t("Sending…") : t("Comment", { context: "verb" })}
         </Button>
       </div>
       {reviewId && (
         <ConfirmDialog
           ref={discard}
-          title="Discard your pending review?"
-          action="Discard review"
-          busy={sending === "discard" ? "Discarding…" : undefined}
+          title={t("Discard your pending review?")}
+          action={t("Discard review")}
+          busy={sending === "discard" ? t("Discarding…") : undefined}
           onConfirm={() =>
             void send("discard", { kind: "discardReview", reviewId }).then(() =>
               discard.current?.close(),
             )
           }
         >
-          {pending === 1 ? "Its one comment goes with it." : `Its ${pending} comments go with it.`}{" "}
-          This can't be undone.
+          {t("Its {{count}} comments go with it. This can't be undone.", {
+            count: pending,
+            defaultValue_one: "Its one comment goes with it. This can't be undone.",
+          })}
         </ConfirmDialog>
       )}
     </form>
@@ -154,7 +160,7 @@ export function ReviewButton({ pending, popover }: { pending: number; popover: s
       popoverTarget={popover}
       aria-haspopup="dialog"
     >
-      Review
+      {t("Review", { context: "noun" })}
       {pending > 0 && (
         <Badge shape="count" className="bg-primary-foreground/20! text-primary-foreground!">
           {pending}

@@ -31,6 +31,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
+import { t } from "i18next";
 import {
   createContext,
   lazy,
@@ -53,6 +54,7 @@ import Markdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
 
+import { msg } from "../i18n";
 import type { RpcError } from "../preload/bridge";
 import type {
   AgentDelivery,
@@ -259,7 +261,7 @@ export function PinnedApprovals({
     <>
       {/* Always on the page, so a screen reader hears each new question. */}
       <p aria-live="polite" aria-atomic="true" className="sr-only">
-        {head && `Question from the agent: ${head.text}`}
+        {head && t("Question from the agent: {{question}}", { question: head.text })}
       </p>
       <ApprovalQueue
         {...props}
@@ -269,7 +271,7 @@ export function PinnedApprovals({
         returnFocus={focusComposer}
       />
       {!questionsOnBar && questions.length > 0 && (
-        <section aria-label="Questions" className="mb-3 flex min-h-0 flex-col">
+        <section aria-label={t("Questions")} className="mb-3 flex min-h-0 flex-col">
           <QuestionQueue {...props} asked={questions} returnFocus={focusComposer} inline />
         </section>
       )}
@@ -420,7 +422,8 @@ export function AgentChat({
   }, [draftKey]);
   // A failed Send again, edit, or composed send, in a notification.
   const sendFailed = useCallback(
-    (body?: string) => body && notify({ tone: "error", title: "Couldn't send the message", body }),
+    (body?: string) =>
+      body && notify({ tone: "error", title: t("Couldn't send the message"), body }),
     [],
   );
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
@@ -610,7 +613,8 @@ export function AgentChat({
     if (!back?.row) return;
     const images = back.images();
     const failed = await drop();
-    if (failed) return notify({ tone: "error", title: "Couldn't stop the thread", body: failed });
+    if (failed)
+      return notify({ tone: "error", title: t("Couldn't stop the thread"), body: failed });
     if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
     setEditing({
       row: back.row,
@@ -644,7 +648,7 @@ export function AgentChat({
           )
         : [];
       if (typeof images === "string") {
-        notify({ tone: "error", title: "Couldn't upload the images", body: images });
+        notify({ tone: "error", title: t("Couldn't upload the images"), body: images });
         return setEditing({ ...was, ready: false });
       }
       const text = withFiles(was.text, images);
@@ -668,7 +672,7 @@ export function AgentChat({
   useEffect(() => {
     if (!stoppedUpdating) return;
     const key = `chat/${hostId}/${runId}`;
-    notify({ key, tone: "error", title: "This chat isn't updating", body: stoppedUpdating });
+    notify({ key, tone: "error", title: t("This chat isn't updating"), body: stoppedUpdating });
     return () => dismissNotice(key);
   }, [stoppedUpdating, hostId, runId]);
   // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
@@ -765,26 +769,28 @@ export function AgentChat({
   );
   let disabledReason = offlineReason(connection);
   if (connected && !run && (error || !box))
-    disabledReason = error ? "This chat couldn't load" : "Loading…";
+    disabledReason = error ? t("This chat couldn't load") : t("Loading…");
   if (remote) disabledReason ??= remoteControlDisabled(remoteSession);
   let optionsDisabled: string | undefined;
   // `sendModel` is `sendOptions`' successor, which also takes the model (PLX-163). With
   // `sendAccount`, a message that changes them while the run works waits for it to finish.
   const moves = connected && "sendAccount" in connection.capabilities;
   if (connected && !("sendModel" in connection.capabilities))
-    optionsDisabled = "This host's plxd can't change a thread's model, effort, or access";
+    optionsDisabled = t("This host's plxd can't change a thread's model, effort, or access");
   else if (isRunning(box?.status) && !moves)
-    optionsDisabled = "The model, effort, and access can change once it finishes";
+    optionsDisabled = t("The model, effort, and access can change once it finishes");
   // The instances the run can't move to, by why: any but its own on a plxd that can't move runs,
   // and for an orchestrator, those that can't run one.
   const unavailable: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
     if (i.id === box?.backend) continue;
     else if (!moves)
-      unavailable[i.id] =
-        `${i.name} is unavailable in this thread. Start a new thread to switch providers.`;
+      unavailable[i.id] = t(
+        "{{name}} is unavailable in this thread. Start a new thread to switch providers.",
+        { name: i.name },
+      );
     else if (box?.policy === "noWrite" && !i.orchestrator)
-      unavailable[i.id] = `${i.name} can't run an orchestrator yet.`;
+      unavailable[i.id] = t("{{name}} can't run an orchestrator yet.", { name: i.name });
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
@@ -860,7 +866,7 @@ export function AgentChat({
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-body text-faint-foreground">
-            {error ?? (run ? "This subagent isn't in the transcript" : "Loading…")}
+            {error ?? (run ? t("This subagent isn't in the transcript") : t("Loading…"))}
           </div>
         )}
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">{pinned}</div>
@@ -1079,11 +1085,11 @@ export function AgentChat({
             <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-body text-faint-foreground">
               {error ? (
                 <>
-                  <p className="font-medium text-foreground">This chat couldn't load</p>
+                  <p className="font-medium text-foreground">{t("This chat couldn't load")}</p>
                   <p className="text-muted-foreground">{error}</p>
                 </>
               ) : (
-                connected && "Loading…"
+                connected && t("Loading…")
               )}
             </div>
           )}
@@ -1129,7 +1135,7 @@ function SubagentView({
       <div className="mx-auto w-full max-w-3xl px-6 pt-1">
         <div
           role="status"
-          aria-label="Subagent"
+          aria-label={t("Subagent")}
           className="flex min-w-0 items-center gap-2.5 rounded-xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-body text-muted-foreground"
         >
           <ClaudeLogo aria-hidden className="size-4 shrink-0" />
@@ -1137,21 +1143,21 @@ function SubagentView({
             <span className="font-medium text-foreground">
               {modelName(sub.model) ?? "Claude Code"}
             </span>
-            {[sub.agentType, subagentLabels[state]].filter(Boolean).map((part) => (
+            {[sub.agentType, t(subagentLabels[state])].filter(Boolean).map((part) => (
               <span key={part} className="ml-2.5">
                 {part}
               </span>
             ))}
           </span>
-          <span className="ml-auto shrink-0 text-faint-foreground">Read-only</span>
+          <span className="ml-auto shrink-0 text-faint-foreground">{t("Read-only")}</span>
           <button
             type="button"
             onClick={onBack}
-            title={keys ? `Open parent (${keys})` : "Open parent"}
+            title={keys ? t("Open parent ({{keys}})", { keys }) : t("Open parent")}
             className="flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 font-medium text-foreground hover:bg-hover"
           >
             <ArrowUpLeft aria-hidden className="size-4 text-muted-foreground" />
-            Open parent
+            {t("Open parent")}
             {keys && <kbd className="font-sans text-caption text-faint-foreground">{keys}</kbd>}
           </button>
         </div>
@@ -1491,7 +1497,7 @@ export function TranscriptView({
         <div
           ref={scrollRef}
           role="log"
-          aria-label="Transcript"
+          aria-label={t("Transcript")}
           onScroll={(e) => {
             const el = e.currentTarget;
             const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -1640,7 +1646,7 @@ function promptsOf(view: readonly ViewRow[], sent: ReadonlyMap<string, SentMessa
     else if (row.kind === "user" || row.kind === "pending") {
       const said = row.text ?? (row.kind === "user" && row.turnId && sent.get(row.turnId)?.text);
       const text = said ? plainText(said) : "";
-      last = { index, text: text || (row.images?.length ? "Image" : "Follow-up message") };
+      last = { index, text: text || (row.images?.length ? t("Image") : t("Follow-up message")) };
       prompts.push(last);
     } else if (row.kind === "assistant" && last) (last.replies ??= []).push(row.text);
   });
@@ -1746,7 +1752,7 @@ function RecordingRow({ recording }: { recording: Extract<Item, { kind: "recordi
       <video
         controls
         src={src}
-        aria-label="The agent's browser recording"
+        aria-label={t("The agent's browser recording")}
         className="max-h-96 max-w-full rounded-md border border-border bg-black"
       />
       <DownloadButton
@@ -1775,7 +1781,10 @@ function ScriptRow({
   onToggle: (key: string, open: boolean) => void;
 }) {
   const links = useContext(ThreadLinksContext);
-  const what = `${script.trigger === "setup" ? "Setup" : "Settle"} script ${script.name}`;
+  const what =
+    script.trigger === "setup"
+      ? t("Setup script {{name}}", { name: script.name })
+      : t("Settle script {{name}}", { name: script.name });
   const failed = script.status === "failed";
   const icon =
     script.status === "running" ? (
@@ -1790,18 +1799,18 @@ function ScriptRow({
   const detail =
     script.status === "running"
       ? script.blocking
-        ? "The agent starts once it finishes."
-        : "Running"
+        ? t("The agent starts once it finishes.")
+        : t("Running")
       : script.status === "done"
-        ? "Done"
+        ? t("Done")
         : script.status === "cancelled"
-          ? "Stopped."
+          ? t("Stopped.")
           : !failed
-            ? "Interrupted when plxd stopped."
+            ? t("Interrupted when plxd stopped.")
             : (script.error ??
               (script.exitCode === undefined
-                ? "Its terminal closed first."
-                : `Exited with code ${script.exitCode}.`));
+                ? t("Its terminal closed first.")
+                : t("Exited with code {{code}}.", { code: script.exitCode })));
   const line = (
     <TraceLine status={script.status === "running" ? "running" : failed ? "error" : undefined}>
       <TraceIcon>{icon}</TraceIcon>
@@ -1883,7 +1892,7 @@ export const RowView = memo(function RowView({
           onToggle={onToggle}
         >
           <TraceLine>
-            <TraceTitle>{copied ? "Worked" : workedFor(row.startedAt, row.endedAt)}</TraceTitle>
+            <TraceTitle>{copied ? t("Worked") : workedFor(row.startedAt, row.endedAt)}</TraceTitle>
           </TraceLine>
         </Fold>
       ) : (
@@ -1905,7 +1914,7 @@ export const RowView = memo(function RowView({
       return (
         <Divider>
           <RotateCcw aria-hidden className="size-3.5" />
-          <span>New session, picked up from the orchestrator's state</span>
+          <span>{t("New session, picked up from the orchestrator's state")}</span>
         </Divider>
       );
     case "compaction":
@@ -1913,14 +1922,14 @@ export const RowView = memo(function RowView({
       return row.done ? (
         <Divider>
           <FoldVertical aria-hidden className="size-3.5" />
-          <span>Context compacted</span>
+          <span>{t("Context compacted")}</span>
         </Divider>
       ) : (
         <TraceLine status="running">
           <TraceIcon>
             <LoaderCircle className="animate-spin" />
           </TraceIcon>
-          <TraceTitle>Compacting context</TraceTitle>
+          <TraceTitle>{t("Compacting context")}</TraceTitle>
         </TraceLine>
       );
     case "user":
@@ -1940,14 +1949,16 @@ export const RowView = memo(function RowView({
                 </TraceIcon>
                 <TraceTitle>
                   {row.wake
-                    ? "From Parallax: subagents finished"
-                    : `From another thread${sender ? `: ${sender}` : ""}`}
+                    ? t("From Parallax: subagents finished")
+                    : sender
+                      ? t("From another thread: {{thread}}", { thread: sender })
+                      : t("From another thread")}
                 </TraceTitle>
               </TraceLine>
             }
           >
             <p className="text-body leading-relaxed whitespace-pre-wrap text-muted-foreground">
-              {row.text ?? (row.wake ? null : "Follow-up message")}
+              {row.text ?? (row.wake ? null : t("Follow-up message"))}
             </p>
           </Disclosure>
         );
@@ -1994,7 +2005,7 @@ export const RowView = memo(function RowView({
                   known={known}
                 />
               ) : (
-                <span className="text-muted-foreground italic">Follow-up message</span>
+                <span className="text-muted-foreground italic">{t("Follow-up message")}</span>
               )}
             </div>
           )}
@@ -2040,7 +2051,7 @@ export const RowView = memo(function RowView({
               <TraceIcon>
                 <icons.thinking />
               </TraceIcon>
-              <TraceTitle>{plainText(row.text) || "Thought"}</TraceTitle>
+              <TraceTitle>{plainText(row.text) || t("Thought")}</TraceTitle>
             </TraceLine>
           }
         >
@@ -2097,7 +2108,9 @@ export const RowView = memo(function RowView({
             <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           )}
           <span>
-            {row.from && sender ? `Stopped by another thread: ${sender}.` : row.text}
+            {row.from && sender
+              ? t("Stopped by another thread: {{thread}}.", { thread: sender })
+              : row.text}
             {/* A dropped follow-up this window sent: offer it again, rather than lose it. */}
             {row.turnId && sent !== undefined && onResend && (
               <>
@@ -2107,7 +2120,7 @@ export const RowView = memo(function RowView({
                   onClick={() => onResend(row.turnId!, sent)}
                   className="font-medium text-foreground underline underline-offset-2"
                 >
-                  Send again
+                  {t("Send again")}
                 </button>
               </>
             )}
@@ -2119,7 +2132,7 @@ export const RowView = memo(function RowView({
       return (
         <Divider>
           <ArrowLeftRight aria-hidden className="size-3.5" />
-          <span>Switched model</span>
+          <span>{t("Switched model")}</span>
           <ModelLabel model={row.from} />
           <ArrowRight aria-hidden className="size-3.5" />
           <ModelLabel model={row.to} />
@@ -2133,7 +2146,9 @@ export const RowView = memo(function RowView({
         const [first, ...changed] = outcome.message.split("\n");
         return (
           <div role="alert" className="rounded-lg border border-danger/30 px-3.5 py-2.5 text-body">
-            <p className="font-medium text-danger">Failed: {failureText(outcome.failure)}</p>
+            <p className="font-medium text-danger">
+              {t("Failed: {{reason}}", { reason: failureText(outcome.failure) })}
+            </p>
             <p className="mt-0.5 text-muted-foreground">{first}</p>
             {changed.length > 0 && (
               <pre className="mt-2 max-h-60 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-meta">
@@ -2143,7 +2158,7 @@ export const RowView = memo(function RowView({
           </div>
         );
       }
-      const label = endLabels[outcome.status] ?? "Ended";
+      const label = t(endLabels[outcome.status] ?? msg("Ended"));
       return (
         <div className="flex items-center gap-3 text-meta text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
@@ -2168,9 +2183,9 @@ function Divider({ children }: { children: ReactNode }) {
 
 /** What an end row says, by how the process ended. A status newer than this app says "Ended". */
 const endLabels: Partial<Record<string, string>> = {
-  completed: "Done",
-  cancelled: "Stopped",
-  interrupted: "Interrupted when plxd stopped. Send a message to pick up where it left off.",
+  completed: msg("Done"),
+  cancelled: msg("Stopped"),
+  interrupted: msg("Interrupted when plxd stopped. Send a message to pick up where it left off."),
 };
 
 /** A model's name after its provider's logo, when this app knows the model. */
@@ -2256,13 +2271,13 @@ function MessageImage({
     return (
       <button
         type="button"
-        aria-label="Open image"
+        aria-label={t("Open image")}
         data-open-image
         className="cursor-zoom-in rounded-xl"
       >
         <img
           src={url}
-          alt="Image"
+          alt={t("Image")}
           className="h-32 max-w-60 rounded-xl border border-border object-cover"
         />
       </button>
@@ -2270,7 +2285,7 @@ function MessageImage({
   return (
     <span
       role="img"
-      aria-label={url === null ? "Image unavailable" : "Loading image"}
+      aria-label={url === null ? t("Image unavailable") : t("Loading image")}
       className="grid h-32 w-32 place-items-center rounded-xl border border-border bg-selected text-faint-foreground"
     >
       {url === null && <ImageOff aria-hidden className="size-5" />}
@@ -2439,7 +2454,9 @@ function Steps({
             <SummaryIcon />
           </TraceIcon>
           <TraceTitle>{summary.label}</TraceTitle>
-          {failures > 0 && <TraceDescription>{failures} failed</TraceDescription>}
+          {failures > 0 && (
+            <TraceDescription>{t("{{count}} failed", { count: failures })}</TraceDescription>
+          )}
         </TraceLine>
       )}
     </Fold>
@@ -2452,7 +2469,7 @@ function WorkingFor({ since }: { since?: string }) {
   const [from] = useState(() => since ?? new Date().toISOString());
   return (
     <p className="border-b border-border/60 pb-2 text-body text-muted-foreground tabular-nums">
-      Working for {duration(useSeconds(since ?? from))}
+      {t("Working for {{duration}}", { duration: duration(useSeconds(since ?? from)) })}
     </p>
   );
 }
@@ -2464,7 +2481,7 @@ function Musing() {
       <TraceIcon>
         <LoaderCircle className="animate-spin" />
       </TraceIcon>
-      <TraceTitle>Working</TraceTitle>
+      <TraceTitle>{t("Working")}</TraceTitle>
     </TraceLine>
   );
 }
@@ -2519,9 +2536,9 @@ function ToolCall({
           <TraceTitle>{stepLabel(item, root, status === "running")}</TraceTitle>
           {/* How it went: shown when it failed or never finished, otherwise only heard. */}
           {look.shown ? (
-            <TraceDescription>{look.said}</TraceDescription>
+            <TraceDescription>{t(look.said)}</TraceDescription>
           ) : (
-            <span className="sr-only">{look.said}</span>
+            <span className="sr-only">{t(look.said)}</span>
           )}
         </TraceLine>
       }
@@ -2529,15 +2546,15 @@ function ToolCall({
       <div className="space-y-2 text-meta">
         {item.name && previewed.has(item.name) && isWhole(item.input) ? (
           <div>
-            <p className="mb-1 text-meta text-faint-foreground">Input</p>
+            <p className="mb-1 text-meta text-faint-foreground">{t("Input")}</p>
             <RequestPreview request={{ toolName: item.name, input: item.input }} />
           </div>
         ) : (
-          item.input !== undefined && <Block label="Input">{inputText(item.input)}</Block>
+          item.input !== undefined && <Block label={t("Input")}>{inputText(item.input)}</Block>
         )}
         {!!item.images?.length && (
           <div>
-            <p className="mb-1 text-meta text-faint-foreground">Images</p>
+            <p className="mb-1 text-meta text-faint-foreground">{t("Images")}</p>
             <MessageImages className="flex flex-wrap gap-2">
               {item.images.map((id) => (
                 <MessageImage key={id} image={id} loadImage={loadImage} />
@@ -2545,7 +2562,7 @@ function ToolCall({
             </MessageImages>
           </div>
         )}
-        {item.output !== undefined && <Block label="Output">{item.output}</Block>}
+        {item.output !== undefined && <Block label={t("Output")}>{item.output}</Block>}
       </div>
     </Disclosure>
   );
@@ -2560,11 +2577,11 @@ interface Look {
 
 // A call that never finished fades, as a step not done does.
 const statuses = {
-  running: { status: "running", said: "Running" },
-  ok: { said: "Succeeded" },
-  error: { status: "error", said: "Failed", shown: true },
-  denied: { status: "error", said: "Denied", shown: true },
-  none: { status: "pending", said: "No result", shown: true },
+  running: { status: "running", said: msg("Running") },
+  ok: { said: msg("Succeeded") },
+  error: { status: "error", said: msg("Failed"), shown: true },
+  denied: { status: "error", said: msg("Denied"), shown: true },
+  none: { status: "pending", said: msg("No result"), shown: true },
 } satisfies Record<"running" | AgentToolStatus | "none", Look>;
 
 /**
@@ -2614,8 +2631,8 @@ export function describeTool(name: string, input?: JsonValue): ToolLook {
   const mcp = mcpTool(name);
   if (mcp) return { Icon, label: mcp.server, detail: mcp.tool };
   if (name === "computer_use")
-    return { Icon, label: "Computer use", detail: toolHint(input, ["app"]) };
-  if (name === "Skill") return { Icon, label: "Skill", detail: skillName(input) };
+    return { Icon, label: t("Computer use"), detail: toolHint(input, ["app"]) };
+  if (name === "Skill") return { Icon, label: t("Skill"), detail: skillName(input) };
   return { Icon, label: name, detail: toolHint(input) };
 }
 
@@ -2833,7 +2850,7 @@ const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; 
         image: ({ url, altText }) => {
           const path = linkedPath(url);
           return path !== undefined && openFile ? (
-            <FileImage path={path} alt={altText || "Image"} />
+            <FileImage path={path} alt={altText || t("Image")} />
           ) : undefined;
         },
         video: ({ url }) => (
@@ -2844,7 +2861,7 @@ const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; 
               follow(url, openFile);
             }}
           >
-            Video
+            {t("Video")}
           </a>
         ),
       }}
@@ -2984,7 +3001,7 @@ function PromptMeta({
       {text && (
         <button
           type="button"
-          aria-label={copied ? "Copied" : "Copy message"}
+          aria-label={copied ? t("Copied") : t("Copy message")}
           onClick={() => copy(text)}
           className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
@@ -2994,8 +3011,8 @@ function PromptMeta({
       {onEdit && (
         <button
           type="button"
-          aria-label="Edit message"
-          title="Edit message"
+          aria-label={t("Edit message")}
+          title={t("Edit message")}
           onClick={onEdit}
           className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
@@ -3053,7 +3070,7 @@ function EditMessage({
               <MessageImage image={image} loadImage={loadImage} />
               <button
                 type="button"
-                aria-label="Remove image"
+                aria-label={t("Remove image")}
                 onClick={() => setImages((all) => all.filter((_, j) => j !== i))}
                 className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-background/90 text-muted-foreground hover:text-foreground [&_svg]:size-3"
               >
@@ -3065,7 +3082,7 @@ function EditMessage({
       )}
       <textarea
         autoFocus
-        aria-label="Edit message"
+        aria-label={t("Edit message")}
         value={text}
         rows={Math.min(12, Math.max(2, text.split("\n").length))}
         onChange={(e) => setText(e.target.value)}
@@ -3084,7 +3101,7 @@ function EditMessage({
       />
       <div className="flex items-center gap-3 text-body">
         <button type="button" onClick={onCancel} className="text-muted-foreground">
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           type="submit"
@@ -3092,7 +3109,7 @@ function EditMessage({
           title={disabledReason}
           className="rounded-md bg-foreground px-2.5 py-1 font-medium text-background disabled:opacity-40"
         >
-          {editing.ready ? "Stopping…" : "Send"}
+          {editing.ready ? t("Stopping…") : t("Send")}
         </button>
       </div>
     </form>
@@ -3128,12 +3145,12 @@ function CodeBlock({
         <span className="font-mono">{language ?? "text"}</span>
         <button
           type="button"
-          aria-label={copied ? "Copied" : "Copy code"}
+          aria-label={copied ? t("Copied") : t("Copy code")}
           onClick={() => copy(text)}
           className="flex h-6 items-center gap-1 rounded-md px-1.5 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
           {copied ? <Check /> : <Copy />}
-          {copied ? "Copied" : "Copy"}
+          {copied ? t("Copied") : t("Copy")}
         </button>
       </div>
       {language === "diff" || language === "patch" ? (
@@ -3184,7 +3201,7 @@ function DiffLines({ text }: { text: string }) {
  * `{host} · Worktree`.
  */
 export function CheckoutLabel({ host, checkout }: { host?: Host; checkout: boolean }) {
-  const place = checkout ? "Local checkout" : "Worktree";
+  const place = checkout ? t("Local checkout") : t("Worktree");
   const label = host ? `${host.name} · ${place}` : place;
   return (
     <span role="img" aria-label={label} title={label} className={`${tabItem} shrink-0`}>

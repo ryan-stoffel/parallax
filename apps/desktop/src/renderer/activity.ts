@@ -1,5 +1,6 @@
 // What the agents every host has run add up to, by local day: the Account dialog's stats and
 // streaks, and Usage's days. Pure, so the phone's Account screen counts them the same way.
+import { msg } from "../i18n";
 import type { AgentRun } from "../protocol/generated/protocol";
 
 /** `at`'s local day, as "2026-10-02". */
@@ -93,10 +94,10 @@ export function activityOf(runs: AgentRun[], now: number): Activity {
   };
 }
 
-/** What a busiest hour of the day, 0 to 23, says about when someone builds. */
+/** What a busiest hour of the day, 0 to 23, says about when someone builds, in English for `t`. */
 export function rhythmOf(hour: number): string {
-  if (hour >= 5 && hour < 12) return "Early bird";
-  if (hour >= 12 && hour < 18) return "Afternoon builder";
-  if (hour >= 18 && hour < 22) return "Evening builder";
-  return "Night owl";
+  if (hour >= 5 && hour < 12) return msg("Early bird");
+  if (hour >= 12 && hour < 18) return msg("Afternoon builder");
+  if (hour >= 18 && hour < 22) return msg("Evening builder");
+  return msg("Night owl");
 }

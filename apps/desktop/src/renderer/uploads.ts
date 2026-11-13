@@ -2,6 +2,8 @@
 // `host/upload`, and the message lists their paths for the agent to read. Images are saved too
 // (PLX-799), so the agent has a file to work with as well as the image it sees. On a plxd with
 // `fileChunks` (PLX-835, decision 0074), a file goes in pieces and reads back in slices.
+import { t } from "i18next";
+
 import type { ConnectionState, HostResponse } from "../preload/bridge";
 import type { HostUploadResult } from "../protocol/generated/protocol";
 import { fileChunks, readSlices, retried, type Slice } from "./documents";
@@ -50,7 +52,11 @@ export async function uploadFiles(
             name: file.name,
             data: file instanceof Blob ? await base64Of(file) : file.data,
           });
-    if ("error" in answer) return `${file.name} couldn't be sent: ${describeError(answer.error)}`;
+    if ("error" in answer)
+      return t("{{name}} couldn't be sent: {{error}}", {
+        name: file.name,
+        error: describeError(answer.error),
+      });
     paths.push(answer.result.path);
   }
   return paths;

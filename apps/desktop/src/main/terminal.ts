@@ -1,4 +1,5 @@
 import type { WebContents } from "electron";
+import { t } from "i18next";
 import { execFile } from "node:child_process";
 import os from "node:os";
 
@@ -149,7 +150,9 @@ export function installCommand(
   const script = installScripts[kind]!;
   const windows = ssh ? hostOs === "windows" : platform === "win32";
   if (windows && !script.windows)
-    return "Parallax can't install this agent on Windows. Download it, then set its binary path.";
+    return t(
+      "Parallax can't install this agent on Windows. Download it, then set its binary path.",
+    );
   if (ssh)
     return overSsh(
       ssh,
@@ -181,7 +184,7 @@ export function runInstall(command: Command | string): Promise<string | undefine
       // npm's error lines say why, such as `npm error code E404`; it ends with generic advice.
       const npm = lines.filter((line) => /^npm (error|ERR!) /.test(line));
       const why = (npm.length ? npm.slice(0, 3) : lines.slice(-3)).join("\n");
-      resolve(`The install failed: ${why}`);
+      resolve(t("The install failed: {{why}}", { why }));
     }),
   );
 }

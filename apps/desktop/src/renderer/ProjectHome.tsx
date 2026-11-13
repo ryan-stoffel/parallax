@@ -1,5 +1,6 @@
 // A Project's page, New thread laid out as a page (0090): its header, the composer, then its threads
 // beside the instructions and files plxd gives every thread in it.
+import { t } from "i18next";
 import {
   Archive,
   ArrowLeft,
@@ -56,7 +57,10 @@ export function ProjectHeader({
   onBack: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
-  const changeIcon = actionsFor().find((a) => a.label === "Change icon…");
+  // By its label, English or shown.
+  const changeIcon = actionsFor().find(
+    (a) => a.label === "Change icon…" || a.label === t("Change icon…"),
+  );
   return (
     <header className="mb-6">
       <button
@@ -65,14 +69,14 @@ export function ProjectHeader({
         className="-ml-1 mb-4 flex items-center gap-1 rounded-md px-1 text-body text-muted-foreground hover:text-foreground [&_svg]:size-4"
       >
         <ArrowLeft aria-hidden />
-        Projects
+        {t("Projects")}
       </button>
       <div className="flex items-center gap-3">
         {changeIcon ? (
           <button
             type="button"
-            aria-label="Change icon"
-            title="Change icon"
+            aria-label={t("Change icon")}
+            title={t("Change icon")}
             onClick={(e) => changeIcon.run(e.currentTarget)}
             className="group relative -m-1 shrink-0 rounded-md p-1"
           >
@@ -87,7 +91,7 @@ export function ProjectHeader({
         <h1 className="min-w-0 flex-1 truncate text-display leading-none font-semibold tracking-tight">
           {entry.name}
         </h1>
-        <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
+        <IconButton label={pinned ? t("Unpin") : t("Pin")} onClick={onTogglePin}>
           {pinned ? <PinOff /> : <Pin />}
         </IconButton>
         <ProjectMenu
@@ -178,34 +182,41 @@ export function ProjectThreads({
   const archive = async (view: ThreadsView, thread: string, title: string) => {
     const failed = await view.archive(thread, true);
     if (failed)
-      return notify({ tone: "error", title: "Couldn't archive the thread", body: failed });
-    toast(`Archived “${title}”`, () => void view.archive(thread, false));
+      return notify({ tone: "error", title: t("Couldn't archive the thread"), body: failed });
+    toast(t("Archived “{{title}}”", { title }), () => void view.archive(thread, false));
   };
   const threads = computers
     .flatMap((computer) => {
       const { state } = computer.view;
       const ids = projectIds(computer, host, project);
       return state.threads
-        .filter((t) => ids.has(projectOf(state, t) ?? "") && !t.parent && !t.archived)
-        .map((t) => {
-          const run = state.runs[t.id];
+        .filter(
+          (thread) => ids.has(projectOf(state, thread) ?? "") && !thread.parent && !thread.archived,
+        )
+        .map((thread) => {
+          const run = state.runs[thread.id];
           return {
             ...computer,
-            thread: t,
-            title: state.titles[t.id] ?? "Thread",
+            thread,
+            title: state.titles[thread.id] ?? t("Thread"),
             run,
-            at: activeAt(t, run, state.stoppedAt[t.id]),
-            attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
+            at: activeAt(thread, run, state.stoppedAt[thread.id]),
+            attention: attentionOf(
+              thread,
+              run,
+              asksOf(state, thread.id),
+              waitingOf(state, thread.id),
+            ),
           };
         });
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return (
-    <section aria-label="Threads">
+    <section aria-label={t("Threads")}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-reading font-medium">Threads</h2>
+        <h2 className="text-reading font-medium">{t("Threads")}</h2>
         {canAdd && (
-          <IconButton label="Add threads" onClick={() => setPicking(true)}>
+          <IconButton label={t("Add threads")} onClick={() => setPicking(true)}>
             <Plus />
           </IconButton>
         )}
@@ -215,10 +226,11 @@ export function ProjectThreads({
           <span className="grid size-10 place-items-center rounded-xl bg-hover text-muted-foreground">
             <MessagesSquare aria-hidden className="size-5" />
           </span>
-          <p className="mt-3 text-body font-medium">No threads yet</p>
+          <p className="mt-3 text-body font-medium">{t("No threads yet")}</p>
           <p className="mt-1 max-w-xs text-body text-muted-foreground">
-            Ask anything above, or add threads you've started. Each thread here follows this
-            Project's instructions and can read its files.
+            {t(
+              "Ask anything above, or add threads you've started. Each thread here follows this Project's instructions and can read its files.",
+            )}
           </p>
         </div>
       ) : (
@@ -252,12 +264,12 @@ export function ProjectThreads({
               </button>
               <button
                 type="button"
-                title="Archive (E)"
+                title={t("Archive ({{key}})", { key: "E" })}
                 onClick={() => void archive(view, thread.id, title)}
                 className="absolute top-1 right-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground opacity-0 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
               >
                 <Archive aria-hidden />
-                Archive
+                {t("Archive")}
               </button>
             </li>
           ))}
@@ -308,25 +320,25 @@ function AddThreads({
       if (!("projectThreads" in capabilities) || (ids.size === 0 && !("projects" in capabilities)))
         return [];
       const homes = new Map(state.repos.map((r) => [r.id, r]));
-      return state.threads.flatMap((t) => {
-        const home = homes.get(t.repo);
-        const orchestrator = state.orchestrators.find((o) => o.run === t.id);
-        if ((home ? home.project : !orchestrator) || t.parent || ids.has(t.project ?? ""))
+      return state.threads.flatMap((thread) => {
+        const home = homes.get(thread.repo);
+        const orchestrator = state.orchestrators.find((o) => o.run === thread.id);
+        if ((home ? home.project : !orchestrator) || thread.parent || ids.has(thread.project ?? ""))
           return [];
         // Where it is now: the Project it was added to, else where it works.
-        const added = t.project ? homes.get(t.project) : undefined;
+        const added = thread.project ? homes.get(thread.project) : undefined;
         const repo = added ?? home;
         return {
-          key: `${where.id}/${t.id}`,
+          key: `${where.id}/${thread.id}`,
           view,
           where,
-          thread: t,
-          title: state.titles[t.id] ?? orchestrator?.name ?? "Thread",
-          backend: state.runs[t.id]?.backend,
+          thread,
+          title: state.titles[thread.id] ?? orchestrator?.name ?? t("Thread"),
+          backend: state.runs[thread.id]?.backend,
           repo,
-          placeName: repo ? (repo.scratch ? "No repo" : repo.name) : (orchestrator?.name ?? ""),
+          placeName: repo ? (repo.scratch ? t("No repo") : repo.name) : (orchestrator?.name ?? ""),
           placeIcon: orchestrator?.icon,
-          at: activeAt(t, state.runs[t.id], state.stoppedAt[t.id]),
+          at: activeAt(thread, state.runs[thread.id], state.stoppedAt[thread.id]),
         };
       });
     })
@@ -344,7 +356,7 @@ function AddThreads({
   return (
     <dialog
       ref={dialog}
-      aria-label={`Add threads to ${project.name}`}
+      aria-label={t("Add threads to {{project}}", { project: project.name })}
       onClose={onClose}
       // It stays while adding, so a failure has somewhere to show.
       onCancel={(e) => adding && e.preventDefault()}
@@ -377,20 +389,20 @@ function AddThreads({
             // The native attribute, so showModal focuses the search box.
             ref={(el) => el?.setAttribute("autofocus", "")}
             type="search"
-            aria-label="Search threads"
-            placeholder={`Add threads to ${project.name}`}
+            aria-label={t("Search threads")}
+            placeholder={t("Add threads to {{project}}", { project: project.name })}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 flex-1 bg-transparent text-reading placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </div>
         <ul
-          aria-label="Threads to add"
+          aria-label={t("Threads to add")}
           className="flex h-[50vh] flex-col gap-1 overflow-y-auto px-2 pb-2"
         >
           {shown.length === 0 && (
             <li className="m-auto text-body text-faint-foreground">
-              {words.length ? "Nothing matches" : "No other threads"}
+              {words.length ? t("Nothing matches") : t("No other threads")}
             </li>
           )}
           {shown.map(({ key, where, thread, title, backend, repo, placeName, placeIcon, at }) => (
@@ -402,7 +414,7 @@ function AddThreads({
               <label className="flex cursor-pointer flex-col gap-0.5 rounded-lg px-2 py-2 hover:bg-hover has-checked:bg-selected has-focus-visible:outline-2 has-focus-visible:outline-ring">
                 <input
                   type="checkbox"
-                  aria-label={`Add ${title}`}
+                  aria-label={t("Add {{title}}", { title })}
                   checked={picked.has(key)}
                   onChange={() => toggle(key)}
                   className="sr-only"
@@ -423,7 +435,7 @@ function AddThreads({
                       <CheckSymbol aria-hidden className="size-4 shrink-0 text-accent" />
                     ) : (
                       <span className="shrink-0">
-                        {thread.archived ? `Archived · ${age(at)}` : age(at)}
+                        {thread.archived ? t("Archived · {{age}}", { age: age(at) }) : age(at)}
                       </span>
                     )
                   }
@@ -446,7 +458,11 @@ function AddThreads({
             disabled={adding || chosen.length === 0}
             className="ml-auto rounded-md bg-primary px-3 py-1 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            {adding ? "Adding…" : chosen.length > 1 ? `Add ${chosen.length} threads` : "Add"}
+            {adding
+              ? t("Adding…")
+              : chosen.length > 1
+                ? t("Add {{count}} threads", { count: chosen.length })
+                : t("Add")}
           </button>
         </Footer>
       </form>
@@ -485,16 +501,16 @@ function Instructions({ project, view }: { project: Repo; view: ThreadsView }) {
     dialog.current?.showModal();
   };
   return (
-    <section aria-label="Instructions" className={panelPart}>
+    <section aria-label={t("Instructions")} className={panelPart}>
       <div className={panelHead}>
-        <h2 className="text-reading font-medium">Instructions</h2>
+        <h2 className="text-reading font-medium">{t("Instructions")}</h2>
         <button
           type="button"
-          aria-label={project.instructions ? "Edit instructions" : "Add instructions"}
+          aria-label={project.instructions ? t("Edit instructions") : t("Add instructions")}
           onClick={open}
           className={quietButton}
         >
-          {project.instructions ? "Edit" : "Add"}
+          {project.instructions ? t("Edit") : t("Add")}
         </button>
       </div>
       {project.instructions ? (
@@ -507,8 +523,9 @@ function Instructions({ project, view }: { project: Repo; view: ThreadsView }) {
         </button>
       ) : (
         <p className="text-body leading-relaxed text-faint-foreground">
-          Tell every thread here how to work: who it's for, the tone and format you want, and what
-          it should know.
+          {t(
+            "Tell every thread here how to work: who it's for, the tone and format you want, and what it should know.",
+          )}
         </p>
       )}
       <dialog
@@ -528,17 +545,17 @@ function Instructions({ project, view }: { project: Repo; view: ThreadsView }) {
           className="flex flex-col p-5"
         >
           <h2 id={titleId} className="text-reading font-semibold">
-            Instructions for {project.name}
+            {t("Instructions for {{project}}", { project: project.name })}
           </h2>
           <p className="mt-1 text-body text-muted-foreground">
-            New threads in this Project follow them.
+            {t("New threads in this Project follow them.")}
           </p>
           <textarea
-            aria-label="Instructions"
+            aria-label={t("Instructions")}
             autoFocus
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Answer as a patient tutor. Show the steps, then the result."
+            placeholder={t("Answer as a patient tutor. Show the steps, then the result.")}
             className="mt-4 h-64 resize-none rounded-lg border border-border bg-background p-3 text-body leading-relaxed placeholder:text-faint-foreground focus-visible:border-transparent focus-visible:outline-2 focus-visible:outline-ring"
           />
           {error && (
@@ -552,14 +569,14 @@ function Instructions({ project, view }: { project: Repo; view: ThreadsView }) {
               onClick={() => dialog.current?.close()}
               className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
             >
-              Cancel
+              {t("Cancel")}
             </button>
             <button
               type="submit"
               disabled={saving}
               className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("Saving…") : t("Save")}
             </button>
           </div>
         </form>
@@ -580,7 +597,7 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
   const files = project.files ?? [];
   const save = async (next: string[]) => {
     const failed = await view.updateRepo(project.id, { files: next });
-    if (failed) notify({ tone: "error", title: "Couldn't change the files", body: failed });
+    if (failed) notify({ tone: "error", title: t("Couldn't change the files"), body: failed });
   };
   const add = async (picked: File[]) => {
     if (!caps || picked.length === 0) return;
@@ -588,13 +605,13 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
     if (big)
       return notify({
         tone: "error",
-        title: "Couldn't add the file",
-        body: `${big.name} is larger than this host takes.`,
+        title: t("Couldn't add the file"),
+        body: t("{{file}} is larger than this host takes.", { file: big.name }),
       });
     setAdding(true);
     const paths = await uploadFiles(hostId, picked, caps.chunkBytes);
     if (typeof paths === "string")
-      notify({ tone: "error", title: "Couldn't add the file", body: paths });
+      notify({ tone: "error", title: t("Couldn't add the file"), body: paths });
     else await save([...files, ...paths]);
     setAdding(false);
   };
@@ -602,7 +619,7 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
   const takesFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
   return (
     <section
-      aria-label="Files"
+      aria-label={t("Files")}
       onDragOver={(e) => {
         if (!caps || adding || !takesFiles(e)) return;
         e.preventDefault();
@@ -622,7 +639,7 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
     >
       <div className={panelHead}>
         <h2 className="text-reading font-medium">
-          Files
+          {t("Files")}
           {files.length > 0 && (
             <span className="ml-1.5 font-normal text-faint-foreground tabular-nums">
               {files.length}
@@ -633,17 +650,17 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
       {files.length === 0 ? (
         <button
           type="button"
-          aria-label="Add files"
+          aria-label={t("Add files")}
           disabled={!caps || adding}
           onClick={pick}
           className={`flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition-colors disabled:opacity-50 ${over ? "border-accent" : "border-border hover:bg-hover"}`}
         >
           <Upload aria-hidden className="size-5 text-faint-foreground" />
           <span className="text-body text-muted-foreground">
-            {adding ? "Adding…" : "Drop files here, or click to add"}
+            {adding ? t("Adding…") : t("Drop files here, or click to add")}
           </span>
           <span className="text-meta text-faint-foreground">
-            PDFs, notes, or code every thread here can read
+            {t("PDFs, notes, or code every thread here can read")}
           </span>
         </button>
       ) : (
@@ -665,13 +682,13 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
           <li className="flex flex-col">
             <button
               type="button"
-              aria-label="Add files"
+              aria-label={t("Add files")}
               disabled={!caps || adding}
               onClick={pick}
               className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border text-meta text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-4"
             >
               <Plus aria-hidden />
-              {adding ? "Adding…" : "Add"}
+              {adding ? t("Adding…") : t("Add")}
             </button>
           </li>
         </ul>

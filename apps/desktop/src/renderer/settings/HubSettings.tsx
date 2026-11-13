@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Bot, Check, LoaderCircle, Network, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -42,10 +43,10 @@ export function HubHelp() {
   return (
     <span className="flex gap-3">
       <a href={HUB_DOCS} target="_blank" rel="noreferrer" className={link}>
-        CLIProxyAPI docs
+        {t("CLIProxyAPI docs")}
       </a>
       <a href={HUB_GUIDE} target="_blank" rel="noreferrer" className={link}>
-        Theo's setup guide
+        {t("Theo's setup guide")}
       </a>
     </span>
   );
@@ -56,10 +57,13 @@ export const HubLogo = Network;
 
 /** A hub's state in a few words: "Connected · 12 models", or why it isn't. */
 export function hubStatus(hub: Hub): string {
-  if (!hub.enabled) return "Off";
-  if (!hub.reachable) return hub.problem ?? "Not connected";
+  if (!hub.enabled) return t("Off");
+  if (!hub.reachable) return hub.problem ?? t("Not connected");
   const models = hub.claudeModels.length + hub.codexModels.length;
-  return `Connected · ${models} ${models === 1 ? "model" : "models"}`;
+  return t("Connected · {{count}} models", {
+    count: models,
+    defaultValue_one: "Connected · {{count}} model",
+  });
 }
 
 /** The hosts among `hosts` that are connected to a plxd with `hubs`. */
@@ -89,7 +93,7 @@ export function AddHubDialog({
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const [name, setName] = useState("Home hub");
+  const [name, setName] = useState(() => t("Home hub"));
   const [url, setUrl] = useState("");
   const [accessKey, setAccessKey] = useState("");
   const [managementKey, setManagementKey] = useState("");
@@ -163,20 +167,21 @@ export function AddHubDialog({
         <div className="flex items-start gap-3 px-5 pt-4 pb-3">
           <div className="flex-1">
             <h2 id={titleId} className="text-reading font-semibold">
-              Add hub
+              {t("Add hub")}
             </h2>
             <p className="mt-0.5 text-body text-muted-foreground">
-              Run Claude Code and Codex through a CLIProxyAPI hub that keeps your accounts signed
-              in.
+              {t(
+                "Run Claude Code and Codex through a CLIProxyAPI hub that keeps your accounts signed in.",
+              )}
             </p>
           </div>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label={t("Close")} onClick={close}>
             <X />
           </IconButton>
         </div>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto border-t border-border px-5 py-4">
           <label className="text-body text-muted-foreground">
-            Name
+            {t("Name")}
             <input
               autoFocus
               required
@@ -188,7 +193,7 @@ export function AddHubDialog({
             />
           </label>
           <label className="text-body text-muted-foreground">
-            URL
+            {t("URL")}
             <input
               type="url"
               required
@@ -201,7 +206,7 @@ export function AddHubDialog({
             />
           </label>
           <label className="text-body text-muted-foreground">
-            Access key
+            {t("Access key")}
             <input
               type="password"
               required
@@ -211,28 +216,28 @@ export function AddHubDialog({
               className={field}
             />
             <span className="mt-1 block text-faint-foreground">
-              One of the hub's api-keys. Kept in each computer's keychain.
+              {t("One of the hub's api-keys. Kept in each computer's keychain.")}
             </span>
           </label>
           <label className="text-body text-muted-foreground">
-            Management key
+            {t("Management key")}
             <input
               type="password"
-              placeholder="Optional"
+              placeholder={t("Optional")}
               value={managementKey}
               onChange={(e) => setManagementKey(e.target.value)}
               autoComplete="off"
               className={field}
             />
             <span className="mt-1 block text-faint-foreground">
-              Shows the hub's accounts and their limits.
+              {t("Shows the hub's accounts and their limits.")}
             </span>
           </label>
           <fieldset className="text-body text-muted-foreground">
-            <legend>Computers</legend>
+            <legend>{t("Computers")}</legend>
             {eligible.length === 0 ? (
               <p className="mt-1 text-faint-foreground">
-                No connected computer can use hubs yet. Update plxd on it first.
+                {t("No connected computer can use hubs yet. Update plxd on it first.")}
               </p>
             ) : (
               <div className="mt-1 flex flex-col gap-1.5">
@@ -257,7 +262,7 @@ export function AddHubDialog({
             )}
           </fieldset>
           <p className="text-meta text-muted-foreground">
-            New to hubs? <HubHelp />
+            {t("New to hubs?")} <HubHelp />
           </p>
           {error && (
             <p role="alert" className="text-body whitespace-pre-line text-danger">
@@ -267,7 +272,7 @@ export function AddHubDialog({
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
           <button type="button" onClick={close} className={quietButton}>
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="submit"
@@ -275,10 +280,10 @@ export function AddHubDialog({
             className={primaryButton}
           >
             {saving
-              ? "Adding…"
+              ? t("Adding…")
               : chosen.length > 1
-                ? `Add to ${chosen.length} computers`
-                : "Add hub"}
+                ? t("Add to {{count}} computers", { count: chosen.length })
+                : t("Add hub")}
           </button>
         </div>
       </form>
@@ -327,7 +332,7 @@ function AccountRow({
           <span className="truncate">{name}</span>
           {account.plan && <PlanLabel kind={account.provider} plan={account.plan} />}
           {account.disabled && !manage && (
-            <span className="shrink-0 text-meta text-faint-foreground">Off on the hub</span>
+            <span className="shrink-0 text-meta text-faint-foreground">{t("Off on the hub")}</span>
           )}
         </span>
         <LimitLines limits={account.limits} />
@@ -338,7 +343,7 @@ function AccountRow({
       {manage &&
         (confirming ? (
           <div className="flex shrink-0 items-center gap-2 text-body text-muted-foreground">
-            <span>Remove it from the hub?</span>
+            <span>{t("Remove it from the hub?")}</span>
             <ConfirmRemove
               disabled={busy}
               onRemove={() => void change(() => removeHubAccount(hostId, hub, account.id))}
@@ -348,14 +353,14 @@ function AccountRow({
         ) : (
           <div className="flex shrink-0 items-center gap-1">
             <Switch
-              label={`Use ${name}`}
+              label={t("Use {{name}}", { name })}
               checked={!account.disabled}
               disabled={busy}
               onChange={(on) =>
                 void change(() => setHubAccountEnabled(hostId, hub, account.id, on))
               }
             />
-            <IconButton label={`Remove ${name}`} onClick={() => setConfirming(true)}>
+            <IconButton label={t("Remove {{name}}", { name })} onClick={() => setConfirming(true)}>
               <Trash2 aria-hidden />
             </IconButton>
           </div>
@@ -430,7 +435,7 @@ function AddAccount({
         return setStep({
           step: "failed",
           service,
-          problem: problem ?? "The sign-in didn't finish.",
+          problem: problem ?? t("The sign-in didn't finish."),
         });
       setStep({ step: status, service });
       if (status === "done") void refreshHubAccounts(hostId);
@@ -449,7 +454,7 @@ function AddAccount({
     const { status, problem } = answer.result;
     // The hub won't cancel while it saves the account, so it keeps waiting, and so does this.
     if (status === "waiting") return;
-    if (status === "failed") return fail(service, problem ?? "The sign-in didn't finish.");
+    if (status === "failed") return fail(service, problem ?? t("The sign-in didn't finish."));
     if (status === "done") void refreshHubAccounts(hostId);
     setStep({ step: status, service });
   };
@@ -461,12 +466,12 @@ function AddAccount({
     try {
       pasted = new URL(address.trim());
     } catch {
-      return setAddressProblem("That isn't a web address.");
+      return setAddressProblem(t("That isn't a web address."));
     }
     if (pasted.searchParams.get("state") !== waiting.state)
-      return setAddressProblem("That address is from another sign-in.");
+      return setAddressProblem(t("That address is from another sign-in."));
     if (!pasted.searchParams.get("code") && !pasted.searchParams.get("error"))
-      return setAddressProblem("That address has no sign-in code. Copy the whole address.");
+      return setAddressProblem(t("That address has no sign-in code. Copy the whole address."));
     setSending(true);
     setAddressProblem(undefined);
     const answer = await window.parallax.request(hostId, "hubs/accounts/callback", {
@@ -480,13 +485,16 @@ function AddAccount({
 
   const close = (
     <button type="button" onClick={onClose} className={quietButton}>
-      Close
+      {t("Close")}
     </button>
   );
   const spinner = <LoaderCircle aria-hidden className="size-3.5 animate-spin" />;
   if (step.step === "choose")
     return (
-      <Row title="Add an account" description="Sign in in your browser. The hub keeps the account.">
+      <Row
+        title={t("Add an account")}
+        description={t("Sign in in your browser. The hub keeps the account.")}
+      >
         <button
           type="button"
           onClick={() => void start("claude")}
@@ -504,7 +512,7 @@ function AddAccount({
           Codex
         </button>
         <button type="button" onClick={onClose} className={quietButton}>
-          Cancel
+          {t("Cancel")}
         </button>
       </Row>
     );
@@ -514,7 +522,7 @@ function AddAccount({
         title={
           <span className="flex items-center gap-1.5">
             {spinner}
-            Opening {serviceName(step.service)}'s sign-in…
+            {t("Opening {{service}}'s sign-in…", { service: serviceName(step.service) })}
           </span>
         }
       />
@@ -531,19 +539,21 @@ function AddAccount({
         <div className="flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5 text-body font-medium">
             {spinner}
-            Waiting for the browser
+            {t("Waiting for the browser")}
           </span>
           <button type="button" onClick={() => void cancel()} className={quietButton}>
-            Cancel
+            {t("Cancel")}
           </button>
         </div>
         <span className="block text-meta text-muted-foreground">
-          Sign in to {serviceName(step.service)} in the browser. If it ends on a page that won't
-          load, paste that page's address here.
+          {t(
+            "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.",
+            { service: serviceName(step.service) },
+          )}
         </span>
         <div className="mt-2 flex items-center gap-2">
           <input
-            aria-label="Address after signing in"
+            aria-label={t("Address after signing in")}
             placeholder="http://localhost:…"
             value={address}
             onChange={(e) => {
@@ -555,7 +565,7 @@ function AddAccount({
             className={`${rowField} flex-1 font-mono`}
           />
           <button type="submit" disabled={!address.trim() || sending} className={primaryButton}>
-            Send
+            {t("Send")}
           </button>
         </div>
         {addressProblem && (
@@ -571,19 +581,24 @@ function AddAccount({
         title={
           <span className="flex items-center gap-1.5">
             <Check aria-hidden className="size-3.5 text-added" />
-            Signed in
+            {t("Signed in")}
           </span>
         }
-        description={`The hub added the ${serviceName(step.service)} account.`}
+        description={t("The hub added the {{service}} account.", {
+          service: serviceName(step.service),
+        })}
       >
         {close}
       </Row>
     );
-  if (step.step === "cancelled") return <Row title="Sign-in cancelled">{close}</Row>;
+  if (step.step === "cancelled") return <Row title={t("Sign-in cancelled")}>{close}</Row>;
   return (
-    <Row title="Sign-in failed" description={<span className="text-danger">{step.problem}</span>}>
+    <Row
+      title={t("Sign-in failed")}
+      description={<span className="text-danger">{step.problem}</span>}
+    >
       <button type="button" onClick={() => void start(step.service)} className={quietButton}>
-        Try again
+        {t("Try again")}
       </button>
       {close}
     </Row>
@@ -608,7 +623,7 @@ function ModelRow({ title, models }: { title: string; models: Hub["claudeModels"
             ))}
           </span>
         ) : (
-          "None"
+          t("None")
         )
       }
     />
@@ -662,9 +677,9 @@ export function HubPane({
       className="min-w-0 border-t border-border p-5"
     >
       {/* Its row above names it and its address. */}
-      <Section title="Hub">
+      <Section title={t("Hub")}>
         <Row
-          title="Status"
+          title={t("Status")}
           description={
             <span className="flex items-center gap-1.5">
               <StatusDot tone={tone} />
@@ -673,16 +688,18 @@ export function HubPane({
           }
         />
         <Row
-          title="Runs"
-          description="Claude Code and Codex threads on its models, with your own settings otherwise."
+          title={t("Runs")}
+          description={t(
+            "Claude Code and Codex threads on its models, with your own settings otherwise.",
+          )}
         />
       </Section>
-      <Section title="Models">
+      <Section title={t("Models")}>
         <ModelRow title="Claude Code" models={hub.claudeModels} />
         <ModelRow title="Codex" models={hub.codexModels} />
       </Section>
       <Section
-        title="Accounts"
+        title={t("Accounts")}
         action={
           manage &&
           !adding && (
@@ -692,7 +709,7 @@ export function HubPane({
               className={`${quietButton} flex items-center gap-1.5 [&_svg]:size-3.5`}
             >
               <Plus aria-hidden />
-              Add account
+              {t("Add account")}
             </button>
           )
         }
@@ -706,12 +723,12 @@ export function HubPane({
             }}
           >
             <Row
-              title="Management key"
-              description={problem ?? "Add it to see the hub's accounts and their limits."}
+              title={t("Management key")}
+              description={problem ?? t("Add it to see the hub's accounts and their limits.")}
             >
               <input
                 type="password"
-                aria-label="Management key"
+                aria-label={t("Management key")}
                 value={managementKey}
                 onChange={(e) => setManagementKey(e.target.value)}
                 autoComplete="off"
@@ -722,19 +739,19 @@ export function HubPane({
                 disabled={!managementKey.trim() || saving}
                 className={primaryButton}
               >
-                Save
+                {t("Save")}
               </button>
             </Row>
           </form>
         ) : hub.accountsProblem ? (
-          <Row title="Couldn't list accounts" description={hub.accountsProblem} />
+          <Row title={t("Couldn't list accounts")} description={hub.accountsProblem} />
         ) : byService.length === 0 ? (
           <Row
-            title="No accounts"
+            title={t("No accounts")}
             description={
               manage
-                ? "Add an account to use it here."
-                : "Sign accounts in on the hub to use them here."
+                ? t("Add an account to use it here.")
+                : t("Sign accounts in on the hub to use them here.")
             }
           />
         ) : (
@@ -750,8 +767,10 @@ export function HubPane({
         )}
       </Section>
       <p className="px-1 text-meta text-muted-foreground">
-        Sign accounts in only on a hub at home, not a VPS, and use Claude subscriptions only through
-        Claude Code. <HubHelp />
+        {t(
+          "Sign accounts in only on a hub at home, not a VPS, and use Claude subscriptions only through Claude Code.",
+        )}{" "}
+        <HubHelp />
       </p>
     </div>
   );
@@ -787,20 +806,30 @@ export function HubsSection({
   const [removing, setRemoving] = useState(false);
   const toggle = async (hub: Hub, enabled: boolean) => {
     const failed = await saveHub(hostId, { ...settingsOf(hub), enabled });
-    if (failed) notify({ tone: "error", title: `Couldn't save ${hub.name}`, body: failed });
+    if (failed)
+      notify({
+        tone: "error",
+        title: t("Couldn't save {{name}}", { name: hub.name }),
+        body: failed,
+      });
   };
   const remove = async (hub: Hub) => {
     setRemoving(true);
     const failed = await removeHub(hostId, hub.id);
     setRemoving(false);
     setConfirming(undefined);
-    if (failed) notify({ tone: "error", title: `Couldn't remove ${hub.name}`, body: failed });
+    if (failed)
+      notify({
+        tone: "error",
+        title: t("Couldn't remove {{name}}", { name: hub.name }),
+        body: failed,
+      });
   };
   return (
     <section id={id} data-setting="hubs" aria-labelledby={`${id}-title`} className="mt-10">
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
         <h2 id={`${id}-title`} className="text-reading font-semibold">
-          Hubs
+          {t("Hubs")}
         </h2>
         <button
           type="button"
@@ -808,18 +837,25 @@ export function HubsSection({
           className={`${quietButton} flex items-center gap-1.5 border border-border [&_svg]:size-3.5`}
         >
           <Plus aria-hidden />
-          Add hub
+          {t("Add hub")}
         </button>
       </div>
       <div className="overflow-hidden rounded-xl border border-border">
         {!hubs?.length ? (
           <p className="px-4 py-3.5 text-body text-muted-foreground">
             {hubs
-              ? "Run Claude Code and Codex through one CLIProxyAPI hub that keeps every account signed in. "
+              ? t(
+                  "Run Claude Code and Codex through one CLIProxyAPI hub that keeps every account signed in.",
+                )
               : error
-                ? `Couldn't list this host's hubs. ${error}`
-                : "Checking…"}
-            {hubs && <HubHelp />}
+                ? t("Couldn't list this host's hubs. {{error}}", { error })
+                : t("Checking…")}
+            {hubs && (
+              <>
+                {" "}
+                <HubHelp />
+              </>
+            )}
           </p>
         ) : (
           hubs.map((hub) => {
@@ -844,7 +880,7 @@ export function HubsSection({
                   </div>
                   {confirming === hub.id ? (
                     <div className="flex shrink-0 items-center gap-2 text-body text-muted-foreground">
-                      <span>Remove {hub.name}?</span>
+                      <span>{t("Remove {{name}}?", { name: hub.name })}</span>
                       <ConfirmRemove
                         disabled={removing}
                         onRemove={() => void remove(hub)}
@@ -857,23 +893,27 @@ export function HubsSection({
                         type="button"
                         aria-expanded={shown}
                         aria-controls={`${pages}-${hub.id}`}
-                        aria-label={`${shown ? "Close" : "Manage"} ${hub.name}`}
+                        aria-label={
+                          shown
+                            ? t("Close {{name}}", { name: hub.name })
+                            : t("Manage {{name}}", { name: hub.name })
+                        }
                         onClick={() => onOpen(shown ? undefined : hub.id)}
                         className={quietButton}
                       >
-                        {shown ? "Close" : "Manage"}
+                        {shown ? t("Close") : t("Manage")}
                       </button>
                       <button
                         type="button"
-                        aria-label={`Remove ${hub.name}`}
+                        aria-label={t("Remove {{name}}", { name: hub.name })}
                         onClick={() => setConfirming(hub.id)}
                         className={quietButton}
                       >
-                        Remove
+                        {t("Remove")}
                       </button>
                       <span className="ml-2">
                         <Switch
-                          label={`Use ${hub.name}`}
+                          label={t("Use {{name}}", { name: hub.name })}
                           checked={hub.enabled}
                           onChange={(next) => void toggle(hub, next)}
                         />

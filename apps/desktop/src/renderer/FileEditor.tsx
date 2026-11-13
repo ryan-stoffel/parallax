@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowLeft,
   Check,
@@ -116,7 +117,7 @@ export function FileEditor({
       <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/60 pr-2 pl-1.5">
         <IconButton
           size="sm"
-          label={treeOpen ? "Hide files" : "Show files"}
+          label={treeOpen ? t("Hide files") : t("Show files")}
           aria-pressed={treeOpen}
           onClick={wide ? onToggleTree : () => store.showHome(true)}
         >
@@ -134,7 +135,7 @@ export function FileEditor({
         {markdown && wide && (
           <IconButton
             size="sm"
-            label="Split preview"
+            label={t("Split preview")}
             aria-pressed={view === "split"}
             onClick={() => store.setView(file.id, view === "split" ? "code" : "split")}
           >
@@ -144,7 +145,7 @@ export function FileEditor({
         {markdown && (
           <IconButton
             size="sm"
-            label="Preview"
+            label={t("Preview")}
             aria-pressed={view === "preview"}
             onClick={() => store.setView(file.id, view === "preview" ? "code" : "preview")}
           >
@@ -154,7 +155,7 @@ export function FileEditor({
         {text && view !== "preview" && (
           <IconButton
             size="sm"
-            label="Word wrap"
+            label={t("Word wrap")}
             aria-pressed={wordWrap}
             onClick={() => setAppearance({ wordWrap: !wordWrap })}
           >
@@ -207,7 +208,7 @@ function TabMark({ tab }: { tab: OpenFile }) {
   if (!stuck && tab.save === "saved") return null;
   return (
     <span
-      aria-label={stuck ? "Not saved" : "Saving"}
+      aria-label={stuck ? t("Not saved") : t("Saving")}
       className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-pane ${stuck ? "bg-warning" : "bg-foreground"}`}
     />
   );
@@ -249,7 +250,7 @@ export function FileTabs({
   return (
     <>
       <li className={panelTab(current && !fileShown)}>
-        <PanelTabIcon label="Files" onClose={close}>
+        <PanelTabIcon label={t("Files")} onClose={close}>
           <Icon aria-hidden />
         </PanelTabIcon>
         <button
@@ -262,7 +263,7 @@ export function FileTabs({
           }}
           className={panelTabButton}
         >
-          <span className="truncate">Files</span>
+          <span className="truncate">{t("Files")}</span>
         </button>
       </li>
       {tabs.map((tab) => {
@@ -305,7 +306,7 @@ export function FileTabs({
       })}
       <Menu
         ref={menu}
-        label={target ? `Actions for ${nameOf(target.path)}` : "Tab actions"}
+        label={target ? t("Actions for {{name}}", { name: nameOf(target.path) }) : t("Tab actions")}
         align="start"
         className="min-w-44 p-1"
       >
@@ -315,7 +316,7 @@ export function FileTabs({
           className={menuItem}
           onClick={choose((tab) => void store.askClose(tab.id))}
         >
-          Close
+          {t("Close")}
         </button>
         <button
           type="button"
@@ -323,7 +324,7 @@ export function FileTabs({
           className={menuItem}
           onClick={choose((tab) => void store.closeAll(tab.id))}
         >
-          Close others
+          {t("Close others")}
         </button>
         <button
           type="button"
@@ -331,7 +332,7 @@ export function FileTabs({
           className={menuItem}
           onClick={choose(() => void store.closeAll())}
         >
-          Close all
+          {t("Close all")}
         </button>
         <div className="my-1 h-px bg-border" />
         <button
@@ -340,7 +341,7 @@ export function FileTabs({
           className={menuItem}
           onClick={choose((tab) => void navigator.clipboard.writeText(tab.path))}
         >
-          Copy path
+          {t("Copy path")}
         </button>
       </Menu>
     </>
@@ -400,7 +401,7 @@ function Breadcrumb({
     <>
       <nav
         ref={row}
-        aria-label="File path"
+        aria-label={t("File path")}
         title={path}
         className="flex h-full min-w-0 flex-1 items-center overflow-x-auto text-meta [scrollbar-width:none]"
       >
@@ -426,7 +427,7 @@ function Breadcrumb({
               </button>
               <button
                 type="button"
-                aria-label={`Browse ${name}`}
+                aria-label={t("Browse {{name}}", { name })}
                 aria-haspopup="menu"
                 onClick={(e) => {
                   list(at);
@@ -442,7 +443,7 @@ function Breadcrumb({
       </nav>
       <Menu
         ref={menu}
-        label={folder ? `Files in ${folder}` : "Files"}
+        label={folder ? t("Files in {{folder}}", { folder }) : t("Files")}
         align="start"
         className="max-h-80 min-w-56 overflow-y-auto p-1"
       >
@@ -456,7 +457,9 @@ function Breadcrumb({
             >
               <ArrowLeft aria-hidden />
               <span className="truncate">
-                Back to {nameOf(parentOf(folder)) || root || "top folder"}
+                {nameOf(parentOf(folder)) || root
+                  ? t("Back to {{folder}}", { folder: nameOf(parentOf(folder)) || root })
+                  : t("Back to top folder")}
               </span>
             </button>
             <div className="my-1 h-px bg-border" />
@@ -529,8 +532,8 @@ function OpenFileIn({ hostId, folder, path }: { hostId: string; folder: string; 
     <div className="flex shrink-0 items-center rounded-md border border-border/60">
       <button
         type="button"
-        aria-label={`Open in ${current.name}`}
-        title={`Open in ${current.name}`}
+        aria-label={t("Open in {{app}}", { app: current.name })}
+        title={t("Open in {{app}}", { app: current.name })}
         onClick={() => open(current.target)}
         className="grid h-6 w-7 place-items-center rounded-l-md hover:bg-hover [&_img]:size-3.5 [&_svg]:size-3.5"
       >
@@ -538,14 +541,14 @@ function OpenFileIn({ hostId, folder, path }: { hostId: string; folder: string; 
       </button>
       <button
         type="button"
-        aria-label="Choose editor"
+        aria-label={t("Choose editor")}
         aria-haspopup="menu"
         onClick={(e) => menu.current?.togglePopover({ source: e.currentTarget })}
         className="grid h-6 w-5 place-items-center rounded-r-md border-l border-border/60 text-muted-foreground hover:bg-hover hover:text-foreground"
       >
         <ChevronDown aria-hidden className="size-3" />
       </button>
-      <Menu ref={menu} label="Open in" align="end" className="min-w-48 p-1">
+      <Menu ref={menu} label={t("Open in")} align="end" className="min-w-48 p-1">
         {editors.map((app) => (
           <button
             key={app.target}
@@ -603,39 +606,43 @@ function FileNotice({
     const onDisk = !!file.conflict.sha256;
     const comparing = file.compare !== undefined;
     return card(
-      onDisk ? "This file changed on disk" : "This file was deleted from disk",
+      onDisk ? t("This file changed on disk") : t("This file was deleted from disk"),
       comparing
-        ? "Showing your edits against what's on disk. Nothing is saved until you choose."
+        ? t("Showing your edits against what's on disk. Nothing is saved until you choose.")
         : onDisk
-          ? "Something else wrote to it while you were editing, such as the agent. Your edits aren't saved yet."
-          : "Something else deleted it while you were editing. Your edits aren't saved yet.",
+          ? t(
+              "Something else wrote to it while you were editing, such as the agent. Your edits aren't saved yet.",
+            )
+          : t("Something else deleted it while you were editing. Your edits aren't saved yet."),
       <>
         {onDisk && (
           <Button size="sm" onClick={() => void store.toggleCompare(file.id)}>
-            {comparing ? "Stop comparing" : "Compare"}
+            {comparing ? t("Stop comparing") : t("Compare")}
           </Button>
         )}
         {onDisk ? (
           <Button size="sm" onClick={() => void store.reload(file.id)}>
-            Use disk version
+            {t("Use disk version")}
           </Button>
         ) : (
           <Button size="sm" onClick={() => onClose(file)}>
-            Close
+            {t("Close")}
           </Button>
         )}
         <Button size="sm" variant="primary" onClick={() => void store.overwrite(file.id)}>
-          {onDisk ? "Keep my edits" : "Save again"}
+          {onDisk ? t("Keep my edits") : t("Save again")}
         </Button>
       </>,
     );
   }
   if (file.save === "failed")
     return card(
-      "Couldn't save this file",
-      `${file.saveError ?? "plxd didn't answer."} Your edits are kept, and saving tries again on its own.`,
+      t("Couldn't save this file"),
+      t("{{error}} Your edits are kept, and saving tries again on its own.", {
+        error: file.saveError ?? t("plxd didn't answer."),
+      }),
       <Button size="sm" variant="primary" onClick={() => void store.save(file.id)}>
-        Try again
+        {t("Try again")}
       </Button>,
     );
   return null;
@@ -664,17 +671,17 @@ function StatusBar({
   ) : file.conflict || file.save === "failed" ? (
     <>
       <TriangleAlert aria-hidden className={`${icon} text-warning`} />
-      Not saved
+      {t("Not saved")}
     </>
   ) : file.save === "saved" ? (
     <>
       <Check aria-hidden className={icon} />
-      Saved
+      {t("Saved")}
     </>
   ) : (
     <>
       <LoaderCircle aria-hidden className={`${icon} animate-spin`} />
-      Saving…
+      {t("Saving…")}
     </>
   );
   return (
@@ -685,12 +692,17 @@ function StatusBar({
       {cursor && (
         <button
           type="button"
-          title="Go to line"
+          title={t("Go to line")}
           onClick={onGoToLine}
           className="shrink-0 rounded-sm px-1.5 tabular-nums hover:bg-hover hover:text-foreground"
         >
-          Ln {cursor.line}, Col {cursor.column}
-          {cursor.selected > 0 && ` (${cursor.selected} selected)`}
+          {cursor.selected > 0
+            ? t("Ln {{line}}, Col {{column}} ({{count}} selected)", {
+                line: cursor.line,
+                column: cursor.column,
+                count: cursor.selected,
+              })
+            : t("Ln {{line}}, Col {{column}}", { line: cursor.line, column: cursor.column })}
         </button>
       )}
       {wide && cursor?.indent && <span className="shrink-0">{cursor.indent}</span>}

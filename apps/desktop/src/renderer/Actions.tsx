@@ -15,6 +15,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { t } from "i18next";
 import {
   useEffect,
   useId,
@@ -24,6 +25,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
+import { msg } from "../i18n";
 import { browserUrl } from "./Browser";
 import { editingKeys, formatKeybinding, keybindingOf, modifiers } from "./keybindings";
 import { appShortcut, IconButton, menuItem, menuPanel } from "./ui";
@@ -56,6 +58,21 @@ const actionIcons: Record<string, LucideIcon> = {
   server: Server,
   tool: Wrench,
   zap: Zap,
+};
+
+/** Each glyph's name, as its button in the icon picker says it. */
+const iconNames: Record<string, string> = {
+  play: msg("play"),
+  test: msg("test"),
+  build: msg("build"),
+  debug: msg("debug"),
+  deploy: msg("deploy"),
+  terminal: msg("terminal"),
+  web: msg("web"),
+  package: msg("package"),
+  server: msg("server"),
+  tool: msg("tool"),
+  zap: msg("zap"),
 };
 
 const IconOf = (name: string) => actionIcons[name] ?? Play;
@@ -130,13 +147,15 @@ export function Actions({
     saved();
   };
   const titleOf = (a: RepoAction) =>
-    canRun
-      ? `Run ${a.name}${a.keybinding ? ` (${formatKeybinding(a.keybinding)})` : ""}`
-      : "No folder to run in yet";
+    !canRun
+      ? t("No folder to run in yet")
+      : a.keybinding
+        ? t("Run {{name}} ({{keys}})", { name: a.name, keys: formatKeybinding(a.keybinding) })
+        : t("Run {{name}}", { name: a.name });
 
   return (
     <>
-      <div aria-label="Repository actions">
+      <div aria-label={t("Repository actions")}>
         {actions.map((a) => {
           const Icon = IconOf(a.icon);
           return (
@@ -157,7 +176,10 @@ export function Actions({
                   </span>
                 )}
               </button>
-              <IconButton label={`Edit ${a.name}`} onClick={() => setEditing(a)}>
+              <IconButton
+                label={t("Edit {{name}}", { name: a.name })}
+                onClick={() => setEditing(a)}
+              >
                 <Pencil />
               </IconButton>
             </div>
@@ -169,7 +191,7 @@ export function Actions({
           className={`${menuItem} [&_svg]:size-4`}
         >
           <Plus aria-hidden />
-          Add action
+          {t("Add action")}
         </button>
       </div>
       {editing && (
@@ -247,13 +269,18 @@ function ActionDialog({
     const next = keybindingOf(e);
     if (!next)
       return setRefused(
-        `Hold ${window.parallax.platform === "darwin" ? "⌘ or ⌃" : "Ctrl"} with a key.`,
+        window.parallax.platform === "darwin"
+          ? t("Hold ⌘ or ⌃ with a key.")
+          : t("Hold {{key}} with a key.", { key: "Ctrl" }),
       );
     const shown = formatKeybinding(next);
     const taken = others.find((a) => a.keybinding === next);
-    if (appShortcut(e)) return setRefused(`${shown} is one of Parallax's shortcuts.`);
-    if (editingKeys.includes(e.code)) return setRefused(`${shown} is an editing shortcut.`);
-    if (taken) return setRefused(`${shown} already runs ${taken.name}.`);
+    if (appShortcut(e))
+      return setRefused(t("{{keys}} is one of Parallax's shortcuts.", { keys: shown }));
+    if (editingKeys.includes(e.code))
+      return setRefused(t("{{keys}} is an editing shortcut.", { keys: shown }));
+    if (taken)
+      return setRefused(t("{{keys}} already runs {{name}}.", { keys: shown, name: taken.name }));
     setRefused(undefined);
     setKeybinding(next);
   };
@@ -286,26 +313,28 @@ function ActionDialog({
         <div className="flex items-start gap-3 px-5 pt-4 pb-3">
           <div className="flex-1">
             <h2 id={titleId} className="text-reading font-semibold">
-              {action ? "Edit action" : "Add action"}
+              {action ? t("Edit action") : t("Add action")}
             </h2>
             <p className="mt-0.5 text-body text-muted-foreground">
-              A command for this repository, run from Thread details in the thread's terminal.
+              {t(
+                "A command for this repository, run from Thread details in the thread's terminal.",
+              )}
             </p>
           </div>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label={t("Close")} onClick={close}>
             <X />
           </IconButton>
         </div>
         <div className="flex flex-col gap-4 px-5 pb-5">
           <div className={field}>
-            <span id={`${titleId}-name`}>Name</span>
+            <span id={`${titleId}-name`}>{t("Name")}</span>
             <div className="flex gap-2">
               <button
                 type="button"
                 popoverTarget={iconsId}
                 aria-haspopup="dialog"
-                aria-label="Choose icon"
-                title="Choose icon"
+                aria-label={t("Choose icon")}
+                title={t("Choose icon")}
                 className="grid size-8.5 shrink-0 place-items-center rounded-lg border border-border hover:bg-hover [&_svg]:size-4"
               >
                 <Icon aria-hidden />
@@ -314,7 +343,7 @@ function ActionDialog({
                 // The native attribute, so showModal focuses the name rather than Close.
                 ref={(el) => el?.setAttribute("autofocus", "")}
                 aria-labelledby={`${titleId}-name`}
-                placeholder="Test"
+                placeholder={t("Test", { context: "action name example" })}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 spellCheck={false}
@@ -324,11 +353,11 @@ function ActionDialog({
             </div>
           </div>
           <div className={field}>
-            <label htmlFor={`${titleId}-keybinding`}>Keybinding</label>
+            <label htmlFor={`${titleId}-keybinding`}>{t("Keybinding")}</label>
             <input
               id={`${titleId}-keybinding`}
               readOnly
-              placeholder="Press a shortcut"
+              placeholder={t("Press a shortcut")}
               value={keybinding ? formatKeybinding(keybinding) : ""}
               onKeyDown={record}
               aria-describedby={`${titleId}-keys`}
@@ -339,11 +368,11 @@ function ActionDialog({
               role={refused ? "alert" : undefined}
               className={refused ? "text-meta font-normal text-danger" : hint}
             >
-              {refused ?? "Press a shortcut. Backspace clears it."}
+              {refused ?? t("Press a shortcut. Backspace clears it.")}
             </span>
           </div>
           <label className={field}>
-            Command
+            {t("Command")}
             <textarea
               placeholder="pnpm test"
               value={command}
@@ -354,7 +383,7 @@ function ActionDialog({
             />
           </label>
           <div className={field}>
-            <label htmlFor={`${titleId}-preview`}>Preview URL (optional)</label>
+            <label htmlFor={`${titleId}-preview`}>{t("Preview URL (optional)")}</label>
             <input
               id={`${titleId}-preview`}
               placeholder="localhost:5173"
@@ -370,11 +399,11 @@ function ActionDialog({
               id={`${titleId}-url`}
               className={badUrl ? "text-meta font-normal text-danger" : hint}
             >
-              {badUrl ? "Only http and https pages open here." : "A page this action serves."}
+              {badUrl ? t("Only http and https pages open here.") : t("A page this action serves.")}
             </span>
           </div>
           <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-body has-disabled:opacity-50">
-            Open preview when this action runs
+            {t("Open preview when this action runs")}
             <input
               type="checkbox"
               checked={openPreview}
@@ -394,7 +423,7 @@ function ActionDialog({
               }}
               className="shrink-0 rounded-md px-3 py-1.5 text-body text-danger hover:bg-hover"
             >
-              Delete
+              {t("Delete")}
             </button>
           )}
           <button
@@ -402,14 +431,14 @@ function ActionDialog({
             onClick={close}
             className="ml-auto shrink-0 rounded-md px-3 py-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="submit"
             disabled={!ready}
             className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            Save action
+            {t("Save action")}
           </button>
         </div>
       </form>
@@ -417,7 +446,7 @@ function ActionDialog({
         id={iconsId}
         popover="auto"
         role="dialog"
-        aria-label="Action icon"
+        aria-label={t("Action icon")}
         className={`${menuPanel()} p-1.5`}
       >
         {/* Inside, since a display class on the popover would show it while closed. */}
@@ -426,9 +455,9 @@ function ActionDialog({
             <button
               key={key}
               type="button"
-              aria-label={key}
+              aria-label={t(iconNames[key] ?? key)}
               aria-pressed={key === icon}
-              title={key}
+              title={t(iconNames[key] ?? key)}
               onClick={(e) => {
                 setIcon(key);
                 e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();

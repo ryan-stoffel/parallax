@@ -1,10 +1,12 @@
 // What this phone keeps of the user's choices: which notifications to show, the appearance, where
-// the last new thread started, the access new threads start with, and whether dictation is tidied.
+// the last new thread started, the access new threads start with, whether dictation is tidied, and
+// the language.
 // One file, out of backups like the rest of the app's (machines.ts), read once at launch.
 import { File } from "expo-file-system";
 import { useSyncExternalStore } from "react";
 import { Appearance } from "react-native";
 
+import type { Language } from "../../desktop/src/i18n";
 import type { AgentPermission } from "../../desktop/src/protocol/generated/protocol";
 import { privateFile } from "../modules/pinned-tls";
 
@@ -18,6 +20,8 @@ export interface Prefs {
   access?: AgentPermission;
   /** Whether dictated text is tidied by a computer's small model, which then receives it (PLX-1232). */
   cleanDictation: boolean;
+  /** The language the app shows (language.ts). Unset: the phone's. */
+  language?: Language;
 }
 
 const defaults: Prefs = {

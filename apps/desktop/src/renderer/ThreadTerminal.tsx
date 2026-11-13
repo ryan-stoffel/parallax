@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Plus, Terminal, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -179,7 +180,7 @@ function PooledTerminal({
             role={end.error ? "alert" : undefined}
             className={end.error ? "text-danger" : "text-muted-foreground"}
           >
-            {end.error ?? "The shell exited."}
+            {end.error ?? t("The shell exited.")}
           </span>
           <button
             type="button"
@@ -189,7 +190,7 @@ function PooledTerminal({
             }}
             className="rounded-md px-2 py-0.5 text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            Restart
+            {t("Restart")}
           </button>
         </div>
       )}
@@ -279,7 +280,7 @@ export function TerminalDrawer({
   return (
     <section
       id="terminal-drawer"
-      aria-label="Terminal"
+      aria-label={t("Terminal")}
       hidden={!open}
       style={{ height }}
       className={
@@ -291,7 +292,7 @@ export function TerminalDrawer({
       <div
         role="separator"
         aria-orientation="horizontal"
-        aria-label="Resize terminal"
+        aria-label={t("Resize terminal")}
         aria-valuenow={height}
         tabIndex={0}
         onPointerDown={(e) => {
@@ -312,7 +313,7 @@ export function TerminalDrawer({
       />
       {current && (
         <div className="flex shrink-0 items-center gap-0.5 px-2 pt-1.5">
-          <ul aria-label="Terminals" className="flex min-w-0 gap-0.5 overflow-x-auto">
+          <ul aria-label={t("Terminals")} className="flex min-w-0 gap-0.5 overflow-x-auto">
             {current.open.map((n) => (
               <li
                 key={n}
@@ -325,12 +326,12 @@ export function TerminalDrawer({
                   className="flex items-center gap-1.5 py-1 pl-2 text-body"
                 >
                   <Terminal aria-hidden className="size-3.5" />
-                  Terminal {n}
+                  {t("Terminal {{n}}", { n })}
                 </button>
                 <button
                   type="button"
-                  aria-label={`Close Terminal ${n}`}
-                  title={`Close Terminal ${n}`}
+                  aria-label={t("Close Terminal {{n}}", { n })}
+                  title={t("Close Terminal {{n}}", { n })}
                   onClick={() => closeTab(current, n)}
                   className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
                 >
@@ -340,7 +341,7 @@ export function TerminalDrawer({
             ))}
           </ul>
           <IconButton
-            label="New terminal"
+            label={t("New terminal")}
             onClick={() =>
               setTabsOf(current.folder.key, {
                 ...current,
@@ -353,20 +354,20 @@ export function TerminalDrawer({
             <Plus />
           </IconButton>
           <div className="ml-auto">
-            <IconButton label="Hide terminal" command="terminal" onClick={onClose}>
+            <IconButton label={t("Hide terminal")} command="terminal" onClick={onClose}>
               <X />
             </IconButton>
           </div>
         </div>
       )}
-      {Object.values(tabs).flatMap((t) =>
-        t.open.map((n) => (
+      {Object.values(tabs).flatMap((group) =>
+        group.open.map((n) => (
           <PooledTerminal
-            key={tabTerminalId(t.folder, n)}
-            id={tabTerminalId(t.folder, n)}
-            label="Terminal"
-            folder={t.folder}
-            hidden={!open || t !== current || n !== t.active}
+            key={tabTerminalId(group.folder, n)}
+            id={tabTerminalId(group.folder, n)}
+            label={t("Terminal")}
+            folder={group.folder}
+            hidden={!open || group !== current || n !== group.active}
           />
         )),
       )}

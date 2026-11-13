@@ -1,20 +1,23 @@
 // The recording pill, as the desktop's: the left check inserts what was said, the right stop
 // discards it, and the waveform between them follows the microphone. It stands in for the message
 // box, which stays mounted under it and keeps its text.
+import { t } from "i18next";
 import { Check } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 
+import { msg } from "../../desktop/src/i18n";
 import type { VoicePhase } from "../../desktop/src/renderer/voiceSession";
 import { SendButton } from "./SendButton";
 import { useColors, WorkingMark } from "./ui";
 
+/** What each phase says to a screen reader, shown with `t`. */
 const statuses: Record<VoicePhase, string> = {
   idle: "",
-  loading: "Preparing voice input",
-  recording: "Listening",
-  finishing: "Transcribing",
+  loading: msg("Preparing voice input"),
+  recording: msg("Listening"),
+  finishing: msg("Transcribing"),
 };
 
 const BARS = 25;
@@ -80,10 +83,10 @@ export function VoicePill({
       style={[styles.holder, { bottom }]}
     >
       <View
-        accessibilityLabel={statuses[phase]}
+        accessibilityLabel={statuses[phase] && t(statuses[phase])}
         style={[styles.pill, { backgroundColor: c.surface, borderColor: c.border }]}
       >
-        <SendButton icon={Check} label="Insert transcription" disabled={phase !== "recording"} onPress={confirm} />
+        <SendButton icon={Check} label={t("Insert transcription")} disabled={phase !== "recording"} onPress={confirm} />
         {phase === "recording" ? (
           <Waveform waveform={waveform} />
         ) : (
@@ -92,7 +95,7 @@ export function VoicePill({
             <WorkingMark size={20} />
           </View>
         )}
-        <SendButton stop label="Cancel voice input" onPress={cancel} />
+        <SendButton stop label={t("Cancel voice input")} onPress={cancel} />
       </View>
     </Animated.View>
   );

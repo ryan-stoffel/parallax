@@ -1,5 +1,7 @@
+import { t } from "i18next";
 import { renderAsync } from "pele/lazy";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Trans } from "react-i18next";
 
 import type { PrGuideHunk } from "../../protocol/generated/protocol";
 import { icons } from "../icons";
@@ -31,8 +33,8 @@ export function Guide({
       <div className="grid flex-1 place-items-center pb-16">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Writing a guide"
-          body="An agent is reading the diff. It's usually ready in a minute or two."
+          title={t("Writing a guide")}
+          body={t("An agent is reading the diff. It's usually ready in a minute or two.")}
         />
       </div>
     );
@@ -41,11 +43,11 @@ export function Guide({
       <div className="grid flex-1 place-items-center pb-16">
         <EmptyState
           icon={<icons.error aria-hidden />}
-          title="Couldn't write a guide"
+          title={t("Couldn't write a guide")}
           body={<span role="alert">{view.error}</span>}
           action={
             <Button variant="outline" size="sm" onClick={onRegenerate}>
-              Try again
+              {t("Try again")}
             </Button>
           }
         />
@@ -71,36 +73,36 @@ export function Guide({
       className="min-h-0 flex-1 overflow-y-auto px-4 outline-none"
       tabIndex={-1}
       onKeyDown={keys}
-      aria-label="Guide"
+      aria-label={t("Guide")}
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-4 py-4">
         {view.kind === "stale" && (
           <p className="flex items-center gap-2 text-meta text-muted-foreground">
-            <Badge tone="warning">Out of date</Badge>
+            <Badge tone="warning">{t("Out of date")}</Badge>
             <span className="min-w-0 flex-1 truncate" role={view.error ? "alert" : undefined}>
               {generating
-                ? "Written for an older commit. A new guide is on its way."
+                ? t("Written for an older commit. A new guide is on its way.")
                 : view.error
-                  ? `Couldn't write one for the new commit: ${view.error}`
-                  : "Written for an older commit."}
+                  ? t("Couldn't write one for the new commit: {{error}}", { error: view.error })
+                  : t("Written for an older commit.")}
             </span>
           </p>
         )}
 
-        <nav aria-label="Guide steps" className="flex items-center gap-1">
-          <IconButton label="Previous step" disabled={at === 0} onClick={() => go(at - 1)}>
+        <nav aria-label={t("Guide steps")} className="flex items-center gap-1">
+          <IconButton label={t("Previous step")} disabled={at === 0} onClick={() => go(at - 1)}>
             <icons.back aria-hidden />
           </IconButton>
-          <IconButton label="Next step" disabled={at === last} onClick={() => go(at + 1)}>
+          <IconButton label={t("Next step")} disabled={at === last} onClick={() => go(at + 1)}>
             <icons.forward aria-hidden />
           </IconButton>
           <span className="ml-1 text-meta text-muted-foreground tabular-nums" aria-live="polite">
-            {at === 0 ? "Overview" : `Step ${at} of ${last}`}
+            {at === 0 ? t("Overview") : t("Step {{step}} of {{count}}", { step: at, count: last })}
           </span>
           <span className="flex-1" />
-          {generating && <Spinner size="sm" label="Writing a new guide" />}
+          {generating && <Spinner size="sm" label={t("Writing a new guide")} />}
           <IconButton
-            label={generating ? "Writing a new guide" : "Regenerate"}
+            label={generating ? t("Writing a new guide") : t("Regenerate")}
             disabled={generating}
             onClick={onRegenerate}
           >
@@ -114,13 +116,16 @@ export function Guide({
             <p className="text-body whitespace-pre-wrap">{step.explanation}</p>
             {step.diagram && <Diagram source={step.diagram} />}
             {step.hunks.length > 0 && (
-              <ul aria-label="Changes in this step" className="flex flex-wrap gap-1.5">
+              <ul aria-label={t("Changes in this step")} className="flex flex-wrap gap-1.5">
                 {step.hunks.map((h, i) => (
                   <li key={i}>
                     <Button
                       size="sm"
                       variant="outline"
-                      title={`Open ${h.path} at line ${h.start} in Code`}
+                      title={t("Open {{path}} at line {{line}} in Code", {
+                        path: h.path,
+                        line: h.start,
+                      })}
                       onClick={() => onOpen(h)}
                     >
                       <icons.diff aria-hidden className="size-3.5" />
@@ -162,9 +167,22 @@ export function Guide({
 
         {guide.omitted && guide.omitted.length > 0 && (
           <p className="text-meta text-muted-foreground">
-            Left out for size, so the guide doesn't cover them:{" "}
-            <span className="font-mono">{guide.omitted.slice(0, 5).join(", ")}</span>
-            {guide.omitted.length > 5 && ` and ${guide.omitted.length - 5} more`}.
+            {guide.omitted.length > 5 ? (
+              <Trans
+                values={{
+                  files: guide.omitted.slice(0, 5).join(", "),
+                  more: guide.omitted.length - 5,
+                }}
+              >
+                Left out for size, so the guide doesn't cover them:{" "}
+                <span className="font-mono">{"{{files}}"}</span> and {"{{more}}"} more.
+              </Trans>
+            ) : (
+              <Trans values={{ files: guide.omitted.join(", ") }}>
+                Left out for size, so the guide doesn't cover them:{" "}
+                <span className="font-mono">{"{{files}}"}</span>.
+              </Trans>
+            )}
           </p>
         )}
       </div>
@@ -204,7 +222,7 @@ function Diagram({ source }: { source: string }) {
     <div
       ref={box}
       role={svg ? "img" : undefined}
-      aria-label={svg ? "Diagram" : undefined}
+      aria-label={svg ? t("Diagram") : undefined}
       className="overflow-x-auto rounded-lg border border-border bg-surface p-3 empty:hidden [&>svg]:mx-auto [&>svg]:block"
       dangerouslySetInnerHTML={{ __html: svg }}
     />

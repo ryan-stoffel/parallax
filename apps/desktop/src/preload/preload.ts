@@ -117,6 +117,7 @@ const bridge: ParallaxBridge = {
       .find((arg) => arg.startsWith("--parallax-locale="))
       ?.slice("--parallax-locale=".length),
   ),
+  setLanguage: (language) => ipcRenderer.send("parallax:language", language),
   update: () => ipcRenderer.invoke("parallax:update") as Promise<string>,
   onUpdateState: (listener) => follow("parallax:updateState", listener),
 

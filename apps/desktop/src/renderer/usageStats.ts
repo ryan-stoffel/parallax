@@ -2,6 +2,9 @@
 // and day, the chart's parts, and limit windows as meters. Pure, so the desktop's UsagePage and
 // the mobile app's Usage tab share it.
 
+import { t } from "i18next";
+
+import { msg } from "../i18n";
 import type {
   KeyAccount,
   Provider,
@@ -14,19 +17,20 @@ import { dayOf } from "./profile";
 
 /** How far back Cost and Tokens look: whole local days ending today. */
 export type Range = "today" | "7d" | "30d" | "90d";
+/** Each range and its name, marked with `msg`: show it with `t`. */
 export const ranges: { value: Range; name: string }[] = [
-  { value: "today", name: "Today" },
-  { value: "7d", name: "7 days" },
-  { value: "30d", name: "30 days" },
-  { value: "90d", name: "90 days" },
+  { value: "today", name: msg("Today") },
+  { value: "7d", name: msg("7 days") },
+  { value: "30d", name: msg("30 days") },
+  { value: "90d", name: msg("90 days") },
 ];
 const rangeDays: Record<Range, number> = { today: 1, "7d": 7, "30d": 30, "90d": 90 };
-/** The range, and the one before it, in words. */
+/** The range, and the one before it, in words, marked with `msg`: show them with `t`. */
 export const rangeWords: Record<Range, { past: string; previous: string }> = {
-  today: { past: "today", previous: "yesterday" },
-  "7d": { past: "in the past 7 days", previous: "in the previous 7 days" },
-  "30d": { past: "in the past 30 days", previous: "in the previous 30 days" },
-  "90d": { past: "in the past 90 days", previous: "in the previous 90 days" },
+  today: { past: msg("today"), previous: msg("yesterday") },
+  "7d": { past: msg("in the past 7 days"), previous: msg("in the previous 7 days") },
+  "30d": { past: msg("in the past 30 days"), previous: msg("in the previous 30 days") },
+  "90d": { past: msg("in the past 90 days"), previous: msg("in the previous 90 days") },
 };
 
 /** The backends that run accounts (0012), and the agents `usage/daily` counts, in this order. */
@@ -254,11 +258,18 @@ export function stack(rows: Attribution[], measure: (m: Measures) => number): Pa
       into.models++;
     }
   }
-  return parts
-    .filter(Boolean)
-    .map(({ models, ...p }) =>
-      models > 1 ? { name: `${models} other models`, part: p.part, values: p.values } : p,
-    );
+  return parts.filter(Boolean).map(({ models, ...p }) =>
+    models > 1
+      ? {
+          name: t("{{count}} other models", {
+            count: models,
+            defaultValue_one: "{{count}} other model",
+          }),
+          part: p.part,
+          values: p.values,
+        }
+      : p,
+  );
 }
 
 /** The top of a chart's axis: four even steps of 1, 2, 2.5, or 5 times a power of ten. */
@@ -290,13 +301,23 @@ export const capitalize = (s: string) => {
 
 /** "42 min", "2 h 14 min", "3 d 4 h", rounded up to the minute; `short`, "42m", "2h 14m", "3d 4h". */
 export function duration(ms: number, short = false): string {
-  const [m, h, d] = short ? ["m", "h", "d"] : [" min", " h", " d"];
-  const minutes = Math.max(1, Math.ceil(ms / 60_000));
-  if (minutes < 60) return `${minutes}${m}`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 ? `${hours}${h} ${minutes % 60}${m}` : `${hours}${h}`;
+  const total = Math.max(1, Math.ceil(ms / 60_000));
+  if (total < 60)
+    return short ? t("{{minutes}}m", { minutes: total }) : t("{{minutes}} min", { minutes: total });
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (hours < 24) {
+    if (!minutes) return short ? t("{{hours}}h", { hours }) : t("{{hours}} h", { hours });
+    return short
+      ? t("{{hours}}h {{minutes}}m", { hours, minutes })
+      : t("{{hours}} h {{minutes}} min", { hours, minutes });
+  }
   const days = Math.floor(hours / 24);
-  return hours % 24 ? `${days}${d} ${hours % 24}${h}` : `${days}${d}`;
+  const rest = hours % 24;
+  if (!rest) return short ? t("{{days}}d", { days }) : t("{{days}} d", { days });
+  return short
+    ? t("{{days}}d {{hours}}h", { days, hours: rest })
+    : t("{{days}} d {{hours}} h", { days, hours: rest });
 }
 
 /** How close a limit window is to its cap: amber from 75% used, red from 90%. */
@@ -315,11 +336,11 @@ export function limitMeter(
   const weekly = /^seven_day(?:_(.+))?$/.exec(limit.window);
   const name =
     limit.window === "five_hour"
-      ? "Session"
+      ? t("Session")
       : weekly
         ? weekly[1]
-          ? `Weekly · ${capitalize(weekly[1])}`
-          : "Weekly"
+          ? t("Weekly · {{model}}", { model: capitalize(weekly[1]) })
+          : t("Weekly")
         : capitalize(limit.window);
   const resets = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
   if (resets !== undefined && resets <= now) return { name, left: 100, tone: "normal" };

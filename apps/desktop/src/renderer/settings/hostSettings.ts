@@ -68,15 +68,15 @@ export function useHostSettings(targets: Host[]) {
         mixed: values.some((v) => v !== values[0]),
       };
     },
-    /** Changes a setting on every computer with `capability`. `failed` titles a refusal. */
-    set: (capability: string, change: HostSettingsSetParams, failed: string) =>
+    /** Changes a setting on every computer with `capability`. `failed` titles a host's refusal. */
+    set: (capability: string, change: HostSettingsSetParams, failed: (host: string) => string) =>
       Promise.all(
         able(capability).map(async (host) => {
           const answer = await window.parallax.request(host.id, "host/settings/set", change);
           if ("error" in answer)
             notify({
               tone: "error",
-              title: `${failed} on ${host.name}`,
+              title: failed(host.name),
               body: describeError(answer.error),
             });
           else setSettings((all) => ({ ...all, [host.id]: answer.result }));

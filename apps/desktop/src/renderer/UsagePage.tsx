@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { RefreshCw, RotateCw } from "lucide-react";
 import {
   useCallback,
@@ -10,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { msg } from "../i18n";
 import type { RpcError } from "../preload/bridge";
 import {
   ErrorCodes,
@@ -38,8 +40,6 @@ import {
   limitMeter,
   niceTop,
   percent,
-  plural,
-  rangeWords,
   ranges,
   stack,
   summarize,
@@ -56,9 +56,9 @@ import { clockOptions } from "./prefs";
 
 type View = "cost" | "tokens" | "limits";
 const views: { value: View; name: string }[] = [
-  { value: "cost", name: "Cost" },
-  { value: "tokens", name: "Tokens" },
-  { value: "limits", name: "Limits" },
+  { value: "cost", name: msg("Cost") },
+  { value: "tokens", name: msg("Tokens") },
+  { value: "limits", name: msg("Limits") },
 ];
 
 /** Each backend's name and logo, as Settings > Providers shows it. */
@@ -87,14 +87,14 @@ function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccou
 /** A failed usage request, for people. A plxd without the method is too old. */
 function usageError(error: RpcError): string {
   return error.code === ErrorCodes.MethodNotFound
-    ? "Update plxd on this host to see its usage here."
+    ? t("Update plxd on this host to see its usage here.")
     : describeError(error);
 }
 
 /** A host that isn't answering: its status, or undefined once it's connected. */
 function hostStatus(connection: ReturnType<typeof useShownConnection>): string | undefined {
   if (connection?.status === "connected") return undefined;
-  return connection ? statusLabel(connection) : "Connecting…";
+  return connection ? statusLabel(connection) : t("Connecting…");
 }
 
 const HOUR = 3_600_000;
@@ -128,11 +128,16 @@ export function UsagePage({ hosts }: { hosts: Host[] }) {
   return (
     <>
       <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-8 pt-6 pb-4">
-        <h1 className="mr-auto text-heading font-semibold">Usage</h1>
-        <Segmented label="Usage view" options={views} value={view} onChange={setView} />
+        <h1 className="mr-auto text-heading font-semibold">{t("Usage")}</h1>
         <Segmented
-          label="Usage range"
-          options={ranges}
+          label={t("Usage view")}
+          options={views.map((v) => ({ ...v, name: t(v.name) }))}
+          value={view}
+          onChange={setView}
+        />
+        <Segmented
+          label={t("Usage range")}
+          options={ranges.map((r) => ({ ...r, name: t(r.name) }))}
           value={range}
           onChange={(next) => {
             setRange(next);
@@ -140,7 +145,11 @@ export function UsagePage({ hosts }: { hosts: Host[] }) {
           }}
           disabled={view === "limits"}
         />
-        <IconButton label="Refresh" aria-busy={inFlight > 0} onClick={() => setNow(Date.now())}>
+        <IconButton
+          label={t("Refresh")}
+          aria-busy={inFlight > 0}
+          onClick={() => setNow(Date.now())}
+        >
           <RefreshCw className={inFlight > 0 ? "motion-safe:animate-spin" : ""} />
         </IconButton>
       </header>
@@ -252,7 +261,7 @@ function History({
       </div>
       {/* Always there, so a screen reader hears its text change. */}
       <p role="status" className="sr-only">
-        {frame.loading && shown !== frame ? "Loading usage…" : ""}
+        {frame.loading && shown !== frame ? t("Loading usage…") : ""}
       </p>
       {shown ? (
         <Dashboard frame={shown} stale={shown !== frame} view={view} by={by} onBy={setBy} />
@@ -336,8 +345,7 @@ function HostUsageLoader({
   const notes = status ? [status] : (result?.problems.map((p) => p.message) ?? []);
   return notes.map((note) => (
     <p key={note} className="mb-6 text-body text-muted-foreground">
-      {named && `${host.name}: `}
-      {note}
+      {named ? t("{{host}}: {{note}}", { host: host.name, note }) : note}
     </p>
   ));
 }
@@ -365,7 +373,8 @@ function Dashboard({
   const { range, span, days } = frame;
   const { starts } = span;
   const today = range === "today";
-  const words = rangeWords[range];
+  // The range's days, 7, 30, or 90, when it isn't today.
+  const rangeDays = today ? 0 : Number.parseInt(range);
   // Once per answer, not on every render; Cost and Tokens share it.
   const summary = useMemo(
     () => summarize(days, starts, span.previous, span.partial, frame.sessions),
@@ -383,15 +392,17 @@ function Dashboard({
   const shown = (m: Measures) => (unreported(m) ? "—" : format(measure(m)));
   const other = (m: Measures) =>
     cost
-      ? `${tokenCount.format(tokensOf(m))} tokens`
+      ? t("{{tokens}} tokens", { tokens: tokenCount.format(tokensOf(m)) })
       : m.cost > 0
         ? dollars(m.cost)
-        : "no reported cost";
+        : t("no reported cost");
   const whole = measure(summary.total);
-  const what = cost ? "cost" : "tokens";
+  // A share of the whole, as "40% of cost".
+  const shareOf = (share: string) =>
+    cost ? t("{{share}} of cost", { share }) : t("{{share}} of tokens", { share });
   const name = (start: number, long = false) =>
     new Date(start).toLocaleString(
-      "en",
+      locale(),
       long
         ? { weekday: "short", month: "short", day: "numeric" }
         : starts.length <= 7
@@ -401,8 +412,14 @@ function Dashboard({
 
   if (tokensOf(summary.total) === 0)
     return (
-      <Empty title={`No usage ${words.past}`}>
-        Claude Code, Codex, and Cursor usage on your hosts shows here.
+      <Empty
+        title={
+          today
+            ? t("No usage today")
+            : t("No usage in the past {{count}} days", { count: rangeDays })
+        }
+      >
+        {t("Claude Code, Codex, and Cursor usage on your hosts shows here.")}
       </Empty>
     );
 
@@ -411,17 +428,36 @@ function Dashboard({
   const lead = rows[0]?.share ? rows[0] : undefined;
   const sessions = summary.sessions;
 
-  let note = plural(summary.backends.length, "provider");
+  const notes = [
+    t("{{count}} providers", {
+      count: summary.backends.length,
+      defaultValue_one: "{{count}} provider",
+    }),
+  ];
   if (!today)
-    note += ` · ${plural(summary.byBucket.filter((m) => tokensOf(m) > 0).length, "active day")}`;
+    notes.push(
+      t("{{count}} active days", {
+        count: summary.byBucket.filter((m) => tokensOf(m) > 0).length,
+        defaultValue_one: "{{count}} active day",
+      }),
+    );
   if (cost && summary.total.unpriced > 0)
-    note += ` · ${percent(summary.total.unpriced, tokensOf(summary.total))} of tokens have no reported cost`;
+    notes.push(
+      t("{{share}} of tokens have no reported cost", {
+        share: percent(summary.total.unpriced, tokensOf(summary.total)),
+      }),
+    );
+  const note = notes.join(" · ");
 
   const LeadLogo = lead?.model.backend && backends[lead.model.backend].Logo;
   const none = <span className="text-display text-faint-foreground">—</span>;
   const chartTitle = today
-    ? `${cost ? "Cost" : "Processed tokens"} by model today`
-    : `Daily ${cost ? "cost" : "processed tokens"}`;
+    ? cost
+      ? t("Cost by model today")
+      : t("Processed tokens by model today")
+    : cost
+      ? t("Daily cost")
+      : t("Daily processed tokens");
   const processed = tokensOf(summary.total);
 
   return (
@@ -430,7 +466,7 @@ function Dashboard({
       className={`flex flex-col gap-4 transition-opacity ${stale ? "opacity-45" : ""}`}
     >
       <dl className={`${strip} @2xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,5fr)]`}>
-        <Stat label={cost ? "Total cost" : "Processed tokens"} note={note}>
+        <Stat label={cost ? t("Total cost") : t("Processed tokens")} note={note}>
           {whole > 0 ? (
             <span className="text-hero font-semibold tracking-tight">{shown(summary.total)}</span>
           ) : (
@@ -438,12 +474,21 @@ function Dashboard({
           )}
         </Stat>
         <Stat
-          label="Sessions"
-          title="Claude Code and Codex sessions, each counted on the day it was last active. Cursor doesn't report sessions."
+          label={t("Sessions")}
+          title={t(
+            "Claude Code and Codex sessions, each counted on the day it was last active. Cursor doesn't report sessions.",
+          )}
           note={
             !sessions
-              ? "Not counted"
-              : `${Math.round(sessions.previous).toLocaleString(locale())} ${words.previous}`
+              ? t("Not counted")
+              : today
+                ? t("{{sessions}} yesterday", {
+                    sessions: Math.round(sessions.previous).toLocaleString(locale()),
+                  })
+                : t("{{sessions}} in the previous {{count}} days", {
+                    sessions: Math.round(sessions.previous).toLocaleString(locale()),
+                    count: rangeDays,
+                  })
           }
         >
           {sessions ? (
@@ -455,11 +500,11 @@ function Dashboard({
           )}
         </Stat>
         <Stat
-          label="Busiest model"
+          label={t("Busiest model")}
           note={
             lead
-              ? `${percent(measure(lead.model.total), whole)} of ${what} · ${shown(lead.model.total)}`
-              : "No model reported a cost"
+              ? `${shareOf(percent(measure(lead.model.total), whole))} · ${shown(lead.model.total)}`
+              : t("No model reported a cost")
           }
         >
           {lead ? (
@@ -474,14 +519,14 @@ function Dashboard({
       </dl>
 
       {/* Short, one line per kind, so the chart below still fits on screen. */}
-      <dl aria-label="Tokens by kind" className={`${strip} grid-cols-2 @2xl:grid-cols-5`}>
+      <dl aria-label={t("Tokens by kind")} className={`${strip} grid-cols-2 @2xl:grid-cols-5`}>
         {(
           [
-            ["Processed tokens", processed],
-            ["Cached input", summary.total.cacheRead],
-            ["Uncached input", summary.total.input],
-            ["Cache writes", summary.total.cacheWrite],
-            ["Output", summary.total.output],
+            [t("Processed tokens"), processed],
+            [t("Cached input"), summary.total.cacheRead],
+            [t("Uncached input"), summary.total.input],
+            [t("Cache writes"), summary.total.cacheWrite],
+            [t("Output"), summary.total.output],
           ] as const
         ).map(([label, n], i) => (
           <div
@@ -498,7 +543,7 @@ function Dashboard({
                 {tokenCount.format(n)}
               </span>
               <span className="truncate text-meta text-faint-foreground tabular-nums">
-                {i === 0 ? "every kind" : percent(n, processed)}
+                {i === 0 ? t("every kind") : percent(n, processed)}
               </span>
             </dd>
           </div>
@@ -508,8 +553,8 @@ function Dashboard({
       {whole === 0 ? (
         <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
           <figcaption className="text-reading font-medium">{chartTitle}</figcaption>
-          <Empty title="No vendor reported a cost in this range" plain>
-            Tokens still count: see them under Tokens.
+          <Empty title={t("No vendor reported a cost in this range")} plain>
+            {t("Tokens still count: see them under Tokens.")}
           </Empty>
         </figure>
       ) : today ? (
@@ -542,8 +587,8 @@ function Dashboard({
         </Bars>
       )}
 
-      <section aria-label="Providers">
-        <h2 className={heading}>Providers</h2>
+      <section aria-label={t("Providers")}>
+        <h2 className={heading}>{t("Providers")}</h2>
         {/* One row of equal cards when there's room, however many providers. */}
         <ul
           className="grid gap-5 @2xl:grid-cols-[repeat(var(--n),minmax(0,1fr))]"
@@ -570,7 +615,7 @@ function Dashboard({
                   )}
                 </div>
                 <p className="mt-2.5 truncate text-body text-muted-foreground">
-                  {share === undefined ? "No reported cost" : `${percent(share, 1)} of ${what}`} ·{" "}
+                  {share === undefined ? t("No reported cost") : shareOf(percent(share, 1))} ·{" "}
                   {other(total)}
                 </p>
               </li>
@@ -582,8 +627,8 @@ function Dashboard({
       <Breakdown
         by={today ? "model" : by}
         onBy={onBy}
-        unit={today ? undefined : "Day"}
-        what={cost ? "Cost" : "Tokens"}
+        unit={today ? undefined : t("Day")}
+        what={cost ? t("Cost") : t("Tokens")}
         rows={
           today || by === "model"
             ? rows.map(({ model, share, part }) => {
@@ -596,7 +641,7 @@ function Dashboard({
                   share,
                   fill: fills[part]!,
                   other: unreported(model.total)
-                    ? `No reported cost · ${other(model.total)}`
+                    ? t("No reported cost · {{other}}", { other: other(model.total) })
                     : other(model.total),
                 };
               })
@@ -767,7 +812,7 @@ function Bars({
               style={{ top: `${100 - (average / top) * 100}%` }}
             >
               <span className="absolute right-0 -translate-y-1/2 rounded-md border border-border bg-surface px-1.5 py-0.5 text-caption text-muted-foreground tabular-nums">
-                avg {format(average)}
+                {t("avg {{value}}", { value: format(average) })}
               </span>
             </div>
           )}
@@ -776,11 +821,18 @@ function Bars({
             const values = parts.map((p) => p.values[i]!);
             const largest = values.indexOf(Math.max(...values));
             const label =
-              `${b.name}: ${format(total)}` +
-              (parts.length > 1
-                ? ` (${parts.map((p, k) => `${p.name} ${format(values[k]!)}`).join(", ")})`
-                : "") +
-              `, ${b.note}`;
+              parts.length > 1
+                ? t("{{name}}: {{total}} ({{parts}}), {{note}}", {
+                    name: b.name,
+                    total: format(total),
+                    parts: parts.map((p, k) => `${p.name} ${format(values[k]!)}`).join(", "),
+                    note: b.note,
+                  })
+                : t("{{name}}: {{total}}, {{note}}", {
+                    name: b.name,
+                    total: format(total),
+                    note: b.note,
+                  });
             // The topmost part takes no gap above it.
             const last = values.findLastIndex((v) => v > 0);
             let below = 0;
@@ -1025,14 +1077,14 @@ function Breakdown({
   const [all, setAll] = useState(false);
   const hidden = rows.length - BREAKDOWN_ROWS;
   return (
-    <section aria-label="Breakdown" className={`${card} min-w-0 px-6 py-4`}>
+    <section aria-label={t("Breakdown")} className={`${card} min-w-0 px-6 py-4`}>
       <div className="flex items-center justify-between gap-3 pb-3">
-        <h2 className="text-reading font-medium">Breakdown</h2>
+        <h2 className="text-reading font-medium">{t("Breakdown")}</h2>
         {unit && (
           <Segmented
-            label="Breakdown by"
+            label={t("Breakdown by")}
             options={[
-              { value: "model", name: "Model" },
+              { value: "model", name: t("Model") },
               { value: "time", name: unit },
             ]}
             value={by}
@@ -1041,9 +1093,9 @@ function Breakdown({
         )}
       </div>
       <div className="flex gap-2.5 border-t border-border pt-3 pb-1 text-meta text-faint-foreground">
-        <span>{by === "model" ? "Model" : unit}</span>
+        <span>{by === "model" ? t("Model") : unit}</span>
         <span className="ml-auto">{what}</span>
-        <span className="w-16 text-right">Share</span>
+        <span className="w-16 text-right">{t("Share")}</span>
       </div>
       <ul>
         {(all ? rows : rows.slice(0, BREAKDOWN_ROWS)).map((r) => (
@@ -1080,7 +1132,7 @@ function Breakdown({
           onClick={() => setAll(!all)}
           className="mt-1 w-full border-t border-border pt-3 pb-1 text-body font-medium text-muted-foreground hover:text-foreground"
         >
-          {all ? "Show less" : `Show ${hidden} more`}
+          {all ? t("Show less") : t("Show {{count}} more", { count: hidden })}
         </button>
       )}
     </section>
@@ -1270,7 +1322,7 @@ function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; tra
       ))}
       {/* Always there, so a screen reader hears its text change. */}
       <p role="status" className="sr-only">
-        {waiting && accounts.length === 0 ? "Loading…" : ""}
+        {waiting && accounts.length === 0 ? t("Loading…") : ""}
       </p>
       {accounts.length > 0 ? (
         <div className="flex flex-col gap-8">
@@ -1282,7 +1334,9 @@ function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; tra
               </h3>
               {limits.length === 0 ? (
                 <p className={`${card} px-6 py-4 text-body text-muted-foreground`}>
-                  {problem ? `Couldn't read its limits: ${problem}` : "No limits for this login."}
+                  {problem
+                    ? t("Couldn't read its limits: {{problem}}", { problem })
+                    : t("No limits for this login.")}
                 </p>
               ) : (
                 <div className="flex flex-col gap-3">
@@ -1297,8 +1351,10 @@ function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; tra
       ) : waiting ? (
         <LimitsSkeleton />
       ) : answered ? (
-        <Empty title="No subscriptions">
-          Limits show here for Claude Code and Codex once they're set up in Settings &gt; Providers.
+        <Empty title={t("No subscriptions")}>
+          {t(
+            "Limits show here for Claude Code and Codex once they're set up in Settings > Providers.",
+          )}
         </Empty>
       ) : (
         // No host answered: each one's reason, named when there are several.
@@ -1306,8 +1362,11 @@ function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; tra
           const answer = answers[h.id];
           return (
             <p key={h.id} className="text-body text-muted-foreground">
-              {hosts.length > 1 && `${h.name}: `}
-              {answer && "problem" in answer && answer.problem}
+              {answer &&
+                "problem" in answer &&
+                (hosts.length > 1
+                  ? t("{{host}}: {{note}}", { host: h.name, note: answer.problem })
+                  : answer.problem)}
             </p>
           );
         })
@@ -1343,11 +1402,11 @@ export function resetTime(at: number, now: number): string {
   // By local calendar days; rounding absorbs a 23- or 25-hour day.
   const days = Math.round((dayStart(at) - dayStart(now)) / (24 * HOUR));
   const when = new Date(at);
-  const time = when.toLocaleString("en", clockOptions());
+  const time = when.toLocaleString(locale(), clockOptions());
   if (days === 0) return time;
-  if (days === 1) return `tomorrow ${time}`;
-  if (days < 7) return `${when.toLocaleString("en", { weekday: "short" })} ${time}`;
-  return when.toLocaleString("en", { month: "short", day: "numeric" });
+  if (days === 1) return t("tomorrow {{time}}", { time });
+  if (days < 7) return `${when.toLocaleString(locale(), { weekday: "short" })} ${time}`;
+  return when.toLocaleString(locale(), { month: "short", day: "numeric" });
 }
 
 /**
@@ -1381,7 +1440,9 @@ function LimitMeter({
             {left === undefined ? "—" : `${left}%`}
           </span>
           <span className="text-body text-muted-foreground">
-            {left === undefined ? "use not reported" : "left"}
+            {left === undefined
+              ? t("use not reported")
+              : t("left", { context: "share of a limit" })}
           </span>
         </p>
       </div>
@@ -1392,7 +1453,7 @@ function LimitMeter({
           "aria-valuemin": 0,
           "aria-valuemax": 100,
           "aria-valuenow": left,
-          "aria-valuetext": `${left}% left`,
+          "aria-valuetext": t("{{left}}% left", { left }),
         })}
         style={stripes}
         className="relative h-10 min-w-0 flex-1 overflow-hidden rounded-lg bg-selected/40"
@@ -1405,7 +1466,9 @@ function LimitMeter({
         </span>
         {resetsIn && (
           <span
-            title={at === undefined ? undefined : `Resets ${resetTime(at, now)}`}
+            title={
+              at === undefined ? undefined : t("Resets {{time}}", { time: resetTime(at, now) })
+            }
             className="absolute inset-y-1.5 right-1.5 flex items-center gap-1 rounded-md bg-background/85 px-2 text-meta font-medium [&_svg]:size-3"
           >
             <RotateCw aria-hidden />

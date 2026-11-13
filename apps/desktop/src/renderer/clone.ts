@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import type { Repo } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { uuidv7 } from "./uuidv7";
@@ -58,7 +60,7 @@ export async function cloneOnto(
   const remote = await window.parallax.request(from, "repo/remote", { repo: repo.id });
   if ("error" in remote) return describeError(remote.error);
   const url = remote.result.url;
-  if (!url) return `${repo.name} has no origin remote to clone it from`;
+  if (!url) return t("{{name}} has no origin remote to clone it from", { name: repo.name });
   const dir = parentOf(repo.path);
   const there = dir && (await window.parallax.request(to, "host/folders", { path: dir }));
   const free =

@@ -1,5 +1,7 @@
 // A thread's Changes sheet's pure pieces (0062): the turns it can show, as the desktop's
 // ChangesPanel lists them, and a diff's files as the list's rows. Pure, for the test.
+import { t } from "i18next";
+
 import type { ThreadRun } from "../../desktop/src/protocol/generated/protocol";
 import type { DiffFile, DiffLine } from "../../desktop/src/renderer/parseDiff";
 import type { Choice } from "./Choices";
@@ -27,8 +29,8 @@ export function turnChoices(runs: readonly ThreadRun[], prompt: string): (Choice
       return {
         ordinal: r.ordinal!,
         value: String(r.ordinal),
-        label: `Turn ${r.ordinal}`,
-        description: cut(line, longestTitle) || "(no text)",
+        label: t("Turn {{ordinal}}", { ordinal: r.ordinal }),
+        description: cut(line, longestTitle) || t("(no text)"),
       };
     });
 }
@@ -58,7 +60,7 @@ export function changeRows(files: readonly DiffFile[], folded: ReadonlySet<strin
     rows.push({ key: file.path, kind: "file", file, open });
     if (!open) continue;
     if (file.lines.length === 0)
-      rows.push({ key: `${file.path}\nnote`, kind: "note", text: file.binary ? "Binary file not shown" : "No text changes" });
+      rows.push({ key: `${file.path}\nnote`, kind: "note", text: file.binary ? t("Binary file not shown") : t("No text changes") });
     file.lines.forEach((line, i) => rows.push({ key: `${file.path}\n${i}`, kind: "line", row: lineRow(line) }));
   }
   return rows;

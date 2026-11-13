@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { threadTabs } from "../tabState";
 import { PageTitle, Row, Section, Switch } from "./parts";
 
@@ -6,15 +8,17 @@ export function BetaSettings() {
   const tabs = threadTabs.use();
   return (
     <>
-      <PageTitle title="Beta">
-        Features still taking shape. Each is off until you turn it on.
+      <PageTitle title={t("Beta")}>
+        {t("Features still taking shape. Each is off until you turn it on.")}
       </PageTitle>
-      <Section title="Window">
+      <Section title={t("Window")}>
         <Row
-          title="Tabs"
-          description="Threads open as tabs above each pane, drawn as cards. Off, each pane shows one thread under the classic top bar."
+          title={t("Tabs")}
+          description={t(
+            "Threads open as tabs above each pane, drawn as cards. Off, each pane shows one thread under the classic top bar.",
+          )}
         >
-          <Switch label="Use tabs" checked={tabs} onChange={(next) => threadTabs.set(next)} />
+          <Switch label={t("Use tabs")} checked={tabs} onChange={(next) => threadTabs.set(next)} />
         </Row>
       </Section>
     </>

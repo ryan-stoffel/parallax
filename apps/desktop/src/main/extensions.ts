@@ -15,6 +15,7 @@ import {
 } from "electron";
 import { ElectronChromeExtensions } from "electron-chrome-extensions";
 import { unzipSync } from "fflate";
+import { t } from "i18next";
 
 import type { BrowserAction, ExtensionInfo } from "../preload/bridge";
 
@@ -177,11 +178,11 @@ export function storeId(text: string): string | undefined {
 export function crxZip(bytes: Uint8Array): Uint8Array {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 16 || new TextDecoder().decode(bytes.subarray(0, 4)) !== "Cr24")
-    throw new Error("The download isn't a Chrome extension.");
+    throw new Error(t("The download isn't a Chrome extension."));
   const version = view.getUint32(4, true);
   if (version === 3) return bytes.subarray(12 + view.getUint32(8, true));
   if (version === 2) return bytes.subarray(16 + view.getUint32(8, true) + view.getUint32(12, true));
-  throw new Error(`Chrome extension package version ${version} isn't supported.`);
+  throw new Error(t("Chrome extension package version {{version}} isn't supported.", { version }));
 }
 
 /** The Chrome extension id of a public key: its SHA-256's first 16 bytes, each hex digit as a to p. */
@@ -273,12 +274,13 @@ export async function installExtension(
   text: string,
 ): Promise<ExtensionInfo | string> {
   const id = storeId(text);
-  if (!id) return "Paste a Chrome Web Store link or an extension's id.";
+  if (!id) return t("Paste a Chrome Web Store link or an extension's id.");
   try {
     const url = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=${process.versions.chrome}&acceptformat=crx2,crx3&x=id%3D${id}%26uc`;
     // The app's own session, which no extension's request hooks can touch.
     const answer = await net.fetch(url);
-    if (!answer.ok) return `The Chrome Web Store answered ${answer.status}.`;
+    if (!answer.ok)
+      return t("The Chrome Web Store answered {{status}}.", { status: answer.status });
     const crx = new Uint8Array(await answer.arrayBuffer());
     const files = unzipSync(crxZip(crx));
     // The store's own id, from the package's key, rather than one Electron makes from the folder.

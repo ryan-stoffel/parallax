@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Check, ImageUp, Search } from "lucide-react";
 import {
   useEffect,
@@ -84,7 +85,7 @@ export function IconPicker({
       notify({
         key: "orchestrator-icon",
         tone: "error",
-        title: "Couldn't use that image",
+        title: t("Couldn't use that image"),
         body: image,
       });
     else choose({ ...withColor(pick.color), image });
@@ -119,8 +120,8 @@ export function IconPicker({
       <input
         ref={searchBox}
         type="search"
-        aria-label="Search icons"
-        placeholder="Search icons"
+        aria-label={t("Search icons")}
+        placeholder={t("Search icons")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -147,7 +148,7 @@ export function IconPicker({
   );
   const colors = (
     <fieldset
-      aria-label="Color"
+      aria-label={t("Color")}
       className={inline ? "flex shrink-0 gap-2" : "flex justify-between px-3 pt-3 pb-1"}
     >
       {iconColors.map((c) => {
@@ -156,13 +157,13 @@ export function IconPicker({
         return (
           <label
             key={c.label}
-            title={c.label}
+            title={t(c.label)}
             className={`grid size-5 cursor-pointer place-items-center rounded-full ${c.fill} has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring`}
           >
             <input
               type="radio"
               name={colorGroup}
-              aria-label={c.label}
+              aria-label={t(c.label)}
               checked={checked}
               onChange={() => choose(withColor(c.key))}
               className="sr-only"
@@ -186,7 +187,7 @@ export function IconPicker({
       <div
         ref={grid}
         role="listbox"
-        aria-label="Icons"
+        aria-label={t("Icons")}
         onKeyDown={moveInGrid}
         className={
           inline
@@ -222,7 +223,7 @@ export function IconPicker({
             : "px-3 pt-2 pb-3 text-body text-faint-foreground"
         }
       >
-        No icons match
+        {t("No icons match")}
       </p>
     );
 
@@ -231,7 +232,7 @@ export function IconPicker({
       <div
         ref={ref}
         role="group"
-        aria-label="Choose an icon"
+        aria-label={t("Choose an icon")}
         onKeyDown={(e) => {
           if (e.key !== "Escape") return;
           // Not Settings' too.
@@ -255,7 +256,7 @@ export function IconPicker({
       id={id}
       popover="auto"
       role="dialog"
-      aria-label="Orchestrator icon"
+      aria-label={t("Orchestrator icon")}
       onBeforeToggle={(e: ToggleEvent<HTMLDivElement>) => {
         if (e.newState !== "open") return;
         setPick(value ?? defaultIcon);
@@ -276,8 +277,8 @@ export function IconPicker({
               <>
                 <button
                   type="button"
-                  aria-label="Upload image"
-                  title="Upload image"
+                  aria-label={t("Upload image")}
+                  title={t("Upload image")}
                   aria-pressed={!!pick.image}
                   onClick={() => fileInput.current?.click()}
                   className="-my-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected [&_svg]:size-4"

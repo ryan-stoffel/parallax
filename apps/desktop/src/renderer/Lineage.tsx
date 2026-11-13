@@ -1,8 +1,10 @@
 import { DetailsCard } from "./DetailsCard";
+import { t } from "i18next";
 import { Bot, ChevronDown, Lock } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
+import { msg } from "../i18n";
 import { attentionOf, type Attention } from "./attention";
 import { duration, WorkingMark } from "./AttentionMark";
 import { ClaudeLogo } from "./logos";
@@ -22,12 +24,12 @@ const dotColors: Record<Attention, string> = {
   settled: "bg-faint-foreground/45",
 };
 const attentionNames: Record<Exclude<Attention, "settled">, string> = {
-  working: "Working",
-  monitoring: "Monitoring",
-  waiting: "Waiting",
-  needsYou: "Needs you",
-  done: "Done",
-  failed: "Failed",
+  working: msg("Working"),
+  monitoring: msg("Monitoring"),
+  waiting: msg("Waiting"),
+  needsYou: msg("Needs you"),
+  done: msg("Done"),
+  failed: msg("Failed"),
 };
 const subagentDots: Record<SubagentState, Attention> = {
   running: "working",
@@ -50,10 +52,10 @@ function ProviderLogo({ run }: { run?: AgentRun }) {
 }
 function statusText(attention: Attention, run?: AgentRun) {
   return attention !== "settled"
-    ? attentionNames[attention]
+    ? t(attentionNames[attention])
     : run
       ? statusLabel(run.status)
-      : "Idle";
+      : t("Idle");
 }
 
 /** A child that's still going, or waiting on the user, shows under Lineage; the rest are previous. */
@@ -148,8 +150,14 @@ export function LineageSection({
           <button
             type="button"
             aria-current={isOpen(row) ? "page" : undefined}
-            aria-label={`${sub.title}, read-only subagent, ${subagentLabels[sub.state]}`}
-            title={`${sub.title} · ${subagentLabels[sub.state]} · Read-only subagent`}
+            aria-label={t("{{title}}, read-only subagent, {{state}}", {
+              title: sub.title,
+              state: t(subagentLabels[sub.state]),
+            })}
+            title={t("{{title}} · {{state}} · Read-only subagent", {
+              title: sub.title,
+              state: t(subagentLabels[sub.state]),
+            })}
             onClick={() => onOpenSubagent?.(sub.callId)}
             style={{ paddingLeft: `${8 + row.depth * 14}px` }}
             className="flex w-full flex-col gap-0.5 rounded-md py-2 pr-2 text-left hover:bg-hover aria-[current=page]:bg-selected"
@@ -163,7 +171,7 @@ export function LineageSection({
               <StatusMark attention={row.attention} />
             </span>
             <span className="w-full truncate pl-5.5 text-meta text-faint-foreground">
-              {[modelName(sub.model), subagentLabels[sub.state]].filter(Boolean).join(" · ")}
+              {[modelName(sub.model), t(subagentLabels[sub.state])].filter(Boolean).join(" · ")}
             </span>
           </button>
         </li>
@@ -171,7 +179,7 @@ export function LineageSection({
     }
     const { thread, attention } = row;
     const run = state.runs[thread.id];
-    const title = state.titles[thread.id] ?? "Thread";
+    const title = state.titles[thread.id] ?? t("Thread");
     const model = run?.model && (models.find((m) => m.id === run.model)?.name ?? run.model);
     const end = run && (isRunning(run.status) ? now : Date.parse(run.updatedAt));
     const seconds = run && end ? Math.floor((end - Date.parse(run.createdAt)) / 1000) : 0;
@@ -202,7 +210,7 @@ export function LineageSection({
             {[
               model,
               statusText(attention, run),
-              last && (last === "now" ? "just now" : `${last} ago`),
+              last && (last === t("now") ? t("just now") : t("{{time}} ago", { time: last })),
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -215,8 +223,8 @@ export function LineageSection({
   return (
     <DetailsCard
       id="lineage"
-      title="Lineage"
-      summary={working > 0 && `${working} running`}
+      title={t("Lineage")}
+      summary={working > 0 && t("{{count}} running", { count: working })}
       hidden={hidden}
     >
       {current.length > 0 && <ul className="flex flex-col gap-px">{current.map(rowView)}</ul>}
@@ -229,9 +237,15 @@ export function LineageSection({
             onClick={() => setExpanded((was) => !was)}
             className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-body text-faint-foreground hover:bg-hover"
           >
-            <span className="shrink-0">Previous agents ({previous.length})</span>
+            <span className="shrink-0">
+              {t("Previous agents ({{count}})", { count: previous.length })}
+            </span>
             <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
-            {failed > 0 && <span className="shrink-0 text-danger">{failed} failed</span>}
+            {failed > 0 && (
+              <span className="shrink-0 text-danger">
+                {t("{{count}} failed", { count: failed })}
+              </span>
+            )}
             <ChevronDown
               aria-hidden
               className={`size-3.5 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
@@ -243,7 +257,7 @@ export function LineageSection({
         </>
       )}
       {rows.length === 0 && (
-        <p className="px-2 py-1 text-meta text-faint-foreground">No child threads yet</p>
+        <p className="px-2 py-1 text-meta text-faint-foreground">{t("No child threads yet")}</p>
       )}
     </DetailsCard>
   );

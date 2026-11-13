@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
+import { t } from "i18next";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -173,7 +174,7 @@ export function startAccount(): Account {
     if (!res.ok || typeof body["access_token"] !== "string") {
       const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
       throw new ClerkError(
-        why ?? `Clerk answered ${res.status}.`,
+        why ?? t("Clerk answered {{status}}.", { status: res.status }),
         body["error"] === "invalid_grant",
         res.status >= 500,
       );
@@ -237,7 +238,7 @@ export function startAccount(): Account {
       headers: { authorization: `Bearer ${bearer}` },
       signal: AbortSignal.timeout(15_000),
     });
-    if (!res.ok) throw new ClerkError(`Clerk answered ${res.status}.`);
+    if (!res.ok) throw new ClerkError(t("Clerk answered {{status}}.", { status: res.status }));
     const { email, given_name, family_name, picture } = (await res.json()) as User;
     return { email, given_name, family_name, picture };
   }
@@ -312,9 +313,9 @@ export function startAccount(): Account {
         code_verifier: verifier,
         redirect_uri: current.redirectUri,
       });
-      if (!fresh.refreshToken) return "Clerk sent no refresh token.";
+      if (!fresh.refreshToken) return t("Clerk sent no refresh token.");
       const user = await userinfo(fresh.access.token);
-      if (page !== current) return "Sign-in was cancelled.";
+      if (page !== current) return t("Sign-in was cancelled.");
       epoch++;
       access = fresh.access;
       save({ refreshToken: fresh.refreshToken, user, api });
@@ -344,7 +345,7 @@ export function startAccount(): Account {
       await shell.openExternal(url);
     } catch (error) {
       current.close();
-      return `Couldn't open your browser: ${(error as Error).message}`;
+      return t("Couldn't open your browser: {{why}}", { why: (error as Error).message });
     }
     const error = await current.done;
     if (page === current) page = undefined;

@@ -1,6 +1,9 @@
+import { t } from "i18next";
 import { ArrowUpRight, Check, LoaderCircle, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
+import { Trans } from "react-i18next";
 
+import { msg } from "../../i18n";
 import type { RpcError } from "../../preload/bridge";
 import type {
   DeviceInfo,
@@ -26,12 +29,12 @@ import {
   StatusDot,
 } from "./parts";
 
-/** Each platform's names, logo, and where to get what it needs. */
+/** Each platform's names, logo, and where to get what it needs. `newDevice` is shown with `t`. */
 const platformInfo: Record<
   DevicePlatform,
   {
     name: string;
-    device: string;
+    newDevice: string;
     Logo: ComponentType<{ className?: string }>;
     setup: string;
     tool: string;
@@ -39,14 +42,14 @@ const platformInfo: Record<
 > = {
   ios: {
     name: "iOS",
-    device: "iOS device",
+    newDevice: msg("New iOS device"),
     Logo: AppleLogo,
     setup: "https://developer.apple.com/xcode/",
     tool: "Xcode",
   },
   android: {
     name: "Android",
-    device: "Android device",
+    newDevice: msg("New Android device"),
     Logo: AndroidLogo,
     setup: "https://developer.android.com/studio",
     tool: "Android Studio",
@@ -87,7 +90,7 @@ export function DeviceSettings() {
 /** A platform's logo: lit when this computer can run it, faint with why not when it can't. */
 function PlatformLogo({ state }: { state: DevicePlatformState }) {
   const { name, Logo } = platformInfo[state.platform];
-  const note = state.unavailable ?? state.warning ?? `${name} is ready`;
+  const note = state.unavailable ?? state.warning ?? t("{{platform}} is ready", { platform: name });
   return (
     <span
       role="img"
@@ -154,55 +157,64 @@ function HostDevices({ host }: { host: Host }) {
     await load();
   };
   const setUp = () =>
-    act("hub", "Couldn't install the device hub", async () =>
+    act("hub", t("Couldn't install the device hub"), async () =>
       refused(await window.parallax.request(hostId, "device/setup", {})),
     );
   const create = (platform: DevicePlatform) =>
-    act(platform, "Couldn't make the device", async () =>
+    act(platform, t("Couldn't make the device"), async () =>
       refused(await window.parallax.request(hostId, "device/create", { platform })),
     );
   const toggle = (device: DeviceInfo) =>
-    act(device.id, `Couldn't ${device.booted ? "stop" : "start"} ${device.name}`, async () =>
-      refused(
-        await window.parallax.request(hostId, device.booted ? "device/shutdown" : "device/boot", {
-          deviceId: device.id,
-          platform: device.platform,
-        }),
-      ),
+    act(
+      device.id,
+      device.booted
+        ? t("Couldn't stop {{name}}", { name: device.name })
+        : t("Couldn't start {{name}}", { name: device.name }),
+      async () =>
+        refused(
+          await window.parallax.request(hostId, device.booted ? "device/shutdown" : "device/boot", {
+            deviceId: device.id,
+            platform: device.platform,
+          }),
+        ),
     );
 
   const note = !connected
     ? connection
       ? statusLabel(connection)
-      : "Connecting…"
+      : t("Connecting…")
     : !supported
-      ? "Update Parallax on this computer to use devices."
-      : (error ?? (state ? undefined : "Checking…"));
+      ? t("Update Parallax on this computer to use devices.")
+      : (error ?? (state ? undefined : t("Checking…")));
   if (note || !state)
     return (
-      <Section title="Devices">
-        <Row title={note ?? "Checking…"} />
+      <Section title={t("Devices")}>
+        <Row title={note ?? t("Checking…")} />
       </Section>
     );
 
   const hub = state.hub;
-  const hubStatus = hub.installed ? "Installed" : hub.installing ? "Installing…" : "Not installed";
+  const hubStatus = hub.installed
+    ? t("Installed")
+    : hub.installing
+      ? t("Installing…")
+      : t("Not installed");
   const missing = state.platforms.filter((p) => p.unavailable);
   return (
     <>
-      <Section title="Devices">
+      <Section title={t("Devices")}>
         <Row
-          title="Device hub"
+          title={t("Device hub")}
           description={
             hub.failure ? (
               <span role="alert" className="text-danger">
                 {hub.failure}
               </span>
             ) : (
-              <>
+              <Trans values={{ status: hubStatus }}>
                 Opens simulators and emulators in the Device panel. Hub:{" "}
-                <span className="font-medium text-foreground">{hubStatus}</span>
-              </>
+                <span className="font-medium text-foreground">{"{{status}}"}</span>
+              </Trans>
             )
           }
         >
@@ -215,19 +227,21 @@ function HostDevices({ host }: { host: Host }) {
               disabled={hub.installing}
               onClick={() => void setUp()}
             >
-              {hub.failure ? "Try again" : "Install"}
+              {hub.failure ? t("Try again") : t("Install")}
             </button>
           )}
         </Row>
         <Row
-          title="Agents can use devices"
-          description="Agent sessions on this computer open and drive these devices with their device tools."
+          title={t("Agents can use devices")}
+          description={t(
+            "Agent sessions on this computer open and drive these devices with their device tools.",
+          )}
         >
-          <span className="text-body text-muted-foreground">Always on</span>
+          <span className="text-body text-muted-foreground">{t("Always on")}</span>
         </Row>
       </Section>
       <Section
-        title="Device sources"
+        title={t("Device sources")}
         action={
           <div className="flex items-center gap-2">
             {state.platforms
@@ -245,20 +259,20 @@ function HostDevices({ host }: { host: Host }) {
                   ) : (
                     <Plus aria-hidden />
                   )}
-                  New {platformInfo[p.platform].device}
+                  {t(platformInfo[p.platform].newDevice)}
                 </button>
               ))}
-            <IconButton label="Refresh" disabled={checking} onClick={() => void load()}>
+            <IconButton label={t("Refresh")} disabled={checking} onClick={() => void load()}>
               <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
             </IconButton>
           </div>
         }
       >
         <Row
-          title="Local simulators"
+          title={t("Local simulators")}
           description={
             <>
-              Simulators and emulators installed on this computer.
+              {t("Simulators and emulators installed on this computer.")}
               {missing.map((p) => (
                 <span key={p.platform} className="mt-1 block">
                   {p.unavailable}{" "}
@@ -268,7 +282,7 @@ function HostDevices({ host }: { host: Host }) {
                     rel="noreferrer"
                     className="inline-flex items-center gap-0.5 underline hover:text-foreground"
                   >
-                    Get {platformInfo[p.platform].tool}
+                    {t("Get {{tool}}", { tool: platformInfo[p.platform].tool })}
                     <ArrowUpRight aria-hidden className="size-3" />
                   </a>
                 </span>
@@ -281,11 +295,11 @@ function HostDevices({ host }: { host: Host }) {
           ))}
         </Row>
       </Section>
-      <Section title="Simulators and emulators">
+      <Section title={t("Simulators and emulators")}>
         {state.devices.length === 0 ? (
           <Row
-            title="None yet"
-            description="Make one above, or in Xcode or Android Studio, then refresh."
+            title={t("None yet")}
+            description={t("Make one above, or in Xcode or Android Studio, then refresh.")}
           />
         ) : (
           state.devices.map((d) => {
@@ -303,8 +317,8 @@ function HostDevices({ host }: { host: Host }) {
                   <span className="flex items-center gap-1.5">
                     {d.booted && <StatusDot tone="on" />}
                     {d.version}
-                    {d.physical && " · Physical device"}
-                    {d.booted && " · Running"}
+                    {d.physical && ` · ${t("Physical device")}`}
+                    {d.booted && ` · ${t("Running")}`}
                   </span>
                 }
               >
@@ -312,11 +326,15 @@ function HostDevices({ host }: { host: Host }) {
                   <button
                     type="button"
                     className={d.booted ? quietButton : outlineButton}
-                    aria-label={`${d.booted ? "Stop" : "Start"} ${d.name}`}
+                    aria-label={
+                      d.booted
+                        ? t("Stop {{name}}", { name: d.name })
+                        : t("Start {{name}}", { name: d.name })
+                    }
                     disabled={busy.has(d.id)}
                     onClick={() => void toggle(d)}
                   >
-                    {busy.has(d.id) ? "Working…" : d.booted ? "Stop" : "Start"}
+                    {busy.has(d.id) ? t("Working…") : d.booted ? t("Stop") : t("Start")}
                   </button>
                 )}
               </Row>

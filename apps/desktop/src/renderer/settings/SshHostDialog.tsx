@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Plus, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
@@ -36,7 +37,7 @@ function portError(port: string): string | undefined {
   const n = Number(p);
   return /^\d{1,5}$/.test(p) && n >= 1 && n <= 65535
     ? undefined
-    : "Port is a number from 1 to 65535.";
+    : t("Port is a number from 1 to 65535.");
 }
 
 /**
@@ -106,7 +107,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
 
   const save = async () => {
     const why = !target.trim()
-      ? "Enter an SSH host or alias, such as mac-mini or 192.168.1.20."
+      ? t("Enter an SSH host or alias, such as mac-mini or 192.168.1.20.")
       : portError(port);
     if (why) return setError(why);
     setSaving(true);
@@ -127,7 +128,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
       className="m-auto w-[36rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
     >
       <form
-        aria-label={host ? `Edit ${host.name}` : "Add host"}
+        aria-label={host ? t("Edit {{name}}", { name: host.name }) : t("Add host")}
         className="flex flex-col gap-4 px-5 pt-4 pb-5"
         onSubmit={(e) => {
           e.preventDefault();
@@ -137,19 +138,19 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
         <header className="flex items-start gap-3">
           <div className="flex-1">
             <h2 id={titleId} className="text-reading font-semibold">
-              {host ? `Edit ${host.name}` : "Add a computer over SSH"}
+              {host ? t("Edit {{name}}", { name: host.name }) : t("Add a computer over SSH")}
             </h2>
             <p className="mt-0.5 text-body text-muted-foreground">
-              Parallax signs in with your SSH config, keys, and agent, then runs plxd there.
+              {t("Parallax signs in with your SSH config, keys, and agent, then runs plxd there.")}
             </p>
           </div>
-          <IconButton label="Close" onClick={() => dialog.current?.close()}>
+          <IconButton label={t("Close")} onClick={() => dialog.current?.close()}>
             <X aria-hidden />
           </IconButton>
         </header>
 
         <label className="relative block text-body font-medium">
-          SSH host or alias
+          {t("SSH host or alias")}
           <input
             name="host"
             role="combobox"
@@ -167,7 +168,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
             onFocus={() => setOpen(true)}
             onBlur={() => setOpen(false)}
             onKeyDown={keys}
-            placeholder="Search hosts or type an IP address"
+            placeholder={t("Search hosts or type an IP address")}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -178,7 +179,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
             <ul
               id={listId}
               role="listbox"
-              aria-label="Hosts ssh knows"
+              aria-label={t("Hosts ssh knows")}
               className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-border bg-surface p-1 font-normal shadow-composer"
             >
               {matches.map((choice, i) => (
@@ -205,12 +206,12 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
 
         <div className="flex gap-3">
           <label className="flex-1 text-body font-medium">
-            Username
+            {t("Username")}
             <input
               name="user"
               value={user}
               onChange={(e) => setUser(e.target.value)}
-              placeholder="From your ssh config"
+              placeholder={t("From your ssh config")}
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
@@ -218,7 +219,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
             />
           </label>
           <label className="w-28 text-body font-medium">
-            Port
+            {t("Port")}
             <input
               name="port"
               value={port}
@@ -232,7 +233,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
 
         {host && (
           <label className="text-body font-medium">
-            Name
+            {t("Name")}
             <input
               name="name"
               value={name}
@@ -255,7 +256,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
           className={`${primaryButton} flex items-center justify-center gap-1.5 py-2 [&_svg]:size-4`}
         >
           {!host && <Plus aria-hidden />}
-          {host ? "Save" : "Add host"}
+          {host ? t("Save") : t("Add host")}
         </button>
       </form>
     </dialog>

@@ -13,8 +13,10 @@
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
+import { t } from "i18next";
 import { Platform } from "react-native";
 
+import { msg } from "../../desktop/src/i18n";
 import type { HostResponse } from "../../desktop/src/preload/bridge";
 import type { RelayPushKeyResult } from "../../desktop/src/protocol/generated/protocol";
 import { ThreadStatus } from "../modules/thread-status";
@@ -46,10 +48,11 @@ Notifications.setNotificationHandler({
   },
 });
 
+/** What each alert means, shown with `t`. */
 const bodies = {
-  needsYou: "Needs your approval",
-  done: "Finished",
-  failed: "Failed",
+  needsYou: msg("Needs your approval"),
+  done: msg("Finished"),
+  failed: msg("Failed"),
 };
 
 /**
@@ -62,7 +65,7 @@ export function notify(alert: Alert, hostId: string, runId: string, title: strin
     identifier: `${runId}:${alert}`,
     content: {
       title,
-      body: text ?? bodies[alert],
+      body: text ?? t(bodies[alert]),
       data: { hostId, runId },
       sound: true,
     },
@@ -158,21 +161,21 @@ export async function registerWithRelay(
   token: () => Promise<string | undefined>,
 ): Promise<string | undefined> {
   // No Firebase project yet (PLX-1372), so no push token to give on Android.
-  if (Platform.OS !== "ios") return "Notifications while Parallax is closed aren't available on Android yet.";
-  if (!(await notificationsOn())) return "Notifications are off for Parallax in iOS Settings.";
+  if (Platform.OS !== "ios") return t("Notifications while Parallax is closed aren't available on Android yet.");
+  if (!(await notificationsOn())) return t("Notifications are off for Parallax in iOS Settings.");
   const device = await Notifications.getDevicePushTokenAsync().catch(() => undefined);
   if (!device)
-    return "This build can't get a push token. It needs the App ID's push capability.";
+    return t("This build can't get a push token. It needs the App ID's push capability.");
   // The account's OAuth access token, which the relay takes from the desktop app's client too.
   const session = await token();
-  if (!session) return "Sign in to get notifications while Parallax is closed.";
+  if (!session) return t("Sign in to get notifications while Parallax is closed.");
   const answer = await fetch(`${RELAY_URL}/v1/devices`, {
     method: "POST",
     headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
     body: JSON.stringify({ token: String(device.data) }),
   }).catch(() => undefined);
-  if (!answer) return "Parallax Connect isn't reachable, so notifications come only while the app is open.";
-  return answer.ok ? undefined : `Parallax Connect refused this phone (${answer.status}).`;
+  if (!answer) return t("Parallax Connect isn't reachable, so notifications come only while the app is open.");
+  return answer.ok ? undefined : t("Parallax Connect refused this phone ({{status}}).", { status: answer.status });
 }
 
 /** Calls `open` with the thread a tapped notification is about, including the one that launched the app. */

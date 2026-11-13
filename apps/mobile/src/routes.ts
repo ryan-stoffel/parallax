@@ -5,6 +5,8 @@
 // to answer wins. Once the user orders them, each starts 200 ms after the one above it instead. The
 // phone doesn't use the Tailscale address a host reports. Pure, so it's tested without React Native.
 
+import { t } from "i18next";
+
 import {
   editRoutes,
   isRelay,
@@ -69,7 +71,11 @@ export function editOnPhone(hostId: string, choices: RouteChoices, edit: RouteEd
   if ("add" in edit) {
     const parsed = parseRoute(edit.add);
     if ("route" in parsed && !worksOnPhone(parsed.route))
-      return { error: "On iPhone, a route must be an IP address or a .local name. iOS blocks other names for a computer with its own certificate." };
+      return {
+        error: t(
+          "On iPhone, a route must be an IP address or a .local name. iOS blocks other names for a computer with its own certificate.",
+        ),
+      };
   }
   return editRoutes(hostId, onPhone(choices), edit);
 }

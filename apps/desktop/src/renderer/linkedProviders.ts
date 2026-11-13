@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect } from "react";
 
 import { useRealConnections } from "./ConnectionStatus";
@@ -126,7 +127,9 @@ const reachable = new Map<string, string>();
 function report(hostId: string, problem: string) {
   notify({
     tone: "error",
-    title: `Couldn't link providers on ${reachable.get(hostId) ?? hostId}`,
+    title: t("Couldn't link providers on {{computer}}", {
+      computer: reachable.get(hostId) ?? hostId,
+    }),
     body: problem,
   });
 }
@@ -155,7 +158,8 @@ const bringInLine = (hostId: string) =>
       const failed = await saveProvider(hostId, instance);
       if (failed) report(hostId, `${instance.name}: ${failed}`);
     }
-    for (const id of conflicts) report(hostId, `It has a different kind of provider named ${id}.`);
+    for (const id of conflicts)
+      report(hostId, t("It has a different kind of provider named {{id}}.", { id }));
   });
 
 const spread = (except: string) =>

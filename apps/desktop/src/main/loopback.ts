@@ -1,3 +1,4 @@
+import i18next, { t } from "i18next";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -30,7 +31,7 @@ export async function serveCallback(
   const server = createServer((req, res) => void route(req, res).catch(() => res.destroy()));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const timer = setTimeout(() => stop("Sign-in timed out. Try again."), timeoutMs);
+  const timer = setTimeout(() => stop(t("Sign-in timed out. Try again.")), timeoutMs);
   let answered = false;
   function stop(error: string | undefined) {
     clearTimeout(timer);
@@ -44,14 +45,14 @@ export async function serveCallback(
     const url = new URL(req.url ?? "/", `http://${host}`);
     if (req.method !== "GET" || url.pathname !== "/callback") return void res.writeHead(404).end();
     if (answered || url.searchParams.get("state") !== state)
-      return void res.writeHead(403).end("Start signing in from the Parallax app.");
+      return void res.writeHead(403).end(t("Start signing in from the Parallax app."));
     answered = true;
     const code = url.searchParams.get("code");
     const error = code
       ? await signIn(code).catch((e: Error) => e.message)
       : (url.searchParams.get("error_description") ??
         url.searchParams.get("error") ??
-        "Clerk sent no code.");
+        t("Clerk sent no code."));
     page(res, !!error);
     setImmediate(() => stop(error));
   }
@@ -59,7 +60,7 @@ export async function serveCallback(
   return {
     redirectUri: `http://${host}/callback`,
     done,
-    close: () => stop("Sign-in was cancelled."),
+    close: () => stop(t("Sign-in was cancelled.")),
   };
 }
 
@@ -72,22 +73,22 @@ function page(res: ServerResponse, failed: boolean) {
   const nonce = randomUUID();
   const body = failed
     ? `<div class="hero"><span class="glow blue"></span><span class="glow coral"></span><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="part-blue" cx="6.5" cy="6.5" r="5.5" fill="#2b5cff"/><circle class="part-coral" cx="17.5" cy="17.5" r="5.5" fill="#ff4a1f"/></svg></div>
-<h1>That didn't line up</h1>
-<p>Your sign-in slipped out of view. Go back to Parallax to try again from a better angle.</p>`
+<h1>${t("That didn't line up")}</h1>
+<p>${t("Your sign-in slipped out of view. Go back to Parallax to try again from a better angle.")}</p>`
     : `<div class="hero"><span class="glow blue"></span><span class="glow coral"></span><svg viewBox="0 0 24 24" aria-hidden="true"><clipPath id="overlap"><circle class="meet-blue" cx="9.5" cy="9.5" r="7"/></clipPath><circle class="meet-blue" cx="9.5" cy="9.5" r="7" fill="#2b5cff"/><circle class="meet-coral" cx="14.5" cy="14.5" r="7" fill="#ff4a1f"/><circle class="meet-coral" cx="14.5" cy="14.5" r="7" clip-path="url(#overlap)" fill="var(--overlap)"/></svg></div>
-<h1>You're signed in</h1>
-<p>You can close this tab and go back to Parallax.</p>`;
+<h1>${t("You're signed in")}</h1>
+<p>${t("You can close this tab and go back to Parallax.")}</p>`;
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
     "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     "cache-control": "no-store",
     connection: "close",
   }).end(`<!doctype html>
-<html lang="en">
+<html lang="${i18next.language}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${failed ? "Couldn't sign in to Parallax" : "Signed in to Parallax"}</title>
+<title>${failed ? t("Couldn't sign in to Parallax") : t("Signed in to Parallax")}</title>
 <style nonce="${nonce}">
   :root { color-scheme: light dark; --bg: #fff; --surface: #fff; --fg: #1e1b4b; --muted: #4a4868; --faint: #64627e; --line: rgb(30 27 75 / 10%);
     --primary: #1e1b4b; --on-primary: #fff; --accent: #2b5cff; --overlap: #1e1b4b; --shadow: 0 10px 30px -16px rgb(30 27 75 / 22%); }
@@ -134,7 +135,7 @@ function page(res: ServerResponse, failed: boolean) {
 <main>
 ${body}
 </main>
-<footer>Secured by <b><svg viewBox="0 0 128 128" fill="currentColor" aria-hidden="true"><circle cx="64" cy="64" r="20"/><path fill-opacity=".4" d="M99.572 10.788c1.999 1.34 2.17 4.156.468 5.858L85.424 31.262c-1.32 1.32-3.37 1.53-5.033.678A35.846 35.846 0 0 0 64 28c-19.882 0-36 16.118-36 36a35.846 35.846 0 0 0 3.94 16.391c.851 1.663.643 3.712-.678 5.033L16.646 100.04c-1.702 1.702-4.519 1.531-5.858-.468C3.974 89.399 0 77.163 0 64 0 28.654 28.654 0 64 0c13.163 0 25.399 3.974 35.572 10.788Z"/><path d="M100.04 111.354c1.702 1.702 1.531 4.519-.468 5.858C89.399 124.026 77.164 128 64 128c-13.164 0-25.399-3.974-35.572-10.788-2-1.339-2.17-4.156-.468-5.858l14.615-14.616c1.322-1.32 3.37-1.53 5.033-.678A35.847 35.847 0 0 0 64 100a35.846 35.846 0 0 0 16.392-3.94c1.662-.852 3.712-.643 5.032.678l14.616 14.616Z"/></svg>Clerk</b></footer>
+<footer>${t("Secured by {{name}}", { name: `<b><svg viewBox="0 0 128 128" fill="currentColor" aria-hidden="true"><circle cx="64" cy="64" r="20"/><path fill-opacity=".4" d="M99.572 10.788c1.999 1.34 2.17 4.156.468 5.858L85.424 31.262c-1.32 1.32-3.37 1.53-5.033.678A35.846 35.846 0 0 0 64 28c-19.882 0-36 16.118-36 36a35.846 35.846 0 0 0 3.94 16.391c.851 1.663.643 3.712-.678 5.033L16.646 100.04c-1.702 1.702-4.519 1.531-5.858-.468C3.974 89.399 0 77.163 0 64 0 28.654 28.654 0 64 0c13.163 0 25.399 3.974 35.572 10.788Z"/><path d="M100.04 111.354c1.702 1.702 1.531 4.519-.468 5.858C89.399 124.026 77.164 128 64 128c-13.164 0-25.399-3.974-35.572-10.788-2-1.339-2.17-4.156-.468-5.858l14.615-14.616c1.322-1.32 3.37-1.53 5.033-.678A35.847 35.847 0 0 0 64 100a35.846 35.846 0 0 0 16.392-3.94c1.662-.852 3.712-.643 5.032.678l14.616 14.616Z"/></svg>Clerk</b>` })}</footer>
 </body>
 </html>`);
 }

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
@@ -169,7 +170,9 @@ export function launch({
 }): Promise<string | undefined> {
   return new Promise((resolve) => {
     const child = spawn(file, args, { cwd, detached: true, stdio: "ignore", shell: false });
-    child.once("error", (error) => resolve(`The app didn't start: ${error.message}`));
+    child.once("error", (error) =>
+      resolve(t("The app didn't start: {{why}}", { why: error.message })),
+    );
     child.once("spawn", () => {
       child.unref();
       resolve(undefined);

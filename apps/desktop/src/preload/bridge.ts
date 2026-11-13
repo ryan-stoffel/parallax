@@ -280,6 +280,8 @@ export interface ParallaxBridge {
   firstRun: boolean;
   /** The OS's locale, such as "de-DE", for `src/renderer/locale.ts`. Undefined when invalid. */
   locale: string | undefined;
+  /** Tells main the language the window shows, so its menus and dialogs match (0105). */
+  setLanguage(language: string): void;
   /**
    * Packaged: installs the downloaded release and relaunches, else downloads the available one,
    * else checks now. A packaged app follows its own build's channel (0028): a nightly follows

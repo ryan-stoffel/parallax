@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   createContext,
   useContext,
@@ -114,8 +115,6 @@ async function linkedFile(
   return { runId, path: inside, name, kind: kindOf(name) };
 }
 
-const outsideFolder = "This file is outside the thread's folder, so it can't be opened here.";
-
 /**
  * In a transcript, what opens a file the agent named: in the side panel, as a presented file's
  * card does, where it shows as a document, an image or video, or a file to download. A file outside
@@ -129,10 +128,10 @@ export function useOpenFile(): ((path: string) => void) | undefined {
   if (!run || !open) return undefined;
   return (path) => {
     const fail = (body: string) =>
-      notify({ key: `file/${path}`, tone: "error", title: "Couldn't open the file", body });
+      notify({ key: `file/${path}`, tone: "error", title: t("Couldn't open the file"), body });
     const outside = async () => {
       if (run.hostId !== localId || !(isAbsolute(path) || path.startsWith("~/")))
-        return fail(outsideFolder);
+        return fail(t("This file is outside the thread's folder, so it can't be opened here."));
       const error = await window.parallax.showFile(path);
       if (error) fail(error);
     };
@@ -197,7 +196,7 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
     <>
       <button
         type="button"
-        aria-label={`Open ${doc.name}`}
+        aria-label={t("Open {{name}}", { name: doc.name })}
         title={doc.path}
         disabled={!url}
         onClick={(e) => {
@@ -212,7 +211,7 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
           <img src={url} alt={alt} className="block max-h-96 max-w-full rounded-md" />
         ) : (
           <span
-            aria-label={`Loading ${doc.name}`}
+            aria-label={t("Loading {{name}}", { name: doc.name })}
             className="grid h-32 w-48 place-items-center rounded-md bg-selected text-body text-muted-foreground tabular-nums"
           >
             {progress !== undefined && `${Math.round(progress * 100)}%`}

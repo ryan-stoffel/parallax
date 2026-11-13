@@ -5,6 +5,7 @@
 // computer.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
+import { t } from "i18next";
 import { ArrowUpRight, Copy, Download, KeyRound, Plus, RefreshCw, ShieldCheck } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { Linking, Switch, View } from "react-native";
@@ -21,6 +22,7 @@ import type {
   Role,
   ScheduledTask,
 } from "../../desktop/src/protocol/generated/protocol";
+import { msg } from "../../desktop/src/i18n";
 import { describeError } from "../../desktop/src/renderer/errors";
 import {
   accountOptions,
@@ -54,8 +56,8 @@ const ask = (title: string, message?: string, secure = false) =>
       title,
       message,
       [
-        { text: "Cancel", style: "cancel", onPress: () => done(undefined) },
-        { text: "OK", onPress: (text?: string) => done(text ?? "") },
+        { text: t("Cancel"), style: "cancel", onPress: () => done(undefined) },
+        { text: t("OK"), onPress: (text?: string) => done(text ?? "") },
       ],
       secure ? "secure-text" : "plain-text",
     ),
@@ -64,7 +66,7 @@ const ask = (title: string, message?: string, secure = false) =>
 /** Asks before something that can't be undone, then does it. */
 const confirm = (title: string, message: string, action: string, run: () => void) =>
   showAlert(title, message, [
-    { text: "Cancel", style: "cancel" },
+    { text: t("Cancel"), style: "cancel" },
     { text: action, style: "destructive", onPress: run },
   ]);
 
@@ -105,40 +107,40 @@ function AccountsPage({ m }: { m: Computer }) {
       role,
       ...(option && { account: option.account }),
     });
-    if ("error" in answer) fail("Couldn't change the default account", accountsError(answer.error));
+    if ("error" in answer) fail(t("Couldn't change the default account"), accountsError(answer.error));
     else setDefaults(answer.result);
   };
   const labelOf = (role: Role) => {
     const chosen = defaults?.[role];
-    if (!chosen) return "None";
-    return options?.find((o) => choiceKey(o.account) === choiceKey(chosen))?.label ?? "Not on this host anymore";
+    if (!chosen) return t("None");
+    return options?.find((o) => choiceKey(o.account) === choiceKey(chosen))?.label ?? t("Not on this host anymore");
   };
   const addKey = async (provider: Provider) => {
-    const label = await ask(`Add ${providerNames[provider]} API key`, "Label, such as Work");
+    const label = await ask(t("Add {{provider}} API key", { provider: providerNames[provider] }), t("Label, such as Work"));
     if (!label?.trim()) return;
-    const key = await ask(label.trim(), "API key. Kept in the host's keychain. Parallax never shows it again.", true);
+    const key = await ask(label.trim(), t("API key. Kept in the host's keychain. Parallax never shows it again."), true);
     if (key === undefined) return;
-    if (key.length < 20) return fail("Couldn't add the API key", "An API key is at least 20 characters.");
+    if (key.length < 20) return fail(t("Couldn't add the API key"), t("An API key is at least 20 characters."));
     const answer = await window.parallax.request(id, "accounts/keys/add", {
       id: uuidv7(),
       provider,
       label: label.trim().slice(0, 64),
       key,
     });
-    if ("error" in answer) fail("Couldn't add the API key", accountsError(answer.error));
+    if ("error" in answer) fail(t("Couldn't add the API key"), accountsError(answer.error));
     else void load();
   };
   const removeKey = (account: KeyAccount) =>
-    confirm(`Remove ${account.label}?`, "Remove this key? Parallax deletes it from the host's keychain.", "Remove", async () => {
+    confirm(t("Remove {{name}}?", { name: account.label }), t("Remove this key? Parallax deletes it from the host's keychain."), t("Remove"), async () => {
       const answer = await window.parallax.request(id, "accounts/keys/remove", { id: account.id });
       // Already gone, such as removed by another client: that's what Remove wanted.
       if ("error" in answer && answer.error.data?.kind !== "accountNotFound")
-        fail(`Couldn't remove ${account.label}`, accountsError(answer.error));
+        fail(t("Couldn't remove {{name}}", { name: account.label }), accountsError(answer.error));
       else void load();
     });
   const roles: [Role, string, string][] = [
-    ["worker", "Threads", "New threads run on it unless they pick another."],
-    ["orchestrator", "Orchestrators", "An orchestrator thread runs on it."],
+    ["worker", t("Threads"), t("New threads run on it unless they pick another.")],
+    ["orchestrator", t("Orchestrators"), t("An orchestrator thread runs on it.")],
   ];
 
   return (
@@ -148,7 +150,7 @@ function AccountsPage({ m }: { m: Computer }) {
           <Note alert>{error}</Note>
         </Section>
       )}
-      <Section title="Default accounts" footer="Accounts are the host's Claude Code sign-in and its Anthropic API keys.">
+      <Section title={t("Default accounts")} footer={t("Accounts are the host's Claude Code sign-in and its Anthropic API keys.")}>
         {roles.map(([role, title, detail], i) => (
           <Row
             key={role}
@@ -162,7 +164,7 @@ function AccountsPage({ m }: { m: Computer }) {
         ))}
       </Section>
       {(["anthropic", "openai"] as const).map((provider) => (
-        <Section key={provider} title={`${providerNames[provider]} API keys`}>
+        <Section key={provider} title={t("{{provider}} API keys", { provider: providerNames[provider] })}>
           {keys
             ?.filter((k) => k.provider === provider)
             .map((account) => (
@@ -170,19 +172,19 @@ function AccountsPage({ m }: { m: Computer }) {
                 key={account.id}
                 icon={KeyRound}
                 title={account.label}
-                detail={`${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
+                detail={t("{{provider}} API key · {{key}}", { provider: providerNames[account.provider] ?? account.provider, key: account.maskedKey })}
                 onPress={() => removeKey(account)}
               />
             ))}
-          <Row icon={Plus} iconColor={c.accent} title="Add API key" last onPress={() => void addKey(provider)} />
+          <Row icon={Plus} iconColor={c.accent} title={t("Add API key")} last onPress={() => void addKey(provider)} />
         </Section>
       ))}
       <Choices
-        title={picking === "orchestrator" ? "Orchestrators" : "Threads"}
+        title={picking === "orchestrator" ? t("Orchestrators") : t("Threads")}
         open={!!picking}
         value={choiceKey(picking && defaults?.[picking])}
         options={[
-          { value: "", label: "None", description: "Each new thread asks." },
+          { value: "", label: t("None"), description: t("Each new thread asks.") },
           ...(options ?? []).map((o) => ({ value: choiceKey(o.account), label: o.label })),
         ]}
         onChoose={(key) => picking && void choose(picking, key)}
@@ -201,27 +203,27 @@ function ThreadsPage({ m }: { m: Computer }) {
   const supported = can(m, "autoResume");
   return (
     <>
-      <Section title="Resuming threads">
+      <Section title={t("Resuming threads")}>
         <SwitchRow
-          title="Resume after a usage limit"
+          title={t("Resume after a usage limit")}
           detail={
             error ??
             (!supported
-              ? "This host's plxd can't resume threads after a usage limit."
-              : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.")
+              ? t("This host's plxd can't resume threads after a usage limit.")
+              : t("A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do."))
           }
           value={settings?.autoResume ?? false}
           disabled={!supported || !settings}
-          onChange={(autoResume) => void set({ autoResume }, `Couldn't turn resuming ${autoResume ? "on" : "off"}`)}
+          onChange={(autoResume) => void set({ autoResume }, autoResume ? t("Couldn't turn resuming on") : t("Couldn't turn resuming off"))}
           last={settings?.continueAfterRestart === undefined}
         />
         {settings?.continueAfterRestart !== undefined && (
           <SwitchRow
-            title="Continue threads after restarts"
-            detail="A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume."
+            title={t("Continue threads after restarts")}
+            detail={t("A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume.")}
             value={settings.continueAfterRestart}
             onChange={(continueAfterRestart) =>
-              void set({ continueAfterRestart }, `Couldn't turn continuing ${continueAfterRestart ? "on" : "off"}`)
+              void set({ continueAfterRestart }, continueAfterRestart ? t("Couldn't turn continuing on") : t("Couldn't turn continuing off"))
             }
             last
           />
@@ -258,20 +260,20 @@ function ImportSessions({ m }: { m: Computer }) {
     const account = importAccount(s.source, "result" in providers ? providers.result.providers : undefined);
     const answer = await window.parallax.request(id, "thread/import", { source: s.source, id: s.id, ...(account && { account }) });
     setBusy(undefined);
-    if ("error" in answer) fail(`Couldn't import ${s.title}`, answer.error);
+    if ("error" in answer) fail(t("Couldn't import {{title}}", { title: s.title }), answer.error);
     else void look();
   };
   return (
-    <Section title="Import">
+    <Section title={t("Import", { context: "section" })}>
       <Row
         icon={Download}
-        title={looking ? "Looking for sessions in Claude, Codex, and Cursor…" : "Import sessions"}
-        detail="Bring past sessions from the Claude, Codex, and Cursor desktop apps into Archived as threads on this computer."
+        title={looking ? t("Looking for sessions in Claude, Codex, and Cursor…") : t("Import sessions")}
+        detail={t("Bring past sessions from the Claude, Codex, and Cursor desktop apps into Archived as threads on this computer.")}
         last={!sessions && !error}
         onPress={looking ? undefined : () => void look()}
       />
       {error && <Note alert>{error}</Note>}
-      {sessions?.length === 0 && <Note>No sessions from the Claude, Codex, or Cursor desktop apps on this computer.</Note>}
+      {sessions?.length === 0 && <Note>{t("No sessions from the Claude, Codex, or Cursor desktop apps on this computer.")}</Note>}
       {sessions?.map((s, i) => (
         <Row
           key={`${s.source}:${s.id}`}
@@ -279,7 +281,7 @@ function ImportSessions({ m }: { m: Computer }) {
           detail={[appNames[s.source] ?? s.source, s.cwd?.split(/[\\/]/).filter(Boolean).pop(), ago(s.updatedAt)].filter(Boolean).join(" · ")}
           last={i === sessions.length - 1}
           right={
-            s.thread ? <T muted>Imported</T> : <Action label={busy === s.id ? "Importing…" : "Import"} disabled={!!busy} onPress={() => void take(s)} />
+            s.thread ? <T muted>{t("Imported")}</T> : <Action label={busy === s.id ? t("Importing…") : t("Import")} disabled={!!busy} onPress={() => void take(s)} />
           }
         />
       ))}
@@ -329,44 +331,57 @@ function SchedulesPage({ m }: { m: Computer }) {
             });
     setBusy(undefined);
     if ("error" in answer) {
-      const verb = action === "pause" ? (task.enabled ? "pause" : "resume") : action;
-      fail(`Couldn't ${verb} ${task.title}`, answer.error);
+      const title = { title: task.title };
+      fail(
+        action === "run"
+          ? t("Couldn't run {{title}}", title)
+          : action === "delete"
+            ? t("Couldn't delete {{title}}", title)
+            : task.enabled
+              ? t("Couldn't pause {{title}}", title)
+              : t("Couldn't resume {{title}}", title),
+        answer.error,
+      );
     }
     void load();
   };
   const menu = (task: ScheduledTask) =>
     showAlert(task.title, task.prompt, [
-      ...(task.schedule.type !== "webhook" ? [{ text: "Run now", onPress: () => void act(task, "run") }] : []),
-      { text: "Delete", style: "destructive" as const, onPress: () => void act(task, "delete") },
-      { text: "Cancel", style: "cancel" as const },
+      ...(task.schedule.type !== "webhook" ? [{ text: t("Run now"), onPress: () => void act(task, "run") }] : []),
+      { text: t("Delete"), style: "destructive" as const, onPress: () => void act(task, "delete") },
+      { text: t("Cancel"), style: "cancel" as const },
     ]);
 
   const empty = !supported
-    ? "This host's plxd can't schedule tasks."
+    ? t("This host's plxd can't schedule tasks.")
     : error && !tasks
       ? error
       : tasks === undefined
-        ? "Loading…"
+        ? t("Loading…")
         : tasks.length === 0
-          ? "No scheduled tasks. Ask an agent to schedule one."
+          ? t("No scheduled tasks. Ask an agent to schedule one.")
           : undefined;
   return (
-    <Section title="Scheduled tasks" footer="Prompts that run on a timer or a webhook, in their thread or a new one.">
+    <Section title={t("Scheduled tasks")} footer={t("Prompts that run on a timer or a webhook, in their thread or a new one.")}>
       {empty ? (
         <Note alert={empty === error}>{empty}</Note>
       ) : (
         tasks!.map((task, i) => {
           const when = !task.enabled
-            ? "Paused"
+            ? t("Paused")
             : task.schedule.type === "webhook"
-              ? "Listening"
+              ? t("Listening")
               : task.nextRunAt
-                ? `Next run ${nextLabel(task.nextRunAt)}`
-                : "Not scheduled";
+                ? t("Next run {{when}}", { when: nextLabel(task.nextRunAt) })
+                : t("Not scheduled");
           const last =
             task.lastRunStatus === "never"
               ? ""
-              : ` · Last run ${task.lastRunStatus}${task.lastRunError ? `: ${task.lastRunError}` : ""}`;
+              : ` · ${
+                  task.lastRunError
+                    ? t("Last run {{status}}: {{error}}", { status: task.lastRunStatus, error: task.lastRunError })
+                    : t("Last run {{status}}", { status: task.lastRunStatus })
+                }`;
           const prompt = task.prompt.length > 120 ? `${task.prompt.slice(0, 120)}…` : task.prompt;
           return (
             <Row
@@ -379,7 +394,7 @@ function SchedulesPage({ m }: { m: Computer }) {
               onPress={busy === task.id ? undefined : () => menu(task)}
               right={
                 <Switch
-                  accessibilityLabel={`Enable ${task.title}`}
+                  accessibilityLabel={t("Enable {{title}}", { title: task.title })}
                   value={task.enabled}
                   disabled={busy === task.id}
                   onValueChange={() => void act(task, "pause")}
@@ -427,29 +442,29 @@ function SourceControlPage({ m }: { m: Computer }) {
 
   const install = async () => {
     const answer = await window.parallax.request(id, "github/install", {});
-    if ("error" in answer) fail("Couldn't install the GitHub CLI", answer.error);
+    if ("error" in answer) fail(t("Couldn't install the GitHub CLI"), answer.error);
     else setStatus(answer.result);
   };
   const signIn = async () => {
     setStarting(true);
     const answer = await window.parallax.request(id, "github/signIn", {});
     setStarting(false);
-    if ("error" in answer) return fail("Couldn't sign in to GitHub", answer.error);
+    if ("error" in answer) return fail(t("Couldn't sign in to GitHub"), answer.error);
     setStatus((s) => s && { ...s, signingIn: answer.result, setupNote: undefined });
     void Linking.openURL(answer.result.url);
   };
   const cancel = async () => {
     const answer = await window.parallax.request(id, "github/signInCancel", {});
-    if ("error" in answer) fail("Couldn't cancel the GitHub sign-in", answer.error);
+    if ("error" in answer) fail(t("Couldn't cancel the GitHub sign-in"), answer.error);
     await load();
   };
 
   const line = !supported
-    ? { detail: "Update plxd on this host to see GitHub here.", tone: "warn" as const }
+    ? { detail: t("Update plxd on this host to see GitHub here."), tone: "warn" as const }
     : error
       ? { detail: error, tone: "warn" as const }
       : !status
-        ? { detail: "Checking…", tone: "warn" as const }
+        ? { detail: t("Checking…"), tone: "warn" as const }
         : githubLine(status, setup);
   const tones = { on: c.added, off: c.faintForeground, warn: c.warning };
   const pending = setup ? status?.signingIn : undefined;
@@ -460,15 +475,15 @@ function SourceControlPage({ m }: { m: Computer }) {
       : status.installing
         ? undefined
         : !status.installed
-          ? { label: "Install", run: install }
+          ? { label: t("Install"), run: install }
           : status.signingIn
-            ? { label: "Cancel", run: cancel }
+            ? { label: t("Cancel"), run: cancel }
             : status.signedIn === false
-              ? { label: starting ? "Starting…" : "Sign in", run: signIn }
+              ? { label: starting ? t("Starting…") : t("Sign in"), run: signIn }
               : undefined;
 
   return (
-    <Section title="Hosting" footer="Parallax opens and follows pull requests with the GitHub CLI on each host.">
+    <Section title={t("Hosting")} footer={t("Parallax opens and follows pull requests with the GitHub CLI on each host.")}>
       <Block>
         <View style={{ flexDirection: "row", gap: 12, alignItems: "flex-start" }}>
           <View style={{ paddingTop: 2 }}>
@@ -479,7 +494,7 @@ function SourceControlPage({ m }: { m: Computer }) {
               GitHub
               {status?.version && (
                 <T faint style={{ fontSize: 13 }}>
-                  {`  gh ${status.version}${status.managed ? " · installed by Parallax" : ""}`}
+                  {`  gh ${status.version}${status.managed ? ` · ${t("installed by Parallax")}` : ""}`}
                 </T>
               )}
             </T>
@@ -497,7 +512,7 @@ function SourceControlPage({ m }: { m: Computer }) {
           </View>
           {action && <Action label={action.label} disabled={starting} onPress={() => void action.run()} />}
           {!setup && status && !status.installed && (
-            <Action label="Install" onPress={() => void Linking.openURL("https://cli.github.com")} />
+            <Action label={t("Install")} onPress={() => void Linking.openURL("https://cli.github.com")} />
           )}
         </View>
       </Block>
@@ -505,21 +520,24 @@ function SourceControlPage({ m }: { m: Computer }) {
         <>
           <Block>
             <T muted style={{ fontSize: 13, lineHeight: 18 }}>
-              {`Enter this code at ${pending.url.replace(/^https:\/\//, "")}. It expires at ${new Date(pending.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}
+              {t("Enter this code at {{url}}. It expires at {{time}}.", {
+                url: pending.url.replace(/^https:\/\//, ""),
+                time: new Date(pending.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+              })}
             </T>
             <T
-              accessibilityLabel="One-time code"
+              accessibilityLabel={t("One-time code")}
               selectable
               style={{ fontFamily: font.monoBold, fontSize: 24, lineHeight: 32, letterSpacing: 3, marginTop: 4 }}
             >
               {pending.code}
             </T>
           </Block>
-          <Row icon={Copy} title="Copy" onPress={() => void Clipboard.setStringAsync(pending.code)} />
-          <Row icon={ArrowUpRight} title="Open GitHub" onPress={() => void Linking.openURL(pending.url)} />
+          <Row icon={Copy} title={t("Copy")} onPress={() => void Clipboard.setStringAsync(pending.code)} />
+          <Row icon={ArrowUpRight} title={t("Open GitHub")} onPress={() => void Linking.openURL(pending.url)} />
         </>
       )}
-      <Row icon={RefreshCw} title="Refresh" last onPress={supported ? () => void load() : undefined} />
+      <Row icon={RefreshCw} title={t("Refresh")} last onPress={supported ? () => void load() : undefined} />
     </Section>
   );
 }
@@ -560,7 +578,7 @@ function ComputerUsePage({ m }: { m: Computer }) {
   if (!supported)
     return (
       <Section>
-        <Note>Computer use needs plxd on macOS. Update Parallax, or use a Mac, to turn it on.</Note>
+        <Note>{t("Computer use needs plxd on macOS. Update Parallax, or use a Mac, to turn it on.")}</Note>
       </Section>
     );
   const permission = (title: string, detail: string, granted?: boolean, last = false) => (
@@ -570,41 +588,41 @@ function ComputerUsePage({ m }: { m: Computer }) {
       last={last}
       right={
         granted === undefined ? (
-          <T muted>Checking…</T>
+          <T muted>{t("Checking…")}</T>
         ) : (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Dot color={granted ? c.added : c.faintForeground} />
-            <T muted>{granted ? "On" : "Off"}</T>
+            <T muted>{granted ? t("On") : t("Off")}</T>
           </View>
         )
       }
     />
   );
   const forget = (app: string) =>
-    confirm(`Remove ${app}?`, "A thread asks again before it next uses it.", "Remove", async () => {
+    confirm(t("Remove {{name}}?", { name: app }), t("A thread asks again before it next uses it."), t("Remove"), async () => {
       const answer = await window.parallax.request(id, "computer/forget", { app });
-      if ("error" in answer) fail(`Couldn't remove ${app}`, answer.error);
+      if ("error" in answer) fail(t("Couldn't remove {{name}}", { name: app }), answer.error);
       else setStatus(answer.result);
     });
 
   return (
     <>
       <Section
-        title="Permissions"
+        title={t("Permissions")}
         footer={
           missing && status
-            ? `macOS lists Parallax's background service as ${status.program} under Privacy & Security. Turn it on there for each permission.`
-            : "Agents can see and operate the apps on this Mac: read a window, click, type, scroll, and press keys, while your pointer and keyboard stay yours. A thread asks before it first uses each app."
+            ? t("macOS lists Parallax's background service as {{program}} under Privacy & Security. Turn it on there for each permission.", { program: status.program })
+            : t("Agents can see and operate the apps on this Mac: read a window, click, type, scroll, and press keys, while your pointer and keyboard stay yours. A thread asks before it first uses each app.")
         }
       >
-        {permission("Accessibility", "Reads app windows, and clicks, types, and scrolls in them.", status?.accessibility)}
-        {permission("Screen Recording", "Takes a screenshot of the window an agent works in.", status?.screenRecording, !missing && !error)}
+        {permission(t("Accessibility"), t("Reads app windows, and clicks, types, and scrolls in them."), status?.accessibility)}
+        {permission(t("Screen Recording"), t("Takes a screenshot of the window an agent works in."), status?.screenRecording, !missing && !error)}
         {error && <Note alert last={!missing}>{error}</Note>}
         {missing && (
           <Row
             icon={ShieldCheck}
             iconColor={c.accent}
-            title={asking ? "Asking macOS…" : "Grant access"}
+            title={asking ? t("Asking macOS…") : t("Grant access")}
             last
             onPress={
               asking
@@ -619,16 +637,16 @@ function ComputerUsePage({ m }: { m: Computer }) {
         )}
       </Section>
       <Section
-        title="Always allowed"
-        footer="Computer use never controls terminals, script runners, Parallax itself, or Keychain Access, and agents are told not to type passwords, pay, or send messages unless you ask."
+        title={t("Always allowed")}
+        footer={t("Computer use never controls terminals, script runners, Parallax itself, or Keychain Access, and agents are told not to type passwords, pay, or send messages unless you ask.")}
       >
         {!status ? (
-          <Note>Checking…</Note>
+          <Note>{t("Checking…")}</Note>
         ) : status.apps.length === 0 ? (
-          <Note>No apps yet. When a thread asks to use an app, choose Always allow to add it here.</Note>
+          <Note>{t("No apps yet. When a thread asks to use an app, choose Always allow to add it here.")}</Note>
         ) : (
           status.apps.map((app, i) => (
-            <Row key={app} title={app} last={i === status.apps.length - 1} right={<Action label="Remove" onPress={() => forget(app)} />} />
+            <Row key={app} title={app} last={i === status.apps.length - 1} right={<Action label={t("Remove")} onPress={() => forget(app)} />} />
           ))
         )}
       </Section>
@@ -681,20 +699,20 @@ function ScriptsPage({ m }: { m: Computer }) {
   if (!supported)
     return (
       <Section>
-        <Note>This host's plxd can't run setup scripts.</Note>
+        <Note>{t("This host's plxd can't run setup scripts.")}</Note>
       </Section>
     );
   if (!repo)
     return (
       <Section>
-        <Note>No repositories on this host yet.</Note>
+        <Note>{t("No repositories on this host yet.")}</Note>
       </Section>
     );
   const save = async () => {
     setBusy(true);
     const answer = await window.parallax.request(id, "repo/saveScripts", { repo: repo.id, scripts });
     setBusy(false);
-    if ("error" in answer) return fail(`Couldn't save ${repo.name}'s scripts`, answer.error);
+    if ("error" in answer) return fail(t("Couldn't save {{repo}}'s scripts", { repo: repo.name }), answer.error);
     setSaved(answer.result.scripts);
     setScripts(answer.result.scripts);
   };
@@ -704,9 +722,9 @@ function ScriptsPage({ m }: { m: Computer }) {
 
   return (
     <>
-      <Section footer="Commands that run in a thread's own worktree: a setup script once the worktree is created, and a settle script when the thread settles. Each runs in a terminal under the thread.">
+      <Section footer={t("Commands that run in a thread's own worktree: a setup script once the worktree is created, and a settle script when the thread settles. Each runs in a terminal under the thread.")}>
         <Row
-          title="Repository"
+          title={t("Repository")}
           right={<T muted>{repo.name}</T>}
           chevron={repos.length > 1}
           last
@@ -714,37 +732,37 @@ function ScriptsPage({ m }: { m: Computer }) {
         />
       </Section>
       {saved === undefined ? (
-        <Section title="Scripts">
-          <Note alert={!!error}>{error ?? "Loading…"}</Note>
+        <Section title={t("Scripts")}>
+          <Note alert={!!error}>{error ?? t("Loading…")}</Note>
         </Section>
       ) : (
         <>
           {scripts.length === 0 && (
-            <Section title="Scripts">
-              <Note>No scripts. Add one, or import one from parallax.json.</Note>
+            <Section title={t("Scripts")}>
+              <Note>{t("No scripts. Add one, or import one from parallax.json.")}</Note>
             </Section>
           )}
           {scripts.map((script, i) => (
-            <Section key={i} title={i === 0 ? "Scripts" : undefined}>
-              <Field title="Name" value={script.name} onSave={(name) => edit(i, { name })} />
-              <Field title="Command" placeholder="pnpm install" mono multiline value={script.command} onSave={(command) => edit(i, { command })} />
-              <SwitchRow title="On a new worktree" value={script.runOnWorktreeCreate ?? false} onChange={(on) => edit(i, { runOnWorktreeCreate: on })} />
+            <Section key={i} title={i === 0 ? t("Scripts") : undefined}>
+              <Field title={t("Name")} value={script.name} onSave={(name) => edit(i, { name })} />
+              <Field title={t("Command")} placeholder="pnpm install" mono multiline value={script.command} onSave={(command) => edit(i, { command })} />
+              <SwitchRow title={t("On a new worktree")} value={script.runOnWorktreeCreate ?? false} onChange={(on) => edit(i, { runOnWorktreeCreate: on })} />
               {script.runOnWorktreeCreate && (
-                <SwitchRow title="Agent waits for it" value={script.async === false} onChange={(on) => edit(i, { async: on ? false : undefined })} />
+                <SwitchRow title={t("Agent waits for it")} value={script.async === false} onChange={(on) => edit(i, { async: on ? false : undefined })} />
               )}
-              <SwitchRow title="When a thread settles" value={script.runOnSettle ?? false} onChange={(on) => edit(i, { runOnSettle: on })} />
-              <Row title="Remove" destructive last onPress={() => setScripts(scripts.filter((_, j) => j !== i))} />
+              <SwitchRow title={t("When a thread settles")} value={script.runOnSettle ?? false} onChange={(on) => edit(i, { runOnSettle: on })} />
+              <Row title={t("Remove")} destructive last onPress={() => setScripts(scripts.filter((_, j) => j !== i))} />
             </Section>
           ))}
           <Section>
-            <Row icon={Plus} iconColor={c.accent} title="Add script" last onPress={() => setScripts([...scripts, blank])} />
+            <Row icon={Plus} iconColor={c.accent} title={t("Add script")} last onPress={() => setScripts([...scripts, blank])} />
           </Section>
           <View style={{ flexDirection: "row", gap: 10 }}>
-            <Button label="Discard" disabled={!dirty || busy} onPress={() => setScripts(saved)} style={{ flex: 1 }} />
-            <Button label="Save" primary disabled={!dirty || busy} onPress={() => void save()} style={{ flex: 1 }} />
+            <Button label={t("Discard")} disabled={!dirty || busy} onPress={() => setScripts(saved)} style={{ flex: 1 }} />
+            <Button label={t("Save")} primary disabled={!dirty || busy} onPress={() => void save()} style={{ flex: 1 }} />
           </View>
           {(file?.error || (file?.scripts.length ?? 0) > 0) && (
-            <Section title="From parallax.json" footer="The repository's parallax.json declares these. They run only once you import and save them.">
+            <Section title={t("From parallax.json")} footer={t("The repository's parallax.json declares these. They run only once you import and save them.")}>
               {file?.error && <Note alert last={!file.scripts.length}>{file.error}</Note>}
               {file?.scripts.map((script, i) => (
                 <Row
@@ -752,7 +770,7 @@ function ScriptsPage({ m }: { m: Computer }) {
                   title={scriptRoles(script) ? `${script.name} · ${scriptRoles(script)}` : script.name}
                   detail={script.command}
                   last={i === file.scripts.length - 1}
-                  right={<Action label="Import" onPress={() => setScripts([...scripts, script])} />}
+                  right={<Action label={t("Import")} onPress={() => setScripts([...scripts, script])} />}
                 />
               ))}
             </Section>
@@ -760,7 +778,7 @@ function ScriptsPage({ m }: { m: Computer }) {
         </>
       )}
       <Choices
-        title="Repository"
+        title={t("Repository")}
         open={picking}
         value={repo.id}
         options={repos.map((r) => ({ value: r.id, label: r.name }))}
@@ -772,13 +790,14 @@ function ScriptsPage({ m }: { m: Computer }) {
 }
 
 /** What a paired computer can do, said before anyone pairs one. */
-const GRANTS =
-  "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers. Pair only your own computers.";
+const GRANTS = msg(
+  "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers. Pair only your own computers.",
+);
 
 /** A SHA-256 fingerprint in hex as browsers show it: `AB CD …`. */
 const fingerprint = (hex: string) => hex.toUpperCase().match(/../g)!.join(" ");
 
-const iconNames = { laptop: "Laptop", desktop: "PC", mini: "Mini PC", server: "Server" };
+const iconNames = { laptop: msg("Laptop"), desktop: msg("PC"), mini: msg("Mini PC"), server: msg("Server") };
 
 /**
  * Connections: the host's name and icon for Parallax Connect (0056), and pairing on its network
@@ -809,40 +828,42 @@ function ConnectionsPage({ m }: { m: Computer }) {
 
   const toggle = (next: boolean) => {
     const run = async () => {
-      await set({ remote: next }, `Couldn't turn pairing ${next ? "on" : "off"}`);
+      await set({ remote: next }, next ? t("Couldn't turn pairing on") : t("Couldn't turn pairing off"));
       setCode(undefined);
       void readSessions();
     };
     // This phone may reach it this way: turning it off would end this connection.
     if (!next && m.machine.paired)
       return confirm(
-        "Turn off pairing?",
-        `This phone reaches ${m.machine.name} on this network, so it disconnects until pairing is on again.`,
-        "Turn off",
+        t("Turn off pairing?"),
+        t("This phone reaches {{computer}} on this network, so it disconnects until pairing is on again.", { computer: m.machine.name }),
+        t("Turn off"),
         () => void run(),
       );
     void run();
   };
   const pair = async () => {
     const answer = await window.parallax.request(id, "remote/pair", {});
-    if ("error" in answer) return fail("Couldn't make a pairing code", answer.error);
+    if ("error" in answer) return fail(t("Couldn't make a pairing code"), answer.error);
     setCode({ ...answer.result, before: sessions.length });
     void readSessions();
   };
   const revoke = (s: { id: string; name: string }) =>
-    confirm(`Revoke ${s.name || "Unnamed computer"}?`, "It can't reach this computer until it pairs again.", "Revoke", async () => {
+    confirm(t("Revoke {{name}}?", { name: s.name || t("Unnamed computer") }), t("It can't reach this computer until it pairs again."), t("Revoke"), async () => {
       const answer = await revokeSession(id, s.id);
-      if ("error" in answer) fail("Couldn't revoke the computer", answer.error);
+      if ("error" in answer) fail(t("Couldn't revoke the computer"), answer.error);
       else setStatus(answer);
     });
   const makeReadOnly = (s: { id: string; name: string }) =>
     confirm(
-      `Make ${s.name || "Unnamed computer"} read-only?`,
-      "On all your computers, it can read threads but not change anything. This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.",
-      "Make read-only",
+      t("Make {{name}} read-only?", { name: s.name || t("Unnamed computer") }),
+      t(
+        "On all your computers, it can read threads but not change anything. This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.",
+      ),
+      t("Make read-only"),
       async () => {
         const answer = await makeSessionReadOnly(id, s.id);
-        if ("error" in answer) fail("Couldn't make the computer read-only", answer.error);
+        if ("error" in answer) fail(t("Couldn't make the computer read-only"), answer.error);
         else setStatus(answer);
       },
     );
@@ -850,7 +871,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
   if (!connect && !remote)
     return (
       <Section>
-        <Note>Update plxd on this computer to change its connections here.</Note>
+        <Note>{t("Update plxd on this computer to change its connections here.")}</Note>
       </Section>
     );
   return (
@@ -863,14 +884,14 @@ function ConnectionsPage({ m }: { m: Computer }) {
       {connect && settings && (
         <Section title="Parallax Connect">
           <Field
-            title="Device name"
+            title={t("Device name")}
             placeholder={m.machine.name}
             value={settings.deviceName ?? ""}
-            onSave={(deviceName) => void set({ deviceName: deviceName.trim() }, `Couldn't rename ${m.machine.name}`)}
+            onSave={(deviceName) => void set({ deviceName: deviceName.trim() }, t("Couldn't rename {{computer}}", { computer: m.machine.name }))}
           />
           <Row
-            title="Icon"
-            right={<T muted>{iconNames[settings.deviceIcon as keyof typeof iconNames] ?? "Detected"}</T>}
+            title={t("Icon")}
+            right={<T muted>{t(iconNames[settings.deviceIcon as keyof typeof iconNames] ?? "Detected")}</T>}
             chevron
             last
             onPress={() => setPicking(true)}
@@ -878,26 +899,33 @@ function ConnectionsPage({ m }: { m: Computer }) {
         </Section>
       )}
       {remote && on !== undefined && (
-        <Section title="Same network">
-          <SwitchRow title="Pair computers on this network" detail={GRANTS} value={on} onChange={toggle} last={!on && !sessions.length} />
+        <Section title={t("Same network")}>
+          <SwitchRow title={t("Pair computers on this network")} detail={t(GRANTS)} value={on} onChange={toggle} last={!on && !sessions.length} />
           {on && status?.problem && <Note alert last={false}>{status.problem}</Note>}
           {on && settings?.remoteWeb !== undefined && (
             <SwitchRow
-              title="Open in a browser"
-              detail={`Serves Parallax at ${(showing?.addresses ?? ["this computer's address"])
-                .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
-                .join(", ")} for a browser, which pairs with a code from Pair a device. On this network the browser warns about this computer's certificate. Continue only if the SHA-256 fingerprint it shows is the one below.${status?.fingerprint ? `\n${fingerprint(status.fingerprint)}` : ""}`}
+              title={t("Open in a browser")}
+              detail={`${t(
+                "Serves Parallax at {{addresses}} for a browser, which pairs with a code from Pair a device. On this network the browser warns about this computer's certificate. Continue only if the SHA-256 fingerprint it shows is the one below.",
+                {
+                  addresses: (showing?.addresses ?? [t("this computer's address")])
+                    .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
+                    .join(", "),
+                },
+              )}${status?.fingerprint ? `\n${fingerprint(status.fingerprint)}` : ""}`}
               value={settings.remoteWeb}
-              onChange={(remoteWeb) => void set({ remoteWeb }, `Couldn't turn Open in a browser ${remoteWeb ? "on" : "off"}`)}
+              onChange={(remoteWeb) =>
+                void set({ remoteWeb }, remoteWeb ? t("Couldn't turn Open in a browser on") : t("Couldn't turn Open in a browser off"))
+              }
             />
           )}
           {on && status?.listening && (
             <Row
-              title={showing ? "New code" : "Pair a device"}
+              title={showing ? t("New code") : t("Pair a device")}
               detail={
                 showing
-                  ? `On the other computer, choose Add computer, pick ${showing.name}, and enter this code. It works once, for 5 minutes. Share it only with your own computer.`
-                  : "Shows a short one-time code for another computer to pair with."
+                  ? t("On the other computer, choose Add computer, pick {{name}}, and enter this code. It works once, for 5 minutes. Share it only with your own computer.", { name: showing.name })
+                  : t("Shows a short one-time code for another computer to pair with.")
               }
               right={
                 showing ? (
@@ -913,15 +941,22 @@ function ConnectionsPage({ m }: { m: Computer }) {
           {sessions.map((s, i) => (
             <Row
               key={s.id}
-              title={s.name || "Unnamed computer"}
-              detail={`Paired ${new Date(s.createdAt).toLocaleDateString()}${s.readOnly ? ". Read-only. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device." : ""}`}
+              title={s.name || t("Unnamed computer")}
+              detail={
+                s.readOnly
+                  ? t(
+                      "Paired {{date}}. Read-only. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.",
+                      { date: new Date(s.createdAt).toLocaleDateString() },
+                    )
+                  : t("Paired {{date}}", { date: new Date(s.createdAt).toLocaleDateString() })
+              }
               last={i === sessions.length - 1}
               right={
                 <View style={{ flexDirection: "row", gap: 16 }}>
                   {canMakeReadOnly && !s.readOnly && (
-                    <Action label="Read-only" onPress={() => makeReadOnly(s)} />
+                    <Action label={t("Read-only")} onPress={() => makeReadOnly(s)} />
                   )}
-                  <Action label="Revoke" onPress={() => revoke(s)} />
+                  <Action label={t("Revoke")} onPress={() => revoke(s)} />
                 </View>
               }
             />
@@ -929,14 +964,14 @@ function ConnectionsPage({ m }: { m: Computer }) {
         </Section>
       )}
       <Choices
-        title="Icon"
+        title={t("Icon")}
         open={picking}
         value={settings?.deviceIcon ?? ""}
         options={[
-          { value: "", label: "Detected", description: "From the computer's name." },
-          ...Object.entries(iconNames).map(([value, label]) => ({ value, label })),
+          { value: "", label: t("Detected"), description: t("From the computer's name.") },
+          ...Object.entries(iconNames).map(([value, label]) => ({ value, label: t(label) })),
         ]}
-        onChoose={(deviceIcon) => void set({ deviceIcon }, `Couldn't change ${m.machine.name}`)}
+        onChoose={(deviceIcon) => void set({ deviceIcon }, t("Couldn't change {{computer}}", { computer: m.machine.name }))}
         onClose={() => setPicking(false)}
       />
     </>
@@ -957,15 +992,15 @@ function StoragePage({ m }: { m: Computer }) {
   const count = archived.length;
   const deleteAll = () =>
     confirm(
-      "Delete all archived threads?",
-      "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone.",
-      "Delete all",
+      t("Delete all archived threads?"),
+      t("Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."),
+      t("Delete all"),
       async () => {
         setDeleting(true);
-        for (const t of archived) {
-          const answer = await window.parallax.request(id, "thread/delete", { runId: t.id });
+        for (const thread of archived) {
+          const answer = await window.parallax.request(id, "thread/delete", { runId: thread.id });
           if ("error" in answer) {
-            fail("Couldn't delete the archived threads", answer.error);
+            fail(t("Couldn't delete the archived threads"), answer.error);
             break;
           }
         }
@@ -974,28 +1009,28 @@ function StoragePage({ m }: { m: Computer }) {
     );
   return (
     <>
-      <Section title="Worktrees">
+      <Section title={t("Worktrees")}>
         <SwitchRow
-          title="Clean up merged worktrees"
+          title={t("Clean up merged worktrees")}
           detail={
             error ??
             (!supported
-              ? "This host's plxd can't clean up worktrees."
-              : "When a settled or archived thread's pull request merges, Parallax deletes its worktree and branch. The thread stays.")
+              ? t("This host's plxd can't clean up worktrees.")
+              : t("When a settled or archived thread's pull request merges, Parallax deletes its worktree and branch. The thread stays."))
           }
           value={settings?.cleanWorktrees ?? false}
           disabled={!supported || !settings}
           onChange={(cleanWorktrees) =>
-            void set({ cleanWorktrees }, `Couldn't turn worktree cleanup ${cleanWorktrees ? "on" : "off"}`)
+            void set({ cleanWorktrees }, cleanWorktrees ? t("Couldn't turn worktree cleanup on") : t("Couldn't turn worktree cleanup off"))
           }
           last
         />
       </Section>
-      <Section title="Archived threads" footer="Deleting removes each one's transcript and worktree from the host.">
+      <Section title={t("Archived threads")} footer={t("Deleting removes each one's transcript and worktree from the host.")}>
         <Row
-          title={m.view.loading ? "Counting…" : `${count} archived ${count === 1 ? "thread" : "threads"}`}
+          title={m.view.loading ? t("Counting…") : t("{{count}} archived threads", { count, defaultValue_one: "{{count}} archived thread" })}
           last
-          right={<Action label={deleting ? "Deleting…" : "Delete all"} disabled={!count || deleting} onPress={deleteAll} />}
+          right={<Action label={deleting ? t("Deleting…") : t("Delete all")} disabled={!count || deleting} onPress={deleteAll} />}
         />
       </Section>
     </>
@@ -1028,7 +1063,7 @@ const bodies: Record<SettingsPage, ComponentType<{ m: Computer }>> = {
 export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "ComputerSettings">) {
   const { id, page } = route.params;
   const m = useComputer(id);
-  useEffect(() => navigation.setOptions({ title: pages[page] }), [page]);
+  useEffect(() => navigation.setOptions({ title: t(pages[page]) }), [page]);
   const Body = bodies[page];
   // No computer yet: the phone's own settings on this page, and the way to add one.
   if (!m)
@@ -1038,8 +1073,8 @@ export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenP
         {page === "connections" ? (
           <PhoneConnections />
         ) : (
-          <Section footer="These settings belong to a computer. Add one to change them here.">
-            <Row icon={Plus} title="Add computer" last onPress={() => navigation.navigate("AddComputer")} />
+          <Section footer={t("These settings belong to a computer. Add one to change them here.")}>
+            <Row icon={Plus} title={t("Add computer")} last onPress={() => navigation.navigate("AddComputer")} />
           </Section>
         )}
       </Page>
@@ -1053,7 +1088,7 @@ export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenP
         <Body key={id} m={m} />
       ) : (
         <Section>
-          <Row icon={RefreshCw} title="Reconnect" last onPress={() => void window.parallax.retry(id)} />
+          <Row icon={RefreshCw} title={t("Reconnect")} last onPress={() => void window.parallax.retry(id)} />
         </Section>
       )}
     </Page>

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { TriangleAlert } from "lucide-react";
 import { useId } from "react";
 
@@ -35,20 +36,21 @@ export function SeveralAccountsNote({ onHubs }: { onHubs?: () => void }) {
   return (
     <>
       <p>
-        Several accounts of one provider in one app aren't supported. Switching between them puts
-        the accounts at risk. For many accounts, use a CLIProxyAPI hub.
+        {t(
+          "Several accounts of one provider in one app aren't supported. Switching between them puts the accounts at risk. For many accounts, use a CLIProxyAPI hub.",
+        )}
       </p>
       <p className="mt-2 flex gap-3">
         {onHubs && (
           <button type="button" onClick={onHubs} className={link}>
-            Set up a hub
+            {t("Set up a hub")}
           </button>
         )}
         <a href={HUB_DOCS} target="_blank" rel="noreferrer" className={link}>
-          CLIProxyAPI docs
+          {t("CLIProxyAPI docs")}
         </a>
         <a href={HUB_GUIDE} target="_blank" rel="noreferrer" className={link}>
-          Theo's setup guide
+          {t("Theo's setup guide")}
         </a>
       </p>
     </>
@@ -66,7 +68,7 @@ export function SeveralAccountsMark({ onHubs }: { onHubs?: () => void }) {
       <button
         type="button"
         popoverTarget={id}
-        aria-label="Several accounts"
+        aria-label={t("Several accounts")}
         aria-haspopup="dialog"
         className="grid size-6 shrink-0 place-items-center rounded-md text-warning hover:bg-hover [&_svg]:size-3.5"
       >
@@ -76,7 +78,7 @@ export function SeveralAccountsMark({ onHubs }: { onHubs?: () => void }) {
         id={id}
         popover="auto"
         role="dialog"
-        aria-label="Several accounts"
+        aria-label={t("Several accounts")}
         className={`${menuPanel()} w-72 p-3 text-body`}
       >
         <SeveralAccountsNote

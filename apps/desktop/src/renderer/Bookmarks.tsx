@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   useEffect,
   useId,
@@ -243,8 +244,8 @@ export function BookmarkStar({ page }: { page?: Bookmark }) {
     <>
       <button
         type="button"
-        aria-label={found ? "Edit bookmark" : "Bookmark this page"}
-        title={found ? "Edit bookmark" : "Bookmark this page"}
+        aria-label={found ? t("Edit bookmark") : t("Bookmark this page")}
+        title={found ? t("Edit bookmark") : t("Bookmark this page")}
         aria-pressed={!!found}
         disabled={!page}
         popoverTarget={editorId}
@@ -256,7 +257,12 @@ export function BookmarkStar({ page }: { page?: Bookmark }) {
       {/* Outside the address bar's form, so Enter here doesn't open the address. */}
       {createPortal(
         <Themed>
-          <BookmarkEditor id={editorId} url={page?.url} title="Bookmark" align="end" />
+          <BookmarkEditor
+            id={editorId}
+            url={page?.url}
+            title={t("Bookmark", { context: "noun" })}
+            align="end"
+          />
         </Themed>,
         document.body,
       )}
@@ -313,7 +319,7 @@ function BookmarkEditor({
         >
           <p className="text-body font-medium">{title}</p>
           <label className="flex flex-col gap-1">
-            <span className="text-muted-foreground">Name</span>
+            <span className="text-muted-foreground">{t("Name")}</span>
             <input
               value={found.bookmark.title ?? ""}
               onChange={(e) =>
@@ -323,7 +329,7 @@ function BookmarkEditor({
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-muted-foreground">Folder</span>
+            <span className="text-muted-foreground">{t("Folder")}</span>
             <select
               value={found.folder ?? ""}
               onChange={(e) =>
@@ -333,7 +339,7 @@ function BookmarkEditor({
               }
               className="rounded-md bg-selected px-1.5 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <option value="">Bookmarks bar</option>
+              <option value="">{t("Bookmarks bar")}</option>
               {folderList(tree).map((f) => (
                 <option key={f.id} value={f.id}>
                   {" ".repeat(f.depth + 1)}
@@ -345,8 +351,8 @@ function BookmarkEditor({
           {adding ? (
             <input
               autoFocus
-              aria-label="New folder name"
-              placeholder="New folder name"
+              aria-label={t("New folder name")}
+              placeholder={t("New folder name")}
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
               onKeyDown={(e) => {
@@ -363,7 +369,7 @@ function BookmarkEditor({
               className="flex items-center gap-1.5 self-start text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
             >
               <CreateNewFolder aria-hidden />
-              New folder
+              {t("New folder")}
             </button>
           )}
           <div className="flex justify-end gap-1.5 pt-1">
@@ -375,13 +381,13 @@ function BookmarkEditor({
               }}
               className="rounded-md px-2.5 py-1 text-muted-foreground hover:bg-hover hover:text-foreground"
             >
-              Remove
+              {t("Remove")}
             </button>
             <button
               type="submit"
               className="rounded-md bg-accent px-2.5 py-1 font-medium text-accent-foreground"
             >
-              {adding ? "Add folder" : "Done"}
+              {adding ? t("Add folder") : t("Done")}
             </button>
           </div>
         </form>
@@ -407,7 +413,7 @@ function FolderEditor({
       id={id}
       popover="auto"
       role="dialog"
-      aria-label="Folder"
+      aria-label={t("Folder")}
       onToggle={(e) => {
         if (e.newState === "open") e.currentTarget.querySelector("input")?.select();
       }}
@@ -422,7 +428,7 @@ function FolderEditor({
           className="flex flex-col gap-2.5 text-body"
         >
           <label className="flex flex-col gap-1">
-            <span className="text-muted-foreground">Folder name</span>
+            <span className="text-muted-foreground">{t("Folder name")}</span>
             <input
               value={folder.title}
               onChange={(e) =>
@@ -440,13 +446,13 @@ function FolderEditor({
               }}
               className="rounded-md px-2.5 py-1 text-muted-foreground hover:bg-hover hover:text-foreground"
             >
-              Delete folder
+              {t("Delete folder")}
             </button>
             <button
               type="submit"
               className="rounded-md bg-accent px-2.5 py-1 font-medium text-accent-foreground"
             >
-              Done
+              {t("Done")}
             </button>
           </div>
         </form>
@@ -526,7 +532,7 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
       ?.showPopover(chip ? { source: chip } : undefined);
   };
   const addFolder = () => {
-    const [next, id] = withFolder(bookmarks.get(), "New folder");
+    const [next, id] = withFolder(bookmarks.get(), t("New folder"));
     bookmarks.set(next);
     // Once the new folder's chip is drawn, its name editor opens beside it.
     requestAnimationFrame(() => edit({ folder: id }));
@@ -535,7 +541,7 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
   return (
     <nav
       ref={bar}
-      aria-label="Bookmarks"
+      aria-label={t("Bookmarks")}
       onContextMenu={(e) => contextMenu(e, {})}
       className="relative flex h-7 shrink-0 items-center gap-0.5 px-2"
     >
@@ -569,8 +575,8 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
         <>
           <button
             type="button"
-            aria-label="More bookmarks"
-            title="More bookmarks"
+            aria-label={t("More bookmarks")}
+            title={t("More bookmarks")}
             aria-haspopup="menu"
             popoverTarget={moreId}
             className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
@@ -579,27 +585,27 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
           </button>
           <NodeMenu
             id={moreId}
-            label="More bookmarks"
+            label={t("More bookmarks")}
             align="end"
             nodes={tree.slice(fits)}
             onOpen={onOpen}
           />
         </>
       )}
-      <Menu id={menuId} label="Bookmarks bar" className="w-48 p-1">
+      <Menu id={menuId} label={t("Bookmarks bar")} className="w-48 p-1">
         {target.url && (
           <>
             <MenuButton icon={<Tab />} onClick={() => onOpen(target.url!, true)}>
-              Open in new tab
+              {t("Open in new tab")}
             </MenuButton>
             <MenuButton icon={<Edit />} onClick={() => edit({ url: target.url })}>
-              Edit…
+              {t("Edit…")}
             </MenuButton>
             <MenuButton
               icon={<Delete />}
               onClick={() => bookmarks.set(removedBookmark(bookmarks.get(), target.url!))}
             >
-              Remove
+              {t("Remove")}
             </MenuButton>
             <div role="separator" className="my-1 h-px bg-border" />
           </>
@@ -607,33 +613,35 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
         {target.folder && (
           <>
             <MenuButton icon={<Edit />} onClick={() => edit({ folder: target.folder })}>
-              Rename…
+              {t("Rename…")}
             </MenuButton>
             <MenuButton icon={<Delete />} onClick={() => deleteFolder(target.folder!)}>
-              Delete folder
+              {t("Delete folder")}
             </MenuButton>
             <div role="separator" className="my-1 h-px bg-border" />
           </>
         )}
         <MenuButton icon={<CreateNewFolder />} onClick={addFolder}>
-          Add folder
+          {t("Add folder")}
         </MenuButton>
       </Menu>
       {createPortal(
         <Themed>
-          <BookmarkEditor id={editorId} url={editing.url} title="Edit bookmark" />
+          <BookmarkEditor id={editorId} url={editing.url} title={t("Edit bookmark")} />
           <FolderEditor id={folderEditorId} folderId={editing.folder} onDelete={deleteFolder} />
           <ConfirmDialog
             ref={confirm}
-            title="Delete this folder?"
-            action="Delete folder"
+            title={t("Delete this folder?")}
+            action={t("Delete folder")}
             onConfirm={() => {
               if (deleting) bookmarks.set(removedFolder(bookmarks.get(), deleting.id));
               confirm.current?.close();
             }}
           >
-            Its {deleting?.count === 1 ? "bookmark goes" : `${deleting?.count} bookmarks go`} with
-            it.
+            {t("Its {{count}} bookmarks go with it.", {
+              count: deleting?.count,
+              defaultValue_one: "Its bookmark goes with it.",
+            })}
           </ConfirmDialog>
         </Themed>,
         document.body,
@@ -696,7 +704,7 @@ function NodeChip({
           className={chipClass}
         >
           <Folder aria-hidden className="size-3.5 shrink-0" />
-          <span className="truncate">{node.title || "Folder"}</span>
+          <span className="truncate">{node.title || t("Folder")}</span>
         </button>
         <NodeMenu id={menuId} label={node.title} nodes={node.children} onOpen={onOpen} />
       </>
@@ -737,11 +745,13 @@ function NodeMenu({
   return (
     <Menu
       id={id}
-      label={label || "Folder"}
+      label={label || t("Folder")}
       align={align}
       className="max-h-96 w-64 overflow-y-auto p-1"
     >
-      {nodes.length === 0 && <p className="px-2 py-1.5 text-body text-muted-foreground">Empty</p>}
+      {nodes.length === 0 && (
+        <p className="px-2 py-1.5 text-body text-muted-foreground">{t("Empty")}</p>
+      )}
       {nodes.map((node) =>
         isFolder(node) ? (
           <SubFolder key={node.id} folder={node} onOpen={onOpen} />
@@ -766,8 +776,8 @@ function NodeMenu({
             <span className="min-w-0 flex-1 truncate">{node.title || node.url}</span>
             <span
               role="button"
-              aria-label={`Remove ${node.title || node.url}`}
-              title="Remove"
+              aria-label={t("Remove {{name}}", { name: node.title || node.url })}
+              title={t("Remove")}
               onClick={(e) => {
                 e.stopPropagation();
                 bookmarks.set(removedBookmark(bookmarks.get(), node.url));
@@ -805,7 +815,7 @@ function SubFolder({
         className={menuItem}
       >
         <Folder aria-hidden />
-        <span className="min-w-0 flex-1 truncate">{folder.title || "Folder"}</span>
+        <span className="min-w-0 flex-1 truncate">{folder.title || t("Folder")}</span>
         <ChevronRight aria-hidden />
       </button>
       {createPortal(

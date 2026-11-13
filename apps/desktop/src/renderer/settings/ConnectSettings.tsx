@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   Check,
   ChevronDown,
@@ -37,6 +38,7 @@ import {
   type DeviceIcon as DeviceIconName,
   type KeyStanding,
 } from "../../preload/bridge";
+import { msg } from "../../i18n";
 import type { RelayHost } from "../../protocol/generated/protocol";
 import { NewComputerDialog } from "../AccountPrompts";
 import { CONNECT_NOTICE_TEXT, relayCapOf, setUpAgain } from "../alarms";
@@ -150,11 +152,12 @@ export function computerStatus(c: {
   canSignIn?: boolean;
   tailnetOnly?: boolean;
 }): ComputerStatus {
-  if (c.enabled === false) return { tone: "off", text: "Off, with no connection or threads here" };
+  if (c.enabled === false)
+    return { tone: "off", text: t("Off, with no connection or threads here") };
   const connected = c.state?.status === "connected";
   if (c.access && !connected) {
     const { step } = c.access;
-    const label = accessLabel(c) ?? "Connecting…";
+    const label = accessLabel(c) ?? t("Connecting…");
     // Under way with nothing for the user to do, it's only a state.
     if (step === "pairing" || step === "signingIn" || step === "offline")
       return { tone: "off", text: label };
@@ -163,7 +166,7 @@ export function computerStatus(c: {
       step === "confirm" || (step === "needsCode" && (c.access.offline || c.access.quiet));
     return {
       tone: waits ? "off" : "error",
-      text: "Not connected",
+      text: t("Not connected"),
       problem: label,
       ...(need && { need }),
     };
@@ -172,29 +175,29 @@ export function computerStatus(c: {
     c.kind === "ssh"
       ? `SSH · ${c.destination}`
       : c.kind === "lan"
-        ? "Same network"
+        ? t("Same network")
         : c.kind === "tailnet"
           ? "Tailscale"
           : reachOf(c.route);
-  const label = c.state ? statusLabel(c.state) : "Connecting…";
+  const label = c.state ? statusLabel(c.state) : t("Connecting…");
   // An account computer or a Tailscale device has no route to name until it connects.
   const text = connected || c.kind === "ssh" || c.kind === "lan" ? `${label} · ${how}` : label;
   if (c.fix === "install")
-    return { tone: "error", text, problem: "plxd isn't installed", need: "install" };
+    return { tone: "error", text, problem: t("plxd isn't installed"), need: "install" };
   if (c.fix === "update")
     return {
       tone: connected ? "warn" : "error",
       text,
-      problem: "plxd needs updating",
+      problem: t("plxd needs updating"),
       need: "update",
     };
   if (connected)
     return c.tailnetOnly
-      ? { tone: "warn", text, problem: "Only on Tailscale", need: "reach" }
+      ? { tone: "warn", text, problem: t("Only on Tailscale"), need: "reach" }
       : { tone: "on", text };
   if (c.state?.status === "failed" && !c.state.updating) {
     if (c.canSignIn)
-      return { tone: "error", text, problem: "Needs you to sign in", need: "signIn" };
+      return { tone: "error", text, problem: t("Needs you to sign in"), need: "signIn" };
     return {
       tone: c.state.retrying ? "warn" : "error",
       text,
@@ -270,17 +273,21 @@ export function uptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
   const hours = Math.floor((seconds % 86_400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  if (days) return `${days}d ${hours}h`;
-  if (hours) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
+  if (days) return t("{{days}}d {{hours}}h", { days, hours });
+  if (hours) return t("{{hours}}h {{minutes}}m", { hours, minutes });
+  return t("{{minutes}}m", { minutes });
 }
 
 /** What a computer's health says, in order. `here` leaves out how long it took to answer. */
 const healthFacts = (health: Health | undefined, here = false) => [
   health && !here && `${health.latency} ms`,
-  health && `up ${uptime(health.uptimeSeconds)}`,
-  health && `${health.runningAgents === 1 ? "1 agent" : `${health.runningAgents} agents`} running`,
-  health && health.store !== "ok" && `store ${health.store}`,
+  health && t("up {{time}}", { time: uptime(health.uptimeSeconds) }),
+  health &&
+    t("{{count}} agents running", {
+      count: health.runningAgents,
+      defaultValue_one: "{{count}} agent running",
+    }),
+  health && health.store !== "ok" && t("store {{state}}", { state: health.store }),
 ];
 
 /** A computer's facts on one line: `lead`, then its plxd and what its health says. */
@@ -367,10 +374,8 @@ function ComputerCard({
     routes === undefined
       ? undefined
       : routes === 0
-        ? "Details"
-        : routes === 1
-          ? "1 route"
-          : `${routes} routes`;
+        ? t("Details")
+        : t("{{count}} routes", { count: routes, defaultValue_one: "{{count}} route" });
   return (
     <li data-device={id} className={`${card} @container`}>
       {/* Wide: the name and summary, with the controls beside them. Narrow: the name and summary across
@@ -388,13 +393,13 @@ function ComputerCard({
         </div>
         <div className="col-start-2 col-end-4 row-start-3 mt-2 flex items-center gap-2 @md:col-start-3 @md:row-start-1 @md:row-end-3 @md:mt-0">
           {toggle}
-          <IconButton label={`${name} options`} popoverTarget={menu.state.id}>
+          <IconButton label={t("{{name}} options", { name })} popoverTarget={menu.state.id}>
             <Ellipsis aria-hidden />
           </IconButton>
           <Menu
             ref={menu.state.ref}
             id={menu.state.id}
-            label={`${name} options`}
+            label={t("{{name}} options", { name })}
             align="end"
             className="min-w-52 p-1"
             // Icon and Rename are off for a computer out of reach, and can't take the focus.
@@ -415,7 +420,15 @@ function ComputerCard({
                 <span aria-hidden> · </span>
                 <button
                   type="button"
-                  aria-label={routes ? `${count} to ${name}` : `${name} details`}
+                  aria-label={
+                    routes
+                      ? t("{{count}} routes to {{name}}", {
+                          count: routes,
+                          name,
+                          defaultValue_one: "{{count}} route to {{name}}",
+                        })
+                      : t("{{name}} details", { name })
+                  }
                   aria-expanded={!!open}
                   // Its routes are only there while open.
                   aria-controls={open ? detailsId : undefined}
@@ -476,7 +489,7 @@ function RemoveItem({ onClick }: { onClick: () => void }) {
       <div role="separator" className="my-1 border-t border-border first:hidden" />
       <button type="button" role="menuitem" className={`${menuItem} text-danger`} onClick={onClick}>
         <Trash2 aria-hidden />
-        Remove…
+        {t("Remove…")}
       </button>
     </>
   );
@@ -498,12 +511,13 @@ function RemoveDialog({
   return (
     <ConfirmDialog
       ref={ref}
-      title={`Remove ${name}?`}
-      action="Remove"
+      title={t("Remove {{name}}?", { name })}
+      action={t("Remove")}
       onConfirm={() => {
         ref.current?.close();
         void remove().then((failed) => {
-          if (failed) notify({ tone: "error", title: `Couldn't remove ${name}`, body: failed });
+          if (failed)
+            notify({ tone: "error", title: t("Couldn't remove {{name}}", { name }), body: failed });
         });
       }}
     >
@@ -514,11 +528,16 @@ function RemoveDialog({
 
 /** What removing a computer from this app alone does. */
 const removedHere = (name: string) =>
-  `Parallax here stops connecting to it, and its threads leave this sidebar. Nothing on ${name} changes.`;
+  t(
+    "Parallax here stops connecting to it, and its threads leave this sidebar. Nothing on {{name}} changes.",
+    { name },
+  );
 
 /** What removing a computer from the account does. */
-const REMOVED_FROM_ACCOUNT =
-  "It leaves your account, and none of your computers or devices reach it anymore. Its threads leave your sidebars. To add it again, run the setup on it from Add computer.";
+const removedFromAccount = () =>
+  t(
+    "It leaves your account, and none of your computers or devices reach it anymore. Its threads leave your sidebars. To add it again, run the setup on it from Add computer.",
+  );
 
 /**
  * A device's name and icon, as its card edits them: Icon and Rename for its menu, the form that
@@ -553,7 +572,10 @@ function useLook({
     if (failed)
       notify({
         tone: "error",
-        title: `Couldn't ${look.name === undefined ? "change" : "rename"} ${device.name}`,
+        title:
+          look.name === undefined
+            ? t("Couldn't change {{name}}", { name: device.name })
+            : t("Couldn't rename {{name}}", { name: device.name }),
         body: failed,
       });
     else setRenaming(false);
@@ -566,7 +588,7 @@ function useLook({
   return {
     form: renaming ? (
       <RenameForm
-        label="Device name"
+        label={t("Device name")}
         value={device.name}
         onSave={(name) => void save({ name })}
         onCancel={() => setRenaming(false)}
@@ -583,7 +605,7 @@ function useLook({
           className={`${menuItem} disabled:opacity-50`}
         >
           <DeviceIcon icon={device.icon} />
-          <span className="flex-1">Icon</span>
+          <span className="flex-1">{t("Icon")}</span>
           <ChevronRight aria-hidden className="text-faint-foreground" />
         </button>
         <button
@@ -595,7 +617,7 @@ function useLook({
           onClick={choose(() => setRenaming(true))}
         >
           <Pencil aria-hidden />
-          Rename
+          {t("Rename")}
         </button>
       </>
     ),
@@ -605,7 +627,7 @@ function useLook({
         id={iconsId}
         popover="auto"
         role="menu"
-        aria-label={`${device.name}'s icon`}
+        aria-label={t("{{name}}'s icon", { name: device.name })}
         className="inset-auto m-0 ml-1 min-w-48 rounded-lg border border-border bg-surface p-1 text-foreground shadow-composer [position-area:right_span-bottom] [position-try-fallbacks:flip-inline,flip-block]"
       >
         {DEVICE_ICONS.map((each) => (
@@ -618,8 +640,10 @@ function useLook({
             onClick={choose(() => void save({ icon: each }))}
           >
             <DeviceIcon icon={each} />
-            <span className="flex-1">{deviceIconNames[each]}</span>
-            {each === detected && <span className="text-meta text-faint-foreground">detected</span>}
+            <span className="flex-1">{t(deviceIconNames[each])}</span>
+            {each === detected && (
+              <span className="text-meta text-faint-foreground">{t("detected")}</span>
+            )}
             {each === device.icon && <Check aria-hidden />}
           </button>
         ))}
@@ -650,13 +674,13 @@ export function ThisComputerHeading({
       <div className="min-w-0 flex-1">
         {look.form ?? <h2 className="truncate text-reading font-semibold">{host.name}</h2>}
       </div>
-      <IconButton label={`${host.name} options`} popoverTarget={menu.id}>
+      <IconButton label={t("{{name}} options", { name: host.name })} popoverTarget={menu.id}>
         <Ellipsis aria-hidden />
       </IconButton>
       <Menu
         ref={menu.ref}
         id={menu.id}
-        label={`${host.name} options`}
+        label={t("{{name}} options", { name: host.name })}
         align="end"
         className="min-w-52 p-1"
       >
@@ -678,7 +702,7 @@ export function VersionRow() {
   return (
     <div className={`${card} mb-10`}>
       <AccessRow
-        title="Version"
+        title={t("Version")}
         description={version ? `Parallax ${version}` : "Parallax"}
         status={
           state?.status === "failed" &&
@@ -723,22 +747,23 @@ function DeviceCard({
     setReaching(true);
     const failed = await window.parallax.turnOnReach(device.id);
     setReaching(false);
-    if (failed) notify({ tone: "error", title: `Couldn't turn on Parallax Connect`, body: failed });
+    if (failed)
+      notify({ tone: "error", title: t("Couldn't turn on Parallax Connect"), body: failed });
     else setTailnetOnly(false);
   };
   const menu = useRowMenu();
   // Brings back the routes removed here and the default order (0091).
   const resetRoutes = async () => {
     const failed = await window.parallax.editRoutes(device.id, { reset: true });
-    if (failed) notify({ tone: "error", title: "Couldn't reset routes", body: failed });
+    if (failed) notify({ tone: "error", title: t("Couldn't reset routes"), body: failed });
   };
   const look = useLook({
     device,
     detected: device.detected,
     editable: connected,
     unreachable: enabled
-      ? `Parallax can't reach ${device.name} right now.`
-      : `Turn ${device.name} on to change it.`,
+      ? t("Parallax can't reach {{name}} right now.", { name: device.name })
+      : t("Turn {{name}} on to change it.", { name: device.name }),
     menu,
   });
   const removeDialog = useRef<HTMLDialogElement>(null);
@@ -766,18 +791,20 @@ function DeviceCard({
         status.need === "code" || status.need === "compare" ? (
           <button type="button" onClick={onEnterCode} className={outlineButton}>
             <KeyRound aria-hidden />
-            {status.need === "code" ? "Enter code" : "Compare code"}
+            {status.need === "code" ? t("Enter code") : t("Compare code")}
           </button>
         ) : status.need === "reach" ? (
           <button
             type="button"
             disabled={reaching}
-            title="Parallax is moving off Tailscale-only connections. Parallax Connect keeps this computer connected through your Parallax account."
+            title={t(
+              "Parallax is moving off Tailscale-only connections. Parallax Connect keeps this computer connected through your Parallax account.",
+            )}
             onClick={() => void reach()}
             className={outlineButton}
           >
             <Globe aria-hidden />
-            {reaching ? "Turning on…" : "Turn on Parallax Connect"}
+            {reaching ? t("Turning on…") : t("Turn on Parallax Connect")}
           </button>
         ) : status.need === "askAgain" ? (
           <button
@@ -786,13 +813,13 @@ function DeviceCard({
             className={outlineButton}
           >
             <RefreshCw aria-hidden />
-            Ask again
+            {t("Ask again")}
           </button>
         ) : undefined
       }
       toggle={
         <Switch
-          label={`Use ${device.name} in Parallax`}
+          label={t("Use {{name}} in Parallax", { name: device.name })}
           checked={enabled}
           onChange={(on) => void window.parallax.setDeviceEnabled(device.id, on)}
         />
@@ -811,7 +838,7 @@ function DeviceCard({
                 onClick={menu.choose(() => void resetRoutes())}
               >
                 <RotateCcw aria-hidden />
-                Reset routes
+                {t("Reset routes")}
               </button>
             )}
             <RemoveItem onClick={menu.choose(() => removeDialog.current?.showModal())} />
@@ -822,7 +849,7 @@ function DeviceCard({
         <>
           {look.icons}
           <RemoveDialog ref={removeDialog} name={device.name} remove={onRemove}>
-            {kind === "account" ? REMOVED_FROM_ACCOUNT : removedHere(device.name)}
+            {kind === "account" ? removedFromAccount() : removedHere(device.name)}
           </RemoveDialog>
         </>
       }
@@ -877,7 +904,10 @@ function SavedHostCard({
     if (failed)
       notify({
         tone: "error",
-        title: `Couldn't ${fix === "update" ? "update" : "install"} plxd on ${host.name}`,
+        title:
+          fix === "update"
+            ? t("Couldn't update plxd on {{name}}", { name: host.name })
+            : t("Couldn't install plxd on {{name}}", { name: host.name }),
         body: failed,
       });
   };
@@ -910,7 +940,7 @@ function SavedHostCard({
           ? {
               tone: "warn",
               text: status.text,
-              problem: "Updating restarts plxd there, which stops its running agents.",
+              problem: t("Updating restarts plxd there, which stops its running agents."),
             }
           : status
       }
@@ -922,7 +952,7 @@ function SavedHostCard({
         confirming ? (
           <>
             <button type="button" className={primaryButton} onClick={() => void install()}>
-              Update plxd
+              {t("Update plxd")}
             </button>
             <button
               type="button"
@@ -930,7 +960,7 @@ function SavedHostCard({
               className={quietButton}
               onClick={() => setConfirming(false)}
             >
-              Cancel
+              {t("Cancel")}
             </button>
           </>
         ) : status.need === "install" || status.need === "update" ? (
@@ -942,15 +972,15 @@ function SavedHostCard({
           >
             {installing
               ? status.need === "update"
-                ? "Updating…"
-                : "Installing…"
+                ? t("Updating…")
+                : t("Installing…")
               : status.need === "install"
-                ? "Install plxd"
-                : "Update plxd"}
+                ? t("Install plxd")
+                : t("Update plxd")}
           </button>
         ) : status.need === "signIn" && !signingIn ? (
           <button type="button" className={outlineButton} onClick={() => setSigningIn(true)}>
-            Sign in
+            {t("Sign in")}
           </button>
         ) : undefined
       }
@@ -966,7 +996,7 @@ function SavedHostCard({
                 onClick={menu.choose(onEdit)}
               >
                 <Pencil aria-hidden />
-                Edit
+                {t("Edit")}
               </button>
             )}
             <RemoveItem onClick={menu.choose(() => removeDialog.current?.showModal())} />
@@ -1011,8 +1041,15 @@ function SavedHostCard({
       <Facts facts={factsOf([health?.os, health?.arch], state, health)}>
         {fix && (
           <p>
-            {fix === "install" ? "Install" : "Update"} downloads plxd {appVersion} there from
-            GitHub, checks its SHA256, and puts it in ~/.parallax-plxd.
+            {fix === "install"
+              ? t(
+                  "Install downloads plxd {{version}} there from GitHub, checks its SHA256, and puts it in ~/.parallax-plxd.",
+                  { version: appVersion },
+                )
+              : t(
+                  "Update downloads plxd {{version}} there from GitHub, checks its SHA256, and puts it in ~/.parallax-plxd.",
+                  { version: appVersion },
+                )}
           </p>
         )}
       </Facts>
@@ -1032,7 +1069,7 @@ function AccountOnlyCard({
   computer: RelayHost;
   remove: (hostId: string) => Promise<string | undefined>;
 }) {
-  const name = computer.name || "Unnamed computer";
+  const name = computer.name || t("Unnamed computer");
   const menu = useRowMenu();
   const removeDialog = useRef<HTMLDialogElement>(null);
   return (
@@ -1042,7 +1079,9 @@ function AccountOnlyCard({
       icon={<DeviceIcon icon={iconFor(computer.name)} />}
       status={{
         tone: computer.online ? "on" : "off",
-        text: `On your account · ${computer.online ? "On Parallax Connect" : "Not connected"}`,
+        text: computer.online
+          ? t("On your account · On Parallax Connect")
+          : t("On your account · Not connected"),
       }}
       menu={{
         state: menu,
@@ -1050,7 +1089,7 @@ function AccountOnlyCard({
       }}
       after={
         <RemoveDialog ref={removeDialog} name={name} remove={() => remove(computer.hostId)}>
-          {REMOVED_FROM_ACCOUNT}
+          {removedFromAccount()}
         </RemoveDialog>
       }
     />
@@ -1059,18 +1098,23 @@ function AccountOnlyCard({
 
 const KEY_STANDING_TEXT: Record<KeyStanding, { title: string; body: string }> = {
   removed: {
-    title: "This computer was removed",
-    body: "Your computers refuse its key for good. To use them from here again, start over with a new key.",
+    title: msg("This computer was removed"),
+    body: msg(
+      "Your computers refuse its key for good. To use them from here again, start over with a new key.",
+    ),
   },
   readOnly: {
-    title: "This computer is read-only",
-    body: "It reads threads and can't change anything, and its key stays that way. For full access, start over with a new key.",
+    title: msg("This computer is read-only"),
+    body: msg(
+      "It reads threads and can't change anything, and its key stays that way. For full access, start over with a new key.",
+    ),
   },
 };
 
 /** What the second click on Start over does, and what it doesn't. */
-const START_OVER_CONFIRM =
-  "This deletes this computer's key and its sessions on your account's computers, and that key can't return. Nothing connects until you allow this computer on another device, or with plx connect approve on one of your computers. It shows there as a new device, and allowing it gives full access.";
+const START_OVER_CONFIRM = msg(
+  "This deletes this computer's key and its sessions on your account's computers, and that key can't return. Nothing connects until you allow this computer on another device, or with plx connect approve on one of your computers. It shows there as a new device, and allowing it gives full access.",
+);
 
 /**
  * This computer's account key was removed or made read-only on the user's computers, so it starts
@@ -1082,20 +1126,20 @@ function StartOverRow({ standing }: { standing: KeyStanding }) {
   const startOver = async () => {
     setConfirming(false);
     const failed = await window.parallax.startOver();
-    if (failed) notify({ tone: "error", title: "Couldn't start over", body: failed });
+    if (failed) notify({ tone: "error", title: t("Couldn't start over"), body: failed });
   };
   const { title, body } = KEY_STANDING_TEXT[standing];
   return (
-    <NoticeRow title={title} body={confirming ? START_OVER_CONFIRM : body}>
+    <NoticeRow title={t(title)} body={t(confirming ? START_OVER_CONFIRM : body)}>
       {confirming ? (
         <ConfirmRemove
-          label="Start over"
+          label={t("Start over")}
           onRemove={() => void startOver()}
           onCancel={() => setConfirming(false)}
         />
       ) : (
         <button type="button" onClick={() => setConfirming(true)} className={quietButton}>
-          Start over with a new key
+          {t("Start over with a new key")}
         </button>
       )}
     </NoticeRow>
@@ -1130,9 +1174,12 @@ export function ThisComputerNotices() {
   return (
     <div className={`${card} mb-6`}>
       {notice === "notListed" && (
-        <NoticeRow {...CONNECT_NOTICE_TEXT.notListed}>
+        <NoticeRow
+          title={t(CONNECT_NOTICE_TEXT.notListed.title)}
+          body={t(CONNECT_NOTICE_TEXT.notListed.body)}
+        >
           <button type="button" onClick={() => void setUpAgain()} className={quietButton}>
-            Set up again
+            {t("Set up again")}
           </button>
         </NoticeRow>
       )}
@@ -1252,7 +1299,7 @@ export function Computers({
   return (
     <>
       <PageTitle
-        title="Computers"
+        title={t("Computers")}
         action={
           <>
             <button
@@ -1262,59 +1309,76 @@ export function Computers({
               className={`${primaryButton} flex items-center gap-1 whitespace-nowrap [&_svg]:size-3.5`}
             >
               <Plus aria-hidden />
-              Add computer
+              {t("Add computer")}
             </button>
             <Menu
               ref={addMenu.ref}
               id={addMenu.id}
-              label="Add computer"
+              label={t("Add computer")}
               align="end"
               className="w-80 p-1"
             >
               {signedOut ? (
                 <AddItem
                   icon={<ParallaxMark className="size-[1.125rem]!" />}
-                  title={signingIn ? "Waiting for your browser…" : "Sign in to Parallax Connect"}
-                  description="Then add any computer on your account, from anywhere."
+                  title={
+                    signingIn ? t("Waiting for your browser…") : t("Sign in to Parallax Connect")
+                  }
+                  description={t("Then add any computer on your account, from anywhere.")}
                   disabled={signingIn}
                   onClick={addMenu.choose(onSignIn)}
                 />
               ) : (
                 <AddItem
                   icon={<ParallaxMark className="size-[1.125rem]!" />}
-                  title="Parallax Connect"
-                  description="For a computer signed in to your Parallax account. Works from anywhere."
+                  title={t("Parallax Connect")}
+                  description={t(
+                    "For a computer signed in to your Parallax account. Works from anywhere.",
+                  )}
                   disabled={!connect}
                   onClick={addMenu.choose(() => setAdding("account"))}
                 />
               )}
               <AddItem
                 icon={<Wifi aria-hidden />}
-                title="On this network"
-                description="For a computer on the same network, with no account. You pair it with a one-time code."
+                title={t("On this network")}
+                description={t(
+                  "For a computer on the same network, with no account. You pair it with a one-time code.",
+                )}
                 onClick={addMenu.choose(() => setAdding("lan"))}
               />
               <AddItem
                 icon={<Terminal aria-hidden />}
-                title="Over SSH"
-                description="For a server or VM you already reach with ssh. Parallax can install what it needs there."
+                title={t("Over SSH")}
+                description={t(
+                  "For a server or VM you already reach with ssh. Parallax can install what it needs there.",
+                )}
                 onClick={addMenu.choose(() => setAdding("ssh"))}
               />
             </Menu>
           </>
         }
       >
-        The other computers your agents run on from this app.
+        {t("The other computers your agents run on from this app.")}
       </PageTitle>
       {(standing || outage || capped.length > 0) && (
         <div className={`${card} mb-3`}>
           {standing && <StartOverRow standing={standing} />}
-          {outage && <NoticeRow {...CONNECT_NOTICE_TEXT[outage]} />}
+          {outage && (
+            <NoticeRow
+              title={t(CONNECT_NOTICE_TEXT[outage].title)}
+              body={t(CONNECT_NOTICE_TEXT[outage].body)}
+            />
+          )}
           <CapNotices hosts={capped} />
         </div>
       )}
       {cards.length ? (
-        <ul aria-label="Computers" data-setting="computers" className="mb-10 flex flex-col gap-3">
+        <ul
+          aria-label={t("Computers")}
+          data-setting="computers"
+          className="mb-10 flex flex-col gap-3"
+        >
           {cards.map((c) => c.card)}
         </ul>
       ) : (
@@ -1322,7 +1386,7 @@ export function Computers({
           data-setting="computers"
           className={`${card} mb-10 px-4 py-3 text-body text-muted-foreground`}
         >
-          No other computers yet. Add one to run agents on it from here.
+          {t("No other computers yet. Add one to run agents on it from here.")}
         </p>
       )}
       {adding === "account" && connect && (

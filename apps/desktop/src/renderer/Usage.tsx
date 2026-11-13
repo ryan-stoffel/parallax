@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useState } from "react";
 
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
@@ -9,12 +10,20 @@ import { capitalize, dollars, duration } from "./usageStats";
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
 export type Period = "today" | "week";
 
-const periodWords: Record<Period, string> = { today: "today", week: "this week" };
-
-/** The periods as a segmented control's options. */
+/** The periods as a segmented control's options, each name read in the current language. */
 export const periods: { value: Period; name: string }[] = [
-  { value: "today", name: "Today" },
-  { value: "week", name: "This week" },
+  {
+    value: "today",
+    get name() {
+      return t("Today");
+    },
+  },
+  {
+    value: "week",
+    get name() {
+      return t("This week");
+    },
+  },
 ];
 
 /**
@@ -117,17 +126,35 @@ const tokensIn = (p: UsagePeriod) =>
 
 /** "1.2M tokens today, about $3.40". The cost is left out when the vendor reports none. */
 export function describeUsage(spent: UsagePeriod | undefined, period: Period): string {
-  const when = periodWords[period];
-  if (!spent || tokensIn(spent) === 0) return `No usage ${when}`;
+  const today = period === "today";
+  if (!spent || tokensIn(spent) === 0) return today ? t("No usage today") : t("No usage this week");
   const micros = spent.costUsdMicros;
-  const cost =
-    micros === undefined ? "" : micros < 5000 ? ", under $0.01" : `, about ${dollars(micros)}`;
-  return `${compact.format(tokensIn(spent))} tokens ${when}${cost}`;
+  const tokens = compact.format(tokensIn(spent));
+  if (micros === undefined)
+    return today
+      ? t("{{tokens}} tokens today", { tokens })
+      : t("{{tokens}} tokens this week", { tokens });
+  if (micros < 5000)
+    return today
+      ? t("{{tokens}} tokens today, under $0.01", { tokens })
+      : t("{{tokens}} tokens this week, under $0.01", { tokens });
+  const cost = dollars(micros);
+  return today
+    ? t("{{tokens}} tokens today, about {{cost}}", { tokens, cost })
+    : t("{{tokens}} tokens this week, about {{cost}}", { tokens, cost });
 }
 
 function tokenBreakdown(p: UsagePeriod): string {
   const f = (n: number) => compact.format(n);
-  return `${f(p.inputTokens)} input · ${f(p.outputTokens)} output · ${f(p.cacheReadTokens)} cache read · ${f(p.cacheWriteTokens)} cache write`;
+  return t(
+    "{{input}} input · {{output}} output · {{cacheRead}} cache read · {{cacheWrite}} cache write",
+    {
+      input: f(p.inputTokens),
+      output: f(p.outputTokens),
+      cacheRead: f(p.cacheReadTokens),
+      cacheWrite: f(p.cacheWriteTokens),
+    },
+  );
 }
 
 /**
@@ -141,25 +168,29 @@ export function describeLimit(
 ): { text: string; used?: number } {
   const name = limitName(limit.window);
   const resets = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
-  if (resets !== undefined && resets <= now) return { text: `${name} has reset` };
+  if (resets !== undefined && resets <= now) return { text: t("{{name}} has reset", { name }) };
   const used =
     limit.usedPercent === undefined ? undefined : Math.min(100, Math.max(0, limit.usedPercent));
   let text =
     used === undefined
       ? name
       : used >= 100
-        ? `${name} reached`
-        : `${name} · ${Math.floor(used)}% used`;
-  if (resets !== undefined) text += ` · resets in ${duration(resets - now)}`;
+        ? t("{{name}} reached", { name })
+        : t("{{name}} · {{used}}% used", { name, used: Math.floor(used) });
+  if (resets !== undefined)
+    text = t("{{text}} · resets in {{duration}}", { text, duration: duration(resets - now) });
   return { text, used };
 }
 
 /** A vendor's window name, such as Claude's `five_hour` or `seven_day_opus`, in plain words. */
 export function limitName(window: string): string {
-  if (window === "five_hour") return "5-hour limit";
+  if (window === "five_hour") return t("5-hour limit");
   const weekly = /^seven_day(?:_(.+))?$/.exec(window);
-  if (weekly) return weekly[1] ? `Weekly ${capitalize(weekly[1])} limit` : "Weekly limit";
-  return `${capitalize(window)} limit`;
+  if (weekly)
+    return weekly[1]
+      ? t("Weekly {{name}} limit", { name: capitalize(weekly[1]) })
+      : t("Weekly limit");
+  return t("{{name}} limit", { name: capitalize(window) });
 }
 
 const at = (iso: string) =>
@@ -171,6 +202,8 @@ const at = (iso: string) =>
 
 /** When a limit resets and when plxd heard about it, for a tooltip. */
 export function limitDetails(limit: UsageLimitWindow): string {
-  const resets = limit.resetsAt ? `Resets ${at(limit.resetsAt)}. ` : "";
-  return `${resets}Reported ${at(limit.capturedAt)}.`;
+  const reported = at(limit.capturedAt);
+  return limit.resetsAt
+    ? t("Resets {{resets}}. Reported {{reported}}.", { resets: at(limit.resetsAt), reported })
+    : t("Reported {{reported}}.", { reported });
 }

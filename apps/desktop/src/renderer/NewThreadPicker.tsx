@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Plus, Search, SlidersHorizontal } from "lucide-react";
 import {
   useEffect,
@@ -10,6 +11,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
+import { msg } from "../i18n";
 import type { Repo } from "../protocol/generated/protocol";
 import { close, Footer, navigate } from "./AddDialog";
 import { pickerPrefs, setPickerPrefs, type PickerPrefs } from "./prefs";
@@ -46,14 +48,14 @@ export type PickerKind = "thread" | "orchestrator";
 export type NewThreadPickerHandle = { open: (kind?: PickerKind) => void };
 
 const kinds: { value: PickerKind; name: string }[] = [
-  { value: "thread", name: "Thread" },
-  { value: "orchestrator", name: "Orchestrator" },
+  { value: "thread", name: msg("Thread") },
+  { value: "orchestrator", name: msg("Orchestrator") },
 ];
 
 const orders: { value: PickerPrefs["order"]; label: string }[] = [
-  { value: "recent", label: "Recently used" },
-  { value: "name", label: "Name" },
-  { value: "added", label: "Date added" },
+  { value: "recent", label: msg("Recently used") },
+  { value: "name", label: msg("Name") },
+  { value: "added", label: msg("Date added") },
 ];
 
 /** How many rows Page Up and Page Down move. */
@@ -193,7 +195,7 @@ export function NewThreadPicker({
             ? [
                 {
                   value: noRepo,
-                  name: "No repo",
+                  name: t("No repo"),
                   icon: <RepoIcon repo={undefined} />,
                   pick: () => onPick(noRepo),
                 },
@@ -207,13 +209,13 @@ export function NewThreadPicker({
         : [
             {
               value: "orchestrator:new",
-              name: "New orchestrator thread",
+              name: t("New orchestrator thread"),
               icon: (
                 <span className="grid size-4 place-items-center text-muted-foreground">
                   <Plus className="size-4" />
                 </span>
               ),
-              hint: "A thread that plans the work and hands it to other threads",
+              hint: t("A thread that plans the work and hands it to other threads"),
               pick: () => onNewOrchestrator?.(),
             },
           ];
@@ -290,7 +292,7 @@ export function NewThreadPicker({
   return (
     <dialog
       ref={dialog}
-      aria-label="New thread in"
+      aria-label={t("New thread in")}
       onClose={() => {
         setQuery("");
         setActive(0);
@@ -354,8 +356,8 @@ export function NewThreadPicker({
             aria-expanded
             aria-controls={listId}
             aria-activedescendant={current && `${listId}-${current.value}`}
-            aria-label="Search repositories and orchestrator threads"
-            placeholder="Search…"
+            aria-label={t("Search repositories and orchestrator threads")}
+            placeholder={t("Search…")}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -364,7 +366,12 @@ export function NewThreadPicker({
             className="min-w-0 flex-1 bg-transparent text-reading placeholder:text-faint-foreground focus-visible:outline-none"
           />
           {onNewOrchestrator && (
-            <Segmented label="Start" options={kinds} value={kind} onChange={switchKind} />
+            <Segmented
+              label={t("Start")}
+              options={kinds.map((k) => ({ ...k, name: t(k.name) }))}
+              value={kind}
+              onChange={switchKind}
+            />
           )}
         </div>
         <div
@@ -372,33 +379,44 @@ export function NewThreadPicker({
           // Clears the sticky label above a row and the padding below it.
           className="max-h-[50vh] scroll-pt-8 scroll-pb-2 overflow-y-auto px-2 pb-2"
         >
-          <div id={listId} role="listbox" aria-label="Where it starts">
+          <div id={listId} role="listbox" aria-label={t("Where it starts")}>
             {shownRepos.length > 0 && (
-              <Section label={kind === "thread" ? "Repositories" : "New orchestrator in"}>
+              <Section label={kind === "thread" ? t("Repositories") : t("New orchestrator in")}>
                 {shownRepos.map((row) => option(row))}
               </Section>
             )}
             {shownOrchestrators.length > 0 && (
-              <Section label={kind === "thread" ? "Orchestrator threads" : "Continue"}>
+              <Section
+                label={
+                  kind === "thread"
+                    ? t("Orchestrator threads")
+                    : t("Continue", { context: "orchestrator threads to resume" })
+                }
+              >
                 {shownOrchestrators.map((row) => option(row))}
               </Section>
             )}
           </div>
           {shown.length === 0 && (
-            <p className="px-2.5 pt-3 pb-1 text-body text-faint-foreground">Nothing matches</p>
+            <p className="px-2.5 pt-3 pb-1 text-body text-faint-foreground">
+              {t("Nothing matches")}
+            </p>
           )}
         </div>
         <Footer
           keys={[
-            [navigate[0], "Move"],
-            ["Enter", "Pick"],
+            [navigate[0], t("Move")],
+            ["Enter", t("Pick")],
             ...(onNewOrchestrator
-              ? ([["Tab", kind === "thread" ? "Orchestrator" : "Thread"]] as [ReactNode, string][])
+              ? ([["Tab", kind === "thread" ? t("Orchestrator") : t("Thread")]] as [
+                  ReactNode,
+                  string,
+                ][])
               : []),
             close,
           ]}
         >
-          <IconButton label="Picker options" popoverTarget={menuId} className="ml-auto">
+          <IconButton label={t("Picker options")} popoverTarget={menuId} className="ml-auto">
             <SlidersHorizontal />
           </IconButton>
         </Footer>
@@ -406,17 +424,17 @@ export function NewThreadPicker({
       {/* Outside the form, so its keys never move the list or pick a row. */}
       <Menu
         id={menuId}
-        label="Picker options"
+        label={t("Picker options")}
         align="end"
         focus='[aria-checked="true"]'
         className="w-56"
         onClose={() => search.current?.focus()}
       >
-        <div className={menuHeading}>Sort repositories by</div>
+        <div className={menuHeading}>{t("Sort repositories by")}</div>
         {orders.map((o) => (
           <MenuOption
             key={o.value}
-            option={{ value: o.value, label: o.label }}
+            option={{ value: o.value, label: t(o.label) }}
             checked={prefs.order === o.value}
             onClick={() => setPickerPrefs({ order: o.value })}
           />
@@ -425,14 +443,14 @@ export function NewThreadPicker({
         <ToolbarMenuRow
           icon={null}
           className="px-2!"
-          label="Compact rows"
+          label={t("Compact rows")}
           checked={prefs.compact}
           onClick={() => setPickerPrefs({ compact: !prefs.compact })}
         />
         <ToolbarMenuRow
           icon={null}
           className="px-2!"
-          label="Orchestrators under Thread"
+          label={t("Orchestrators under Thread")}
           checked={prefs.orchestrators}
           onClick={() => setPickerPrefs({ orchestrators: !prefs.orchestrators })}
         />

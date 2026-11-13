@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronDown } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -59,7 +60,7 @@ export function PromptRail({
       className="absolute top-1/2 left-1 z-10 flex max-h-[70%] -translate-y-1/2"
     >
       <nav
-        aria-label="Prompts"
+        aria-label={t("Prompts")}
         onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setShown(undefined)}
         onScroll={() => setShown(undefined)}
         className="flex flex-col overflow-y-auto"
@@ -68,7 +69,7 @@ export function PromptRail({
           <button
             key={p.index}
             type="button"
-            aria-label={`Go to prompt ${at + 1}: ${p.text}`}
+            aria-label={t("Go to prompt {{number}}: {{text}}", { number: at + 1, text: p.text })}
             aria-current={at === current ? "true" : undefined}
             // Its card stands in for the app's tooltip.
             data-tooltip="off"
@@ -113,7 +114,7 @@ export function ScrollToEnd({ onClick, bottom = 0 }: { onClick: () => void; bott
       className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-surface py-1.5 pr-3.5 pl-2.5 text-body text-muted-foreground shadow-composer hover:text-foreground [&_svg]:size-4"
     >
       <ChevronDown aria-hidden />
-      Scroll to end
+      {t("Scroll to end")}
     </button>
   );
 }

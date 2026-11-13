@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -134,7 +135,9 @@ export function FileCard({
       {progress !== undefined && (
         <span
           role="progressbar"
-          aria-label={failed ? `${name} couldn't be sent` : `Sending ${name}`}
+          aria-label={
+            failed ? t("{{name}} couldn't be sent", { name }) : t("Sending {{name}}", { name })
+          }
           aria-valuenow={Math.round(progress * 100)}
           className="absolute inset-x-0 bottom-0 h-1 bg-selected"
         >
@@ -147,7 +150,7 @@ export function FileCard({
       {onRemove && (
         <button
           type="button"
-          aria-label={`Remove ${name}`}
+          aria-label={t("Remove {{name}}", { name })}
           title={name}
           onClick={onRemove}
           className="absolute top-1 right-1 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground opacity-0 shadow-sm group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 disabled:hidden"
