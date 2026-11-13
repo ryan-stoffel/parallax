@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallax</title>
+<meta name="description" content="Run coding agents on computers you own, and check on them from anywhere.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3CclipPath id='c'%3E%3Ccircle cx='9.5' cy='9.5' r='7'/%3E%3C/clipPath%3E%3Ccircle cx='9.5' cy='9.5' r='7' fill='%232b5cff'/%3E%3Ccircle cx='14.5' cy='14.5' r='7' fill='%23ff4a1f'/%3E%3Ccircle cx='14.5' cy='14.5' r='7' clip-path='url(%23c)' fill='%23e4e4e7'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+<header>
+<svg viewBox="0 0 24 24" aria-hidden="true"><clipPath id="overlap"><circle cx="9.5" cy="9.5" r="7"/></clipPath><circle cx="9.5" cy="9.5" r="7" fill="#2b5cff"/><circle cx="14.5" cy="14.5" r="7" fill="#ff4a1f"/><circle cx="14.5" cy="14.5" r="7" clip-path="url(#overlap)" fill="var(--overlap)"/></svg>
+<a href="/">Parallax</a>
+</header>
+
+<h1>Run coding agents on computers you own, and check on them from anywhere.</h1>
+<p>Parallax is an open-source desktop app for the coding agents you already pay for, such as Claude Code, Codex, and Cursor. The agents run in <code>plxd</code>, the Parallax daemon, on your own computers, and Parallax Connect lets every device signed in to your Parallax account reach them.</p>
+
+<h2>Add a computer</h2>
+<p>Run this on the computer you want to add. It needs Node.js 20 or newer:</p>
+<pre><code>npx plx-cli connect</code></pre>
+<p>In Windows PowerShell, use <code>npx.cmd plx-cli connect</code>.</p>
+<p>With no Node.js on the computer, these commands bring it along.</p>
+<p>macOS or Linux:</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/connect.sh | sh -s -- --channel nightly</code></pre>
+<p>Windows:</p>
+<pre><code>powershell -c "irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/connect.ps1 | iex; Connect-Parallax --channel nightly"</code></pre>
+
+<nav>
+<a href="https://github.com/ryan-stoffel/parallax">GitHub</a>
+<a href="https://github.com/ryan-stoffel/parallax/blob/develop/docs/connect/README.md">Docs</a>
+<a href="https://github.com/ryan-stoffel/parallax/releases">Releases</a>
+<a href="/privacy">Privacy</a>
+</nav>
+</main>
+</body>
+</html>
