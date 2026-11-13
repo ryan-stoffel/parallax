@@ -21,6 +21,9 @@ export default defineConfig({
           CLERK_CLIENT_IDS: "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq",
           CLERK_JWKS: JSON.stringify({ keys: [{ ...publicKey.export({ format: "jwk" }), kid, alg: "RS256" }] }),
           TEST_CLERK_KEY: JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }),
+          // Production turns spare placement on (PLX-1544). Tests keep it off, and the placement
+          // tests turn it on themselves.
+          SPARE_PLACEMENT_TRIES: "0",
         },
       },
     }),
