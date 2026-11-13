@@ -1444,8 +1444,11 @@ export function App() {
     openPr(url);
     details.close();
   };
+  // A Project's page, which New thread in a Project opens, has no Thread details.
+  const projectPage = selection.kind === "new" && !!group.project;
   // Thread details for the open thread, inside its tile's card in every mode, so it's part of the
-  // thread and changing mode keeps its dialogs and work under way.
+  // thread and changing mode keeps its dialogs and work under way. A thread with no repository of
+  // the user's, in No repo or a Project, has no Git: its scratch branch means nothing to the user.
   const threadDetails = (mode: ComponentProps<typeof ThreadDetails>["mode"]) => (
     <ThreadDetails
       key={panelKey}
@@ -1453,6 +1456,7 @@ export function App() {
       host={host}
       folder={folder?.path === "~" ? undefined : folder?.path}
       worktree={
+        !repoless(group) &&
         !!threadRun?.worktreePath &&
         threadRun.worktreePath !== threads.state.repos.find((repo) => repo.id === group.id)?.path
       }
@@ -1467,9 +1471,7 @@ export function App() {
           : undefined
       }
       git={
-        selection.kind === "thread" ||
-        agent ||
-        (selection.kind === "new" && !repoless(group) && !group.project)
+        agent || ((selection.kind === "thread" || selection.kind === "new") && !repoless(group))
           ? {
               hostId: host.id,
               // An orchestrator's child thread has one too, as its composer's tab had.
@@ -1561,7 +1563,7 @@ export function App() {
           {workspace.maximized ? <Minimize2 /> : <Maximize2 />}
         </IconButton>
       )}
-      {!group.project && (
+      {!projectPage && (
         <ThreadDetailsButton open={details.mode !== "hidden"} onToggle={() => details.toggle()} />
       )}
       {folder && (
@@ -2021,7 +2023,7 @@ export function App() {
                             placeView(state, drop.hostId, view, paneId, before),
                           );
                         }}
-                        details={threadDetails(group.project ? "hidden" : details.mode)}
+                        details={threadDetails(projectPage ? "hidden" : details.mode)}
                         // A tab anywhere, or a sidebar thread not over a composer, which takes it to
                         // attach (PLX-378).
                         drop={{
