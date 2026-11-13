@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 
-import { diffRows } from "./pullRequestLogic";
+import type { PrReviewThread } from "../../desktop/src/protocol/generated/protocol";
+import { diffRows, lineAt, rowOf, threadsAt } from "./pullRequestLogic";
 
 test("a diff splits into files, hunks, and numbered lines", () => {
   const diff = [
@@ -29,4 +30,37 @@ test("a diff splits into files, hunks, and numbered lines", () => {
     { kind: "hunk", text: "@@ -0,0 +1 @@" },
     { kind: "add", text: "hello", line: 1 },
   ]);
+});
+
+test("review threads sit under their line on its side, or under their file's header", () => {
+  const rows = diffRows(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "@@ -5,2 +5,2 @@",
+      " same",
+      "-old",
+      "+new",
+      "diff --git a/b.ts b/b.ts",
+      "@@ -1 +1 @@",
+      "+b",
+      "",
+    ].join("\n"),
+  );
+  const thread = (id: string, path: string, line?: number, side?: "left" | "right") =>
+    ({ id, path, line, side, isOutdated: false, isResolved: false, comments: [] }) as PrReviewThread;
+  const at = threadsAt(rows, [
+    thread("old", "a.ts", 6, "left"),
+    thread("new", "a.ts", 6),
+    thread("file", "b.ts"),
+    thread("gone", "a.ts", 40),
+  ]);
+  expect([...at].map(([i, ts]) => [i, ts.map((t) => t.id)])).toEqual([
+    [3, ["old"]],
+    [4, ["new"]],
+    [5, ["file"]],
+  ]);
+  expect(lineAt(rows, 3)).toEqual({ path: "a.ts", line: 6, side: "left" });
+  expect(lineAt(rows, 1)).toBeUndefined();
+  expect(rowOf(rows, "a.ts", 6)).toBe(4);
+  expect(rowOf(rows, "b.ts")).toBe(5);
 });

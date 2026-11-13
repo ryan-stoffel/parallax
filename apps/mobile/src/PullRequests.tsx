@@ -1,9 +1,10 @@
 // Pull requests, laid out as T3 Code's mobile app lays them out: every one linked to a thread on
 // any computer (as the desktop's Pull requests page lists them, with its search), in a sheet with
 // glass filter chips, and one pull request, pushed in the same sheet: its overview (status card,
-// merge, labels, description, changed files), activity, and diff, read through its thread's
-// computer with `pr/view` and `pr/diff`, and merged or closed with `pr/act`. plxd asks GitHub with
-// the computer's own `gh`, so the phone needs no GitHub sign-in.
+// merge, labels, description, changed files), activity, diff, and guide, read through its thread's
+// computer with `pr/view`, `pr/diff`, and `pr/guide`, merged or closed with `pr/act`, and reviewed,
+// commented on, and edited with `pr/write` (PullRequestReview.tsx). plxd asks GitHub with the
+// computer's own `gh`, so the phone needs no GitHub sign-in.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -30,7 +31,9 @@ import {
   GitPullRequestDraft,
   Link,
   MessageSquare,
+  MessageSquarePlus,
   MessageSquareText,
+  PencilLine,
   Check,
   Share as ShareIcon,
   TriangleAlert,
@@ -53,7 +56,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import type { PrAction, PrCheck, PullRequest } from "../../desktop/src/protocol/generated/protocol";
+import type { PrAction, PrCheck, PrReviewThread, PrWrite, PullRequest } from "../../desktop/src/protocol/generated/protocol";
 import { githubText } from "../../desktop/src/renderer/github";
 import { numberOf, type PrEntry } from "../../desktop/src/renderer/pullRequestSearch";
 import { showAlert, showMenu } from "./dialogStore";
@@ -84,12 +87,16 @@ import {
   defaultFilters,
   diffRows,
   latestReviews,
+  lineAt,
   repoOf,
   reviewsSummary,
+  rowOf,
   shownRows,
+  threadsAt,
   type DiffRow,
   type PrFilters,
 } from "./pullRequestLogic";
+import { Guide, pendingCount, reviewWriting, ThreadCard, WriteSheet, type Writing } from "./PullRequestReview";
 import { font } from "./theme";
 import { Empty, Icon, Markdown, T, useColors } from "./ui";
 
@@ -669,19 +676,31 @@ function MergeControls({
 /** Diffs read, by URL, so switching back to Changes doesn't fetch again. */
 const diffs = new Map<string, { rows: DiffRow[]; truncated: boolean }>();
 
-/** The Changes tab: the pull request's header, then its diff, scrolled to `focus` when set. */
+/** Where the Changes tab scrolls to: a file, and a line in it. */
+type Focus = { path: string; line?: number };
+
+/**
+ * The Changes tab: the pull request's header, then its diff, scrolled to `focus` when set, with
+ * each review thread under its line. With `onLine`, tapping a line comments on it.
+ */
 function Diff({
   hostId,
   runId,
   url,
   header,
   focus,
+  threads,
+  renderThread,
+  onLine,
 }: {
   hostId: string;
   runId: string;
   url: string;
   header: ReactNode;
-  focus?: string;
+  focus?: Focus;
+  threads: PrReviewThread[];
+  renderThread: (thread: PrReviewThread) => ReactNode;
+  onLine?: (at: { path: string; line: number; side: "left" | "right" }) => void;
 }) {
   const c = useColors();
   const insets = useSafeAreaInsets();
@@ -699,9 +718,10 @@ function Diff({
     });
   }, [hostId, runId, url]);
   const rows = typeof state === "object" ? state.rows : undefined;
+  const placed = rows ? threadsAt(rows, threads) : new Map<number, PrReviewThread[]>();
   useEffect(() => {
-    const index = rows?.findIndex((r) => r.kind === "file" && r.path === focus) ?? -1;
-    if (index >= 0) requestAnimationFrame(() => list.current?.scrollToIndex({ index, animated: false }));
+    const index = rows && focus ? rowOf(rows, focus.path, focus.line) : -1;
+    if (index >= 0) requestAnimationFrame(() => list.current?.scrollToIndex({ index, animated: false, viewPosition: focus?.line ? 0.3 : 0 }));
   }, [rows, focus]);
   return (
     <FlatList
@@ -709,7 +729,28 @@ function Diff({
       style={{ backgroundColor: c.background }}
       data={rows ?? []}
       keyExtractor={(_, i) => String(i)}
-      renderItem={({ item }) => <DiffLine row={item} />}
+      extraData={threads}
+      renderItem={({ item, index }) => {
+        const at = onLine && rows ? lineAt(rows, index) : undefined;
+        const here = placed.get(index);
+        return (
+          <>
+            {at ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Comment on ${at.path} line ${at.line}`}
+                onPress={() => onLine!(at)}
+                style={({ pressed }) => pressed && { opacity: 0.6 }}
+              >
+                <DiffLine row={item} />
+              </Pressable>
+            ) : (
+              <DiffLine row={item} />
+            )}
+            {here && <View style={{ gap: 8, padding: 10 }}>{here.map((t) => <View key={t.id}>{renderThread(t)}</View>)}</View>}
+          </>
+        );
+      }}
       initialNumToRender={80}
       // Rows differ in height, so a far file is reached in two steps: near it, then to it.
       onScrollToIndexFailed={(info) => {
@@ -754,13 +795,20 @@ export function PullRequestScreen({
   const computer = useComputer(hostId);
   const [pr, setPr] = useState<PullRequest | undefined>(reads.get(url));
   const [error, setError] = useState<string>();
-  const [tab, setTab] = useState<"overview" | "activity" | "changes">("overview");
-  const [focus, setFocus] = useState<string>();
+  const [tab, setTab] = useState<"overview" | "activity" | "changes" | "guide">("overview");
+  const [focus, setFocus] = useState<Focus>();
+  const [writing, setWriting] = useState<Writing>();
   const [acting, setActing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const connectedNow = !!computer?.connectedNow;
   const connected = !!computer?.shownConnected;
   const open = pr?.state === "open";
+  // A plxd with `prWatch` writes to pull requests, and one with `prGuide` writes guides.
+  const capabilities = computer?.view.capabilities ?? {};
+  const canWrite = connectedNow && "prWatch" in capabilities;
+  const canGuide = "prGuide" in capabilities && !!pr?.headSha;
+  const threads = pr?.reviewThreads ?? [];
+  const pending = pendingCount(threads);
 
   const load = useCallback(async () => {
     const read = await view({ hostId, runId, url });
@@ -793,12 +841,80 @@ export function PullRequestScreen({
     ]);
   }
 
-  /** The header's menu: open, copy, or share its link, and close it while it's open. */
+  /** Sends `w` with `pr/write`, then reads the pull request again. Resolves to whether it worked. */
+  async function send(w: PrWrite): Promise<boolean> {
+    const answer = await window.parallax.request(hostId, "pr/write", { url, write: w });
+    if ("error" in answer) {
+      showAlert("GitHub didn't take that", answer.error.message);
+      return false;
+    }
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    void load();
+    return true;
+  }
+
+  /** Opens the sheet to reply to `thread`, or resolves it. */
+  const threadCard = (thread: PrReviewThread, bare?: boolean) => (
+    <ThreadCard
+      thread={thread}
+      bare={bare}
+      onReply={
+        canWrite
+          ? () =>
+              setWriting({
+                title: "Reply",
+                placeholder: "Reply",
+                actions: [
+                  { label: "Reply and resolve", empty: false, write: (body) => ({ kind: "replyToThread", reviewThreadId: thread.id, body, resolve: true }) },
+                  { label: "Reply", primary: true, write: (body) => ({ kind: "replyToThread", reviewThreadId: thread.id, body }) },
+                ],
+              })
+          : undefined
+      }
+      onResolve={canWrite ? () => void send({ kind: "replyToThread", reviewThreadId: thread.id, resolve: true }) : undefined}
+    />
+  );
+
+  /** Opens the sheet to comment on a diff line, into the pending review. */
+  function commentOn(at: { path: string; line: number; side: "left" | "right" }) {
+    const nodeId = pr?.nodeId;
+    if (!nodeId) return;
+    setWriting({
+      title: `${at.path.slice(at.path.lastIndexOf("/") + 1)}:${at.line}`,
+      note: "Adds to your pending review, which Review sends.",
+      placeholder: "Comment on this line",
+      actions: [
+        {
+          label: "Add to review",
+          primary: true,
+          write: (body) => ({ kind: "addReviewComment", pullRequestId: nodeId, path: at.path, line: at.line, side: at.side, body }),
+        },
+      ],
+    });
+  }
+
+  /** The header's menu: open, copy, or share its link, edit it, and close it while it's open. */
   function more() {
     showMenu([
       { label: "Open on GitHub", icon: ExternalLink, onPress: () => void Linking.openURL(url) },
       { label: "Copy link", icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
       { label: "Share…", icon: ShareIcon, onPress: () => void Share.share({ url }) },
+      ...(pr && canWrite
+        ? [
+            {
+              label: "Edit title and description",
+              icon: PencilLine,
+              onPress: () =>
+                setWriting({
+                  title: "Edit",
+                  placeholder: "Description",
+                  titleField: pr.title,
+                  body: pr.body,
+                  actions: [{ label: "Save", primary: true, empty: true, write: (body, title) => ({ kind: "edit", title, body }) }],
+                }),
+            },
+          ]
+        : []),
       ...(open ? [{ label: "Close pull request", icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", "Close pull request", true) }] : []),
     ]);
   }
@@ -838,7 +954,7 @@ export function PullRequestScreen({
       headerLeftBackgroundVisible: false,
       headerRightBackgroundVisible: false,
     });
-  }, [navigation, url, pr, c.background]);
+  }, [navigation, url, pr, c.background, canWrite]);
 
   const gh = useGitHub();
   const [symbol, , stateLabel, fill] = lookOf(pr, gh);
@@ -905,6 +1021,7 @@ export function PullRequestScreen({
           { value: "overview", label: "Overview" },
           { value: "activity", label: "Activity" },
           { value: "changes", label: "Changes" },
+          ...(canGuide ? [{ value: "guide" as const, label: "Guide" }] : []),
         ]}
         value={tab}
         onChange={(t) => {
@@ -915,7 +1032,23 @@ export function PullRequestScreen({
     </View>
   );
 
-  if (tab === "changes") return <Diff hostId={hostId} runId={runId} url={url} header={header} focus={focus} />;
+  const sheet = <WriteSheet writing={writing} send={send} onClose={() => setWriting(undefined)} />;
+  if (tab === "changes")
+    return (
+      <>
+        <Diff
+          hostId={hostId}
+          runId={runId}
+          url={url}
+          header={header}
+          focus={focus}
+          threads={threads}
+          renderThread={(t) => threadCard(t, true)}
+          onLine={open && canWrite && pr?.nodeId ? commentOn : undefined}
+        />
+        {sheet}
+      </>
+    );
 
   const files = pr?.files ?? [];
   return (
@@ -940,12 +1073,51 @@ export function PullRequestScreen({
         </T>
       )}
       {!pr && !error && <ActivityIndicator color={c.accent} style={{ marginTop: 30 }} />}
-      {pr && tab === "activity" && <Timeline events={activityOf(pr)} />}
+      {pr && tab === "activity" && (
+        <>
+          <Timeline events={activityOf(pr)} renderThread={(t) => threadCard(t)} />
+          {canWrite && (
+            <CardGroup>
+              <CardRow
+                icon={MessageSquarePlus}
+                title="Comment"
+                divider={false}
+                onPress={() =>
+                  setWriting({
+                    title: "Comment",
+                    placeholder: "Leave a comment",
+                    actions: [{ label: "Comment", primary: true, write: (body) => ({ kind: "comment", body }) }],
+                  })
+                }
+              />
+            </CardGroup>
+          )}
+        </>
+      )}
+      {pr?.headSha && tab === "guide" && (
+        <Guide
+          computer={computer}
+          url={url}
+          headSha={pr.headSha}
+          onOpen={(path, line) => {
+            setFocus({ path, line });
+            setTab("changes");
+          }}
+        />
+      )}
       {pr && tab === "overview" && (
         <View style={{ gap: 20 }}>
           <CardGroup>
             {pr.checks.length > 0 && <Checks pr={pr} />}
             <Reviews pr={pr} />
+            {open && canWrite && (
+              <CardRow
+                icon={MessageSquareText}
+                title="Review"
+                value={pending ? `${pending} pending` : undefined}
+                onPress={() => setWriting(reviewWriting(pr.pendingReviewId, pending))}
+              />
+            )}
             {open ? (
               <>
                 <Branch pr={pr} />
@@ -1014,7 +1186,7 @@ export function PullRequestScreen({
                     accessibilityRole="button"
                     accessibilityLabel={`View diff for ${f.path}`}
                     onPress={() => {
-                      setFocus(f.path);
+                      setFocus({ path: f.path });
                       setTab("changes");
                     }}
                     style={({ pressed }) => [styles.file, { borderBottomColor: c.border }, pressed && { opacity: 0.6 }]}
@@ -1039,6 +1211,7 @@ export function PullRequestScreen({
           )}
         </View>
       )}
+      {sheet}
     </ScrollView>
   );
 }
