@@ -10,6 +10,14 @@ const placeholders = (text: string) =>
 const tags = (text: string) =>
   [...text.matchAll(/<\/?\d+\s*\/?>/g)].map((m) => m[0].replace(/\s/g, "")).sort();
 
+/** Whether `language`'s `one` plural form is used for no number but 1. */
+const onlyOne = (language: string) => {
+  const rules = new Intl.PluralRules(language);
+  return Array.from({ length: 200 }, (_, n) => n).every(
+    (n) => (rules.select(n) === "one") === (n === 1),
+  );
+};
+
 /** English's keys, plural ones by their base, with the English text each translation must match. */
 async function english() {
   const en = await messages("en");
@@ -46,10 +54,14 @@ test.each(languages.filter((language) => language.code !== "en"))(
     expect(extra, "not in English").toEqual([]);
     for (const [key, source] of expected) {
       const text = translated[key]!;
-      // A plural form may spell its number out, as "one file" does.
-      const drop = (names: string[]) =>
-        pluralSuffix.test(key) ? names.filter((name) => name !== "count") : names;
-      expect(drop(placeholders(text)), key).toEqual(drop(placeholders(source)));
+      const plural = pluralSuffix.test(key);
+      // A plural form may add `{{count}}`, and one that only ever means 1 may spell it out, as
+      // "one file" does. French's `one` also covers 0, and Russian's 21, so theirs keep it.
+      const others = (names: string[]) =>
+        plural ? names.filter((name) => name !== "count") : names;
+      expect(others(placeholders(text)), key).toEqual(others(placeholders(source)));
+      if (plural && source.includes("{{count}}") && !(key.endsWith("_one") && onlyOne(code)))
+        expect(text, key).toContain("{{count}}");
       expect(tags(text), key).toEqual(tags(source));
     }
   },
