@@ -1340,6 +1340,8 @@ struct ProxyShared {
     connections: AtomicUsize,
     /// Streams among the first this many connections are silent, and any opened after aren't.
     silent_streams: AtomicUsize,
+    /// The same for control connections.
+    silent_controls: AtomicUsize,
     cut: Notify,
     /// How many milliseconds later than the control connection's plxd's bytes on a stream reach
     /// the relay, as when that socket's path is slower.
@@ -1535,8 +1537,10 @@ async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
     let (mut relay_in, mut relay_out) = relay.into_split();
     let cut = shared.cut.notified();
     let silent = || {
+        let before = |count: &AtomicUsize| number < count.load(Ordering::SeqCst);
         shared.silent.load(Ordering::SeqCst)
-            || (!control && number < shared.silent_streams.load(Ordering::SeqCst))
+            || (!control && before(&shared.silent_streams))
+            || (control && before(&shared.silent_controls))
     };
     let lag = Duration::from_millis(if control {
         0
@@ -1646,9 +1650,14 @@ async fn online_through(
     (server, client, host_id)
 }
 
-/// How long plxd's control connection may take to notice a silent link: two of its 15 s pings, and
-/// some room for a busy test machine.
-const SILENCE_NOTICED: Duration = Duration::from_secs(35);
+/// How long plxd's control connection may take to notice a silent link (PLX-1547): two of its 4 s
+/// pings are 8 s, and the 15 s pings before it took up to 30 s.
+const SILENCE_NOTICED: Duration = Duration::from_secs(10);
+
+/// How long plxd may take to reconnect after the last silence. The refused connections before it
+/// leave plxd up to 4 failures in a row, and the link between lives under the 10 s that starts the
+/// backoff over, so its next wait can be up to 16 s, then the connection itself. Measured: 4 to 10 s.
+const BACK_AFTER_FAILURES: Duration = Duration::from_secs(25);
 
 #[tokio::test]
 async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_is_noticed() {
@@ -1679,6 +1688,41 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     let initialized: Value = serde_json::from_str(&app.next().await).unwrap();
     assert!(initialized["result"].is_object(), "{initialized}");
     assert!(answers(&mut app).await);
+    // plxd has a spare again.
+    sleep(Duration::from_secs(1)).await;
+
+    // The control link alone goes silent both ways, with no close, as when Cloudflare's edge or a
+    // router drops it (PLX-1545). plxd's streams still work, so the next client takes the spare.
+    let connections = proxy.shared.connections.load(Ordering::SeqCst);
+    proxy
+        .shared
+        .silent_controls
+        .store(connections, Ordering::SeqCst);
+    let silent = Instant::now();
+    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+        .await
+        .unwrap();
+    let mut spared = App::bridged(dialed.socket);
+    assert!(spared.initialize().await["result"].is_object());
+    // The one after needs plxd to join a new stream, which the relay asks for over the silent link.
+    // It waits for plxd to notice and reconnect, and gets in (PLX-1547).
+    tokio::time::sleep_until(silent + Duration::from_secs(1)).await;
+    let started = Instant::now();
+    let dialed = remote::dial(routes, &paired.fingerprint, phone.path()).await;
+    let waited = started.elapsed();
+    eprintln!(
+        "a client that connected 1 s into a silent control link waited {waited:?}: {}",
+        dialed
+            .as_ref()
+            .map_or_else(ToString::to_string, |_| "in".to_owned())
+    );
+    let mut waiting = App::bridged(dialed.unwrap().socket);
+    assert!(waiting.initialize().await["result"].is_object());
+    relay_status(&mut client, |s| s.connected).await;
+    assert!(
+        answers(&mut app).await,
+        "a stream ended with the silent control link"
+    );
 
     // The control connection drops, and stays down for a while: the client's connection is the
     // same one all through, answering, or `answers` fails.
@@ -1710,7 +1754,12 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     relay_status_within(&mut client, |s| !s.connected, SILENCE_NOTICED).await;
     eprintln!("a silent link was noticed in {:?}", silent.elapsed());
     proxy.shared.silent.store(false, Ordering::SeqCst);
-    relay_status_within(&mut client, |s| s.connected, SILENCE_NOTICED).await;
+    let heard = Instant::now();
+    relay_status_within(&mut client, |s| s.connected, BACK_AFTER_FAILURES).await;
+    eprintln!(
+        "plxd was back {:?} after the silence ended",
+        heard.elapsed()
+    );
     server.stop().await;
 }
 

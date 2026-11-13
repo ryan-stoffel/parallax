@@ -18,8 +18,9 @@ import { JOIN_TIMEOUT, streamObject } from "./stream";
 type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
 
 /** The streams open to this host, by id, each its own [`StreamRelay`]. `spare` marks the one
- *  plxd keeps waiting for the next client (0091). */
-type Streams = Record<string, { spare?: true; pending?: true }>;
+ *  plxd keeps waiting for the next client (0091). `at` is when plxd was last asked to join a
+ *  client's stream, which [`settleStreams`] reads to ask again after a dropped link (PLX-1547). */
+type Streams = Record<string, { spare?: true; pending?: true; at?: number }>;
 
 /** Why the relay refused a request, with its HTTP status, and its clock for a proof at the wrong
  *  time. */
@@ -32,6 +33,13 @@ export type HookReply = { status: number; body: unknown };
 const TICKET_LIFETIME = 30_000;
 /** How long the relay waits for plxd to answer a webhook. */
 const HOOK_TIMEOUT = 10_000;
+/** How long a connect waits for plxd to reconnect when its control socket is gone (PLX-1547).
+ *  Shorter than the 10 s a client's dial waits (`REQUEST_TIMEOUT` in daemon/src/remote.rs), so
+ *  one released late still has a client to join the stream it makes. */
+export const HOST_WAIT = 7_000;
+/** A connect waits only when plxd's control socket closed within this, so one to a host that's
+ *  been away a while answers `host_offline` at once. */
+const RECONNECT_WINDOW = 60_000;
 /** How many clients' streams a host may have open at once, its spare included. */
 export const MAX_STREAMS = 16;
 /** The most stream objects one spare may try in [`HostRelay`]'s placement, whatever
@@ -157,6 +165,11 @@ export class HostRelay extends DurableObject<Env> {
   /** Counts plxd's spare requests, so a placement a later one superseded reserves nothing. In
    *  memory, since a placement in flight keeps the object awake. */
   private spareRequests = 0;
+  /** When plxd's control socket last closed or was replaced. In memory: an object evicted since then has been
+   *  without plxd for longer than [`RECONNECT_WINDOW`]. */
+  private hostLeft = 0;
+  /** Connects waiting for plxd's next control socket, each woken by it or by its own timer. */
+  private arrivals = new Set<() => void>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -228,15 +241,24 @@ export class HostRelay extends DurableObject<Env> {
       const streams = await this.streams();
       if (Object.keys(streams).length >= MAX_STREAMS)
         return { status: 429, error: "too_many_streams" } as Refusal;
-      const id = placed?.id ?? this.env.STREAMS.newUniqueId();
-      const stream = id.toString();
+      const stream = (placed?.id ?? this.env.STREAMS.newUniqueId()).toString();
       // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
       streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
       await this.ctx.storage.put<Streams>("streams", streams);
-      return { id, stream, owner, host, proof };
+      return { stream, owner, host, proof };
     });
     if ("error" in reserved) return reserved;
-    const { id, stream, owner, host, proof } = reserved;
+    const { stream, owner, host, proof } = reserved;
+    return this.announce(owner, stream, host, proof, spare, proofRoute);
+  }
+
+  /**
+   * Arms the reserved `stream` with a new one-time token and sends plxd `open` for it on `host`,
+   * the control socket opened with `proof`. A reconnect, removal, `gone`, or report during the arm
+   * cancels it, and the stream closes.
+   */
+  private async announce(owner: Owner, stream: string, host: WebSocket, proof: number | undefined,
+    spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
     const object = this.streamObject(owner.hostId, stream)!;
     try {
       const token = randomToken();
@@ -246,7 +268,7 @@ export class HostRelay extends DurableObject<Env> {
         const current = await this.streams();
         // Reconnect, removal, gone or a report may have canceled the reservation during arm.
         if (!current[stream] || currentProof !== proof || !this.host()) return false;
-        current[stream] = spare ? { spare: true } : {};
+        current[stream] = spare ? { spare: true } : { at: Date.now() };
         await this.ctx.storage.put<Streams>("streams", current);
         host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}), ...transport }));
         return true;
@@ -344,28 +366,67 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /**
-   * Settles which streams plxd's new control connection starts with, and answers how many stayed.
-   * Each stream has its own socket, so it can outlive a control connection. One stays only if plxd
-   * lists it in `held` and its object still has plxd's end: after a deploy, a stream's close may
-   * never have arrived, and plxd may not have noticed its socket go. Each stream costs its object
-   * a wake here, as closing it does. No list is a plxd whose streams ended with its last connection.
+   * Settles which streams plxd's new control connection starts with: how many stay, and which to
+   * announce again on it. Each stream has its own socket, so it can outlive a control connection.
+   * One stays only if plxd lists it in `held` and its object still has plxd's end: after a deploy,
+   * a stream's close may never have arrived, and plxd may not have noticed its socket go. No list
+   * is a plxd whose streams ended with its last connection.
+   *
+   * A client's stream plxd was asked to join within [`JOIN_TIMEOUT`], that plxd doesn't list and
+   * never joined, is announced again (PLX-1547): its `open` went into a link that had died
+   * unnoticed, and its client is still waiting at the stream's object. It stays pending until
+   * [`announce`] runs. Each stream asked about costs its object a wake, as closing it does.
    */
   private async settleStreams(hostId: string, held: string | null) {
-    const ids = Object.keys(await this.streams());
+    const streams = await this.streams();
+    const ids = Object.keys(streams);
     const listed = new Set(held?.split(","));
-    const stays = await Promise.all(
-      ids.map(async (id) => {
-        if (!listed.has(id)) return false;
-        const joined = this.streamObject(hostId, id)?.hostJoined();
-        return joined?.catch((error) => {
-          logError("host.settleStreams", this.context(), error);
-          return false;
-        });
+    const now = Date.now();
+    const fates = await Promise.all(
+      ids.map(async (id): Promise<"stays" | "again" | "gone"> => {
+        const { spare, pending, at } = streams[id]!;
+        const unheard = !listed.has(id) && !spare && !pending && at !== undefined && now - at < JOIN_TIMEOUT;
+        if (!listed.has(id) && !unheard) return "gone";
+        const joined = await this.streamObject(hostId, id)
+          ?.hostJoined()
+          .catch((error) => {
+            logError("host.settleStreams", this.context(), error);
+            return false;
+          });
+        if (joined) return listed.has(id) ? "stays" : "gone";
+        return unheard ? "again" : "gone";
       }),
     );
-    const gone = ids.filter((_, index) => !stays[index]);
-    await this.closeStreams(hostId, 1000, "the host reconnected", gone);
-    return ids.length - gone.length;
+    const pick = (fate: string) => ids.filter((_, index) => fates[index] === fate);
+    const again = await this.ctx.blockConcurrencyWhile(async () => {
+      const current = await this.streams();
+      const marked = pick("again").filter((id) => current[id]);
+      for (const id of marked) current[id] = { pending: true };
+      if (marked.length) await this.ctx.storage.put<Streams>("streams", current);
+      return marked;
+    });
+    await this.closeStreams(hostId, 1000, "the host reconnected", pick("gone"));
+    return { kept: pick("stays").length, again };
+  }
+
+  /** plxd's control socket. When there's none and plxd left within [`RECONNECT_WINDOW`], waits up
+   *  to [`HOST_WAIT`] for it to reconnect (PLX-1547). Callers count the request before this. At
+   *  most [`MAX_STREAMS`] wait at once, since no more could get a stream, and the rest answer at
+   *  once. */
+  private async reachHost() {
+    const host = this.host();
+    if (host || Date.now() - this.hostLeft > RECONNECT_WINDOW || this.arrivals.size >= MAX_STREAMS)
+      return host;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.arrivals.delete(done);
+        resolve();
+      };
+      const timer = setTimeout(done, HOST_WAIT);
+      this.arrivals.add(done);
+    });
+    return this.host();
   }
 
   private owner() {
@@ -479,13 +540,14 @@ export class HostRelay extends DurableObject<Env> {
     return { user: owner.user };
   }
 
-  /** Whether `user` may open a stream to this host now, which counts against `LIMITS.opens`. */
+  /** Whether `user` may open a stream to this host now, which counts against `LIMITS.opens`. A
+   *  request counted here may wait for plxd to reconnect ([`reachHost`]). */
   protected async admit(user: string): Promise<Refusal | null> {
     const owner = await this.owner();
     // Another user's host looks the same as no host.
     if (owner?.user !== user) return { status: 404, error: "not_found" };
     if (!this.limits.allow("opens", LIMITS.opens)) return { status: 429, error: "rate_limited" };
-    if (!this.host()) return { status: 503, error: "host_offline" };
+    if (!(await this.reachHost())) return { status: 503, error: "host_offline" };
     if (!(await this.count(0))) return { status: 429, error: "daily_limit" };
     return null;
   }
@@ -530,7 +592,7 @@ export class HostRelay extends DurableObject<Env> {
     const owner = await this.owner();
     if (!found || found.expires < Date.now() || found.user !== owner?.user)
       return { status: 401, error: "unauthorized" };
-    if (!this.host()) return { status: 503, error: "host_offline" };
+    if (!(await this.reachHost())) return { status: 503, error: "host_offline" };
     return this.take(found.user);
   }
 
@@ -616,8 +678,11 @@ export class HostRelay extends DurableObject<Env> {
     const openBefore = this.ctx
       .getWebSockets("host")
       .filter((ws) => ws.readyState === WebSocket.OPEN).length;
+    // After a silent drop the relay saw no close, so plxd left now, as far as a connect arriving
+    // while the streams settle knows: it waits for this socket instead of answering 503.
+    this.hostLeft = Date.now();
     this.closeHost(4409, "replaced");
-    const kept = await this.settleStreams(owner.hostId, held);
+    const { kept, again } = await this.settleStreams(owner.hostId, held);
     const [client, server] = Object.values(new WebSocketPair());
     // The second tag names the host in this socket's log lines, with no storage read to fail.
     const tags = ["host", short(owner.hostId)];
@@ -628,10 +693,20 @@ export class HostRelay extends DurableObject<Env> {
       ...this.context(server!),
       open_before: openBefore,
       streams_kept: kept,
+      streams_announced: again.length,
       since_last_ms: last ? now - last : null,
     });
     // `check` says this relay answers plxd's connection check, which an older one ignores.
     server!.send(JSON.stringify({ t: "ready", check: true }));
+    for (const stream of again)
+      this.ctx.waitUntil(
+        logged(
+          "host.announce",
+          () => this.context(),
+          () => this.announce(owner, stream, server!, time, false),
+        ),
+      );
+    for (const arrived of this.arrivals) arrived();
     this.ctx.waitUntil(
       logged(
         "host.deliverHeld",
@@ -750,8 +825,9 @@ export class HostRelay extends DurableObject<Env> {
     this.finishClose(ws);
   }
 
-  /** Completes the closing handshake the other end started. */
+  /** Completes the closing handshake the other end started, and notes when plxd left. */
   private finishClose(ws: WebSocket) {
+    this.hostLeft = Date.now();
     try {
       ws.close(1000, "closed");
     } catch {

@@ -81,9 +81,11 @@ const MAX_CLOCK_OFFSET_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How often plxd pings the relay over its control socket, with the text the relay's object answers
 /// without waking. Unanswered until the next one ends the connection, so a silent link is noticed
-/// within two of these, and a false alarm costs only a reconnect. Cloudflare closes a WebSocket
-/// idle for 100 s.
-const PING: Duration = Duration::from_secs(15);
+/// within two of these, 8 s. With the reconnect after it, that's inside the 10 s a client's dial
+/// waits for a stream the relay asked plxd to join over the dead link (PLX-1547). A false alarm
+/// costs only a reconnect. Each ping is a twentieth of a billed Durable Object request: 1,080 a day
+/// per host. Cloudflare closes a WebSocket idle for 100 s.
+const PING: Duration = Duration::from_secs(4);
 /// How often plxd's end of a client's stream sends a protocol ping, which Cloudflare's runtime
 /// answers without waking the stream's object or charging for it. Slower than [`PING`], since ending
 /// a working stream is what a client would see, and its answer can queue behind a transfer.
@@ -106,8 +108,10 @@ const HOLD: Duration = Duration::from_secs(30);
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_mins(5);
 
-/// A connection that lasted this long starts the backoff over.
-const STEADY: Duration = Duration::from_mins(1);
+/// A connection that lasted this long, past two pings, starts the backoff over, so a link that
+/// worked and then dropped is back within about 1 s, while a client may be waiting (PLX-1547). One
+/// that keeps dying sooner, such as two plxds with one key replacing each other, still backs off.
+const STEADY: Duration = Duration::from_secs(10);
 
 /// What plxd's ES256 signature opening its control socket covers, with the time in milliseconds,
 /// as relay/src/host.ts has it.
@@ -3170,6 +3174,51 @@ mod tests {
             }
         );
         assert!(matches!(ended, Ok(Ended::Stopped)));
+    }
+
+    /// A link that goes silent with no close, as when Cloudflare's edge or a router drops it, ends
+    /// within 10 s of the last frame the relay sent (PLX-1547).
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_relay_is_noticed_within_10_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
+        let (plxd, mut relay) = socket().await;
+        let (ended, last_heard) = tokio::join!(
+            serve(
+                &daemon,
+                plxd,
+                "host",
+                &stop,
+                &mut pushes,
+                &mut streams,
+                &mut link
+            ),
+            async {
+                assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+                // Answered for a while, then nothing more, though the socket stays open.
+                for _ in 0..3 {
+                    let ping = relay.next().await.unwrap().unwrap();
+                    assert_eq!(ping.to_text().unwrap(), "ping");
+                    relay.send(Message::text("pong")).await.unwrap();
+                }
+                let last_heard = Instant::now();
+                while relay.next().await.is_some_and(|frame| frame.is_ok()) {}
+                last_heard
+            }
+        );
+        let Err(lost) = ended else {
+            panic!("the connection didn't end as lost");
+        };
+        assert_eq!(lost.cause, "ping_timeout");
+        let noticed = last_heard.elapsed();
+        assert!(
+            noticed <= Duration::from_secs(10),
+            "noticed after {noticed:?}"
+        );
+        assert!(noticed > PING, "noticed after {noticed:?}");
     }
 
     /// `select!` picks among ready arms at random, so a few rounds, each with a hold's deadline
