@@ -317,7 +317,11 @@ export function Guide({
     <View style={{ gap: 20 }}>
       {(stale || generating) && (
         <T muted style={{ fontSize: 13, lineHeight: 17 }}>
-          {generating ? "Writing a guide for the latest commit. This one is for an older commit." : "This guide is for an older commit."}
+          {!generating
+            ? "This guide is for an older commit."
+            : stale
+              ? "Writing a guide for the latest commit. This one is for an older commit."
+              : "Writing a new guide."}
         </T>
       )}
       <Markdown text={guide.overview} />

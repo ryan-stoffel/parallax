@@ -53,6 +53,7 @@ test("review threads sit under their line on its side, or under their file's hea
     thread("new", "a.ts", 6),
     thread("file", "b.ts"),
     thread("gone", "a.ts", 40),
+    { ...thread("outdated", "a.ts", 5), isOutdated: true },
   ]);
   expect([...at].map(([i, ts]) => [i, ts.map((t) => t.id)])).toEqual([
     [3, ["old"]],

@@ -151,7 +151,7 @@ export type Activity =
 /**
  * A pull request's activity, oldest first: comments, reviews (a review's text is one of the
  * comments, by the same author within a minute, so it shows once, with its verdict), review
- * threads others can see, commits, and its merge or close.
+ * threads, commits, and its merge or close.
  */
 export function activityOf(pr: PullRequest): Activity[] {
   const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) < 60_000;
@@ -165,7 +165,8 @@ export function activityOf(pr: PullRequest): Activity[] {
   for (const r of reviews)
     if (!told.has(r) && r.state !== "commented") events.push({ kind: "review", author: r.author, at: r.submittedAt, verdict: r.state });
   for (const thread of pr.reviewThreads ?? []) {
-    const first = thread.comments.find((c) => !c.pending);
+    // A thread of only pending comments shows too, so one whose line left the diff isn't lost.
+    const first = thread.comments.find((c) => !c.pending) ?? thread.comments[0];
     if (first) events.push({ kind: "thread", author: first.author, at: first.createdAt, thread });
   }
   for (const c of pr.commits ?? [])
@@ -186,13 +187,15 @@ function filesOf(rows: DiffRow[]): (string | undefined)[] {
 
 /**
  * Each diff row's review threads, by the row's index: a thread on a line under that line, on its
- * side, and one on the whole file under the file's header. A thread whose line isn't in the diff,
- * such as an outdated one, sits under no row; the Activity tab shows it.
+ * side, and one on the whole file under the file's header. An outdated thread, whose line number
+ * is from older code, and one whose line isn't in the diff sit under no row; the Activity tab shows
+ * them.
  */
 export function threadsAt(rows: DiffRow[], threads: PrReviewThread[]): Map<number, PrReviewThread[]> {
   const files = filesOf(rows);
   const at = new Map<number, PrReviewThread[]>();
   for (const t of threads) {
+    if (t.isOutdated) continue;
     const index = rows.findIndex((r, i) =>
       t.line === undefined
         ? r.kind === "file" && r.path === t.path
@@ -206,9 +209,12 @@ export function threadsAt(rows: DiffRow[], threads: PrReviewThread[]): Map<numbe
 /** Where a diff line row is, to comment on it: its file, line, and side. */
 export function lineAt(rows: DiffRow[], index: number): { path: string; line: number; side: PrDiffSide } | undefined {
   const row = rows[index];
-  const path = filesOf(rows.slice(0, index + 1))[index];
-  if (!row || row.kind === "file" || row.kind === "hunk" || !path) return undefined;
-  return { path, line: row.line, side: sideOf(row) };
+  if (!row || row.kind === "file" || row.kind === "hunk") return undefined;
+  for (let i = index - 1; i >= 0; i--) {
+    const above = rows[i]!;
+    if (above.kind === "file") return { path: above.path, line: row.line, side: sideOf(row) };
+  }
+  return undefined;
 }
 
 /** The row to scroll to for `path`: its first new-side line at or after `line`, else its header. */
