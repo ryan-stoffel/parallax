@@ -399,7 +399,9 @@ export function UpdateButton() {
           </>
         ) : (
           <p role="status" className="text-body text-muted-foreground">
-            {(updating ? t("Updating…") : answer) ?? note ?? t("Up to date")}
+            {(updating ? t("Updating…") : answer === "Up to date" ? t("Up to date") : answer) ??
+              note ??
+              t("Up to date")}
           </p>
         )}
       </div>
