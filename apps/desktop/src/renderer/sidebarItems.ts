@@ -1,5 +1,8 @@
 // What the sidebar lists (0094): every host's threads and orchestrators as rows, the unsent New
 // Thread drafts, and how rows group, as pure functions, so a sidebar mode is mostly its grouping.
+import { t } from "i18next";
+
+import { msg } from "../i18n";
 import type { AgentRun, Orchestrator, Repo, Thread } from "../protocol/generated/protocol";
 import {
   activeAt,
@@ -67,6 +70,8 @@ export const markedUnread = (attention: Attention, run: AgentRun | undefined, ma
  * apart from it (0042); `unread` holds the keys of threads marked unread.
  */
 export function sidebarItems(hosts: readonly HostThreads[], unread: readonly string[]): Item[] {
+  const untitled = t("Thread");
+  const noRepoName = t("No repo");
   return hosts.flatMap(({ host: h, view }) => {
     const { state } = view;
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
@@ -76,7 +81,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
       .map((t): Item => {
         const run = state.runs[t.id];
         const repo = repoOf(t.repo);
-        const title = state.titles[t.id] ?? "Thread";
+        const title = state.titles[t.id] ?? untitled;
         return {
           kind: "thread",
           thread: t,
@@ -94,7 +99,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
           title,
           text: [
             title,
-            repo && !repo.scratch ? repo.name : "No repo",
+            repo && !repo.scratch ? repo.name : noRepoName,
             run?.branch,
             ...(run?.pullRequests ?? []).map((url) => `#${numberOf(url)}`),
           ].join(" "),
@@ -192,14 +197,23 @@ export interface Group {
   rows: Item[];
 }
 
-/** Which day `at` falls on, from `now`: Today, Yesterday, Earlier this week, or Older. */
+/**
+ * Which day `at` falls on, from `now`: Today, Yesterday, Earlier this week, or Older, in English,
+ * marked with `msg`: show it with `t`.
+ */
 export function dayOf(at: string, now: number): string {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   const day = new Date(at);
   day.setHours(0, 0, 0, 0);
   const days = Math.round((start.getTime() - day.getTime()) / 864e5);
-  return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "Earlier this week" : "Older";
+  return days <= 0
+    ? msg("Today")
+    : days === 1
+      ? msg("Yesterday")
+      : days < 7
+        ? msg("Earlier this week")
+        : msg("Older");
 }
 
 /**
@@ -219,7 +233,7 @@ export function todayGroups(
     const key = by === "repo" ? `${i.host.id}/${repo?.id ?? "none"}` : dayOf(i.at, now);
     const group = groups.get(key) ?? {
       key,
-      label: by === "repo" ? (repo?.name ?? "No repo") : key,
+      label: by === "repo" ? (repo?.name ?? t("No repo")) : t(key),
       byRepo: by === "repo",
       repo,
       host: by === "repo" && many ? i.host.name : undefined,
@@ -244,7 +258,7 @@ export function folderGroups(rows: readonly Item[], many: boolean): Group[] {
     const key = `${i.host.id}/${repo?.id ?? "none"}`;
     const folder = folders.get(key) ?? {
       key,
-      label: repo?.name ?? "No repo",
+      label: repo?.name ?? t("No repo"),
       byRepo: true,
       repo,
       host: many ? i.host.name : undefined,

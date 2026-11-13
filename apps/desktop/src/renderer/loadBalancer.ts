@@ -1,3 +1,4 @@
+import { msg } from "../i18n";
 import type { HostHealthResult, ProviderInfo } from "../protocol/generated/protocol";
 import type { ComposerContents } from "./drafts";
 import { canRun } from "./models";
@@ -11,9 +12,9 @@ import { merged, stored } from "./stored";
 export type Preference = "prefer" | "normal" | "less";
 
 export const preferences: { value: Preference; name: string }[] = [
-  { value: "prefer", name: "Prefer" },
-  { value: "normal", name: "Normal" },
-  { value: "less", name: "Less often" },
+  { value: "prefer", name: msg("Prefer") },
+  { value: "normal", name: msg("Normal") },
+  { value: "less", name: msg("Less often") },
 ];
 
 interface Settings {
@@ -59,14 +60,14 @@ export type Why =
 
 /** What a computer's row says for each `Why`. */
 export const whyText: Record<Why, string> = {
-  "left-out": "Left out",
-  offline: "Offline",
-  "no-repository": "No repository",
-  named: "Named in this message",
-  "no-answer": "Didn't answer",
-  "needs-update": "Needs updating",
-  "no-provider": "Provider unavailable",
-  full: "Full",
+  "left-out": msg("Left out"),
+  offline: msg("Offline"),
+  "no-repository": msg("No repository"),
+  named: msg("Named in this message"),
+  "no-answer": msg("Didn't answer"),
+  "needs-update": msg("Needs updating"),
+  "no-provider": msg("Provider unavailable"),
+  full: msg("Full", { context: "computer at capacity" }),
 };
 
 export interface Candidate {

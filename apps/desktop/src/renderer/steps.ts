@@ -2,6 +2,9 @@
 // them: each tool call's line, what the agent is doing now, and a run of steps summed up, with the
 // kind of work each is, whose icon each app draws itself. Pure, so both apps share it.
 
+import { t } from "i18next";
+
+import { msg } from "../i18n";
 import type { JsonValue } from "../protocol/generated/protocol";
 import { isObject, plxdTools, type Item } from "./transcript";
 
@@ -25,17 +28,17 @@ export type Kind =
 
 // What a tool is doing, in a word, by the names common tools use.
 const verbs: Partial<Record<string, string>> = {
-  Bash: "Running",
-  Read: "Reading",
-  Grep: "Searching",
-  Glob: "Searching",
-  WebSearch: "Searching",
-  WebFetch: "Fetching",
-  Edit: "Editing",
-  MultiEdit: "Editing",
-  Write: "Writing",
-  Task: "Running agent",
-  Agent: "Running agent",
+  Bash: msg("Running"),
+  Read: msg("Reading"),
+  Grep: msg("Searching"),
+  Glob: msg("Searching"),
+  WebSearch: msg("Searching"),
+  WebFetch: msg("Fetching"),
+  Edit: msg("Editing"),
+  MultiEdit: msg("Editing"),
+  Write: msg("Writing"),
+  Task: msg("Running agent"),
+  Agent: msg("Running agent"),
 };
 
 // The kind of work a tool does, by the names common tools use.
@@ -83,23 +86,24 @@ export interface Activity {
 export function activity(item?: Item): Activity {
   switch (item?.kind) {
     case "reasoning":
-      return { label: "Thinking" };
+      return { label: t("Thinking") };
     case "tool": {
       const plxd = plxdCall(item, true);
       if (plxd) return plxd;
       // Including a plxd tool this app doesn't know.
       const mcp = mcpTool(item.name);
-      if (mcp) return { label: `Using ${mcp.server}`, detail: mcp.tool };
-      if (item.name === "Skill") return { label: "Using skill", detail: skillName(item.input) };
+      if (mcp) return { label: t("Using {{server}}", { server: mcp.server }), detail: mcp.tool };
+      if (item.name === "Skill") return { label: t("Using skill"), detail: skillName(item.input) };
+      const verb = verbs[item.name ?? ""];
       return {
-        label: verbs[item.name ?? ""] ?? item.name ?? "Working",
+        label: verb ? t(verb) : (item.name ?? t("Working")),
         detail: toolHint(item.input),
       };
     }
     case "todo":
-      return { label: "Planning" };
+      return { label: t("Planning") };
     default:
-      return { label: "Working" };
+      return { label: t("Working") };
   }
 }
 
@@ -141,40 +145,51 @@ export function stepLabel(
   if (mcp) return `${mcp.server}: ${mcp.tool}`;
   const { input } = item;
   const path = filePath(input, root);
-  const about = (verb: string, what: string, fallback: string) =>
-    what ? `${verb} ${what}` : fallback;
   switch (item.name) {
     case "Bash":
-      return toolHint(input, ["command"]) || "Ran a command";
+      return toolHint(input, ["command"]) || t("Ran a command");
     case "Read":
     case "NotebookRead":
-      return about("Read", path, "Read a file");
+      return path ? t("Read {{path}}", { path }) : t("Read a file");
     case "LS":
-      return about("Listed", path, "Listed a folder");
+      return path ? t("Listed {{path}}", { path }) : t("Listed a folder");
     case "Edit":
     case "MultiEdit":
     case "NotebookEdit":
-      return about("Edited", path, "Edited a file");
+      return path ? t("Edited {{path}}", { path }) : t("Edited a file");
     case "Write":
-      return about("Wrote", path, "Wrote a file");
+      return path ? t("Wrote {{path}}", { path }) : t("Wrote a file");
     case "Grep": {
       const pattern = toolHint(input, ["pattern"]);
-      return pattern ? `Searched ${pattern}${path ? ` in ${path}` : ""}` : "Searched code";
+      if (!pattern) return t("Searched code");
+      return path
+        ? t("Searched {{pattern}} in {{path}}", { pattern, path })
+        : t("Searched {{pattern}}", { pattern });
     }
-    case "Glob":
-      return about("Searched files", toolHint(input, ["pattern"]), "Searched files");
-    case "WebSearch":
-      return about("Searched the web for", toolHint(input, ["query"]), "Searched the web");
-    case "WebFetch":
-      return about("Fetched", toolHint(input, ["url"]), "Fetched a page");
-    case "Skill":
-      return about("Used skill", skillName(input), "Used a skill");
+    case "Glob": {
+      const pattern = toolHint(input, ["pattern"]);
+      return pattern ? t("Searched files {{pattern}}", { pattern }) : t("Searched files");
+    }
+    case "WebSearch": {
+      const query = toolHint(input, ["query"]);
+      return query ? t("Searched the web for {{query}}", { query }) : t("Searched the web");
+    }
+    case "WebFetch": {
+      const url = toolHint(input, ["url"]);
+      return url ? t("Fetched {{url}}", { url }) : t("Fetched a page");
+    }
+    case "Skill": {
+      const skill = skillName(input);
+      return skill ? t("Used skill {{skill}}", { skill }) : t("Used a skill");
+    }
     case "Task":
-    case "Agent":
-      return about("Ran agent", toolHint(input, ["description"]), "Ran an agent");
+    case "Agent": {
+      const description = toolHint(input, ["description"]);
+      return description ? t("Ran agent {{description}}", { description }) : t("Ran an agent");
+    }
   }
   const hint = toolHint(input);
-  const name = item.name ?? "Tool";
+  const name = item.name ?? t("Tool");
   return hint ? `${name} ${hint}` : name;
 }
 
@@ -200,7 +215,11 @@ export function summarize(items: readonly Item[]): StepsSummary {
   const calls = steps.filter((i) => i.kind === "tool" || i.kind === "todo");
   if (calls.length === 0) {
     const n = steps.length;
-    return { label: n === 1 ? "Thought" : `Thought ${n} times`, kind: "thinking", failures };
+    return {
+      label: t("Thought {{count}} times", { count: n, defaultValue_one: "Thought" }),
+      kind: "thinking",
+      failures,
+    };
   }
   const servers: string[] = [];
   // Parallax's calls by what they did, and how many times (PLX-843).
@@ -234,17 +253,31 @@ export function summarize(items: readonly Item[]): StepsSummary {
     .sort((a, b) => a.order - b.order);
   const parts = ranked.map(({ group, count }) => callLabel(group, count.calls, count.files.size));
   // Up to two of Parallax's in words, as "Checked orchestration capabilities", more as using it.
-  const said = [...plxd].map(([label, n]) => (n > 1 ? `${label} ${times(n)}` : label));
+  const said = [...plxd].map(([label, n]) =>
+    n > 1
+      ? t("{{label}} {{count}} times", {
+          label: t(label),
+          count: n,
+          defaultValue_one: "{{label}} once",
+        })
+      : t(label),
+  );
   if (said.length > 2 && !servers.includes("Parallax")) servers.push("Parallax");
   parts.unshift(
-    ...(servers.length > 0 ? [`Used ${list.format(servers)}`] : []),
+    ...(servers.length > 0 ? [t("Used {{servers}}", { servers: list.format(servers) })] : []),
     ...(said.length > 2 ? [] : said),
   );
   const others =
     calls.length -
     calls.filter((c) => c.kind === "tool" && ["mcp", "plxd"].includes(toolKind(c.name))).length -
     ranked.reduce((n, { count }) => n + count.calls, 0);
-  if (others > 0) parts.push(`performed ${others} other ${others === 1 ? "action" : "actions"}`);
+  if (others > 0)
+    parts.push(
+      t("performed {{count}} other actions", {
+        count: others,
+        defaultValue_one: "performed {{count}} other action",
+      }),
+    );
   const label = list.format(
     parts.map((p, i) => (i === 0 ? p : p.charAt(0).toLowerCase() + p.slice(1))),
   );
@@ -259,152 +292,160 @@ export function summarize(items: readonly Item[]): StepsSummary {
 // Commands and edits lead a summary, and calls of tools this app doesn't know come last.
 const callRanks: Partial<Record<string, number>> = { shell: 0, editing: 0, writing: 0, working: 2 };
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-const times = (n: number) => (n === 1 ? "once" : `${n} times`);
-
 /** A kind of call in a summary, by how many there were and how many files they changed. */
 function callLabel(group: string, calls: number, files: number): string {
+  const count = calls;
   switch (group) {
     case "shell":
-      return `Ran ${plural(calls, "command", "commands")}`;
+      return t("Ran {{count}} commands", { count, defaultValue_one: "Ran {{count}} command" });
     case "editing":
     case "writing":
-      return `Changed ${plural(files, "file", "files")}`;
+      return t("Changed {{count}} files", {
+        count: files,
+        defaultValue_one: "Changed {{count}} file",
+      });
     case "reading":
-      return `Read ${plural(calls, "file", "files")}`;
+      return t("Read {{count}} files", { count, defaultValue_one: "Read {{count}} file" });
     case "searching":
-      return `Searched code ${times(calls)}`;
+      return t("Searched code {{count}} times", { count, defaultValue_one: "Searched code once" });
     case "web":
-      return `Searched the web ${times(calls)}`;
+      return t("Searched the web {{count}} times", {
+        count,
+        defaultValue_one: "Searched the web once",
+      });
     case "fetching":
-      return `Fetched ${plural(calls, "page", "pages")}`;
+      return t("Fetched {{count}} pages", { count, defaultValue_one: "Fetched {{count}} page" });
     case "agent":
-      return `Ran ${plural(calls, "agent", "agents")}`;
+      return t("Ran {{count}} agents", { count, defaultValue_one: "Ran {{count}} agent" });
     case "skill":
-      return `Used ${plural(calls, "skill", "skills")}`;
+      return t("Used {{count}} skills", { count, defaultValue_one: "Used {{count}} skill" });
     case "computer":
-      return `Used apps ${times(calls)}`;
+      return t("Used apps {{count}} times", { count, defaultValue_one: "Used apps once" });
     case "planning":
-      return "Updated the plan";
+      return t("Updated the plan");
     default:
-      return `Used ${plural(calls, "tool", "tools")}`;
+      return t("Used {{count}} tools", { count, defaultValue_one: "Used {{count}} tool" });
   }
 }
 
 /**
- * Joins English parts: "a", "a and b", or "a, b, and c", as `Intl.ListFormat` does, which the
- * mobile app's Hermes lacks.
+ * Joins parts: "a", "a and b", or "a, b, and c", as `Intl.ListFormat` does, which the mobile
+ * app's Hermes lacks.
  */
 const list = {
   format: (parts: string[]) =>
-    parts.length < 3
-      ? parts.join(" and ")
-      : `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`,
+    parts.length < 2
+      ? parts.join("")
+      : parts.length === 2
+        ? t("{{first}} and {{second}}", { first: parts[0], second: parts[1] })
+        : t("{{list}}, and {{last}}", { list: parts.slice(0, -1).join(", "), last: parts.at(-1) }),
 };
 
 // A thread's plxd tools (0041), by what they're doing and what they did (PLX-843), then the 0019
 // orchestrator tools older transcripts hold.
 const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
-  thread_launch: ["Starting a child thread", "Started a child thread"],
-  thread_fork: ["Forking a thread", "Forked a thread"],
-  thread_list: ["Listing threads", "Listed threads"],
-  thread_read: ["Reading a thread", "Read a thread"],
-  thread_search: ["Searching threads", "Searched threads"],
-  thread_send: ["Messaging a thread", "Messaged a thread"],
-  thread_wait: ["Waiting on a thread", "Waited on a thread"],
-  thread_interrupt: ["Interrupting a thread", "Interrupted a thread"],
-  thread_update: ["Updating a thread", "Updated a thread"],
-  thread_merge_back: ["Merging a thread back", "Merged a thread back"],
-  create_threads: ["Creating threads", "Created threads"],
+  thread_launch: [msg("Starting a child thread"), msg("Started a child thread")],
+  thread_fork: [msg("Forking a thread"), msg("Forked a thread")],
+  thread_list: [msg("Listing threads"), msg("Listed threads")],
+  thread_read: [msg("Reading a thread"), msg("Read a thread")],
+  thread_search: [msg("Searching threads"), msg("Searched threads")],
+  thread_send: [msg("Messaging a thread"), msg("Messaged a thread")],
+  thread_wait: [msg("Waiting on a thread"), msg("Waited on a thread")],
+  thread_interrupt: [msg("Interrupting a thread"), msg("Interrupted a thread")],
+  thread_update: [msg("Updating a thread"), msg("Updated a thread")],
+  thread_merge_back: [msg("Merging a thread back"), msg("Merged a thread back")],
+  create_threads: [msg("Creating threads"), msg("Created threads")],
   orchestrator_capabilities: [
-    "Checking orchestration capabilities",
-    "Checked orchestration capabilities",
+    msg("Checking orchestration capabilities"),
+    msg("Checked orchestration capabilities"),
   ],
-  delegate_task: ["Delegating a task", "Delegated a task"],
-  task_status: ["Checking on a task", "Checked on a task"],
-  task_cancel: ["Cancelling a task", "Cancelled a task"],
-  schedule_task: ["Scheduling a task", "Scheduled a task"],
-  list_scheduled_tasks: ["Listing scheduled tasks", "Listed scheduled tasks"],
-  update_scheduled_task: ["Updating a scheduled task", "Updated a scheduled task"],
-  delete_scheduled_task: ["Deleting a scheduled task", "Deleted a scheduled task"],
-  run_scheduled_task_now: ["Running a scheduled task", "Ran a scheduled task"],
-  request_secret: ["Asking you for a secret", "Asked you for a secret"],
-  present_files: ["Presenting files", "Presented files"],
-  html_render: ["Rendering a page", "Rendered a page"],
-  html_preview: ["Previewing a page", "Previewed a page"],
-  pr_link: ["Linking a pull request", "Linked a pull request"],
-  pr_unlink: ["Unlinking a pull request", "Unlinked a pull request"],
-  link_pull_request: ["Linking a pull request", "Linked a pull request"],
-  unlink_pull_request: ["Unlinking a pull request", "Unlinked a pull request"],
-  list_thread_pull_requests: ["Listing pull requests", "Listed pull requests"],
-  watch_pull_request: ["Watching a pull request", "Watched a pull request"],
-  unwatch_pull_request: ["Unwatching a pull request", "Unwatched a pull request"],
-  memory_read: ["Reading memory", "Read memory"],
-  memory_propose: ["Proposing a memory", "Proposed a memory"],
-  memory_write: ["Writing memory", "Wrote memory"],
-  device_list: ["Listing devices", "Listed devices"],
-  device_open: ["Opening a device", "Opened a device"],
-  device_screenshot: ["Taking a device screenshot", "Took a device screenshot"],
-  device_close: ["Closing a device", "Closed a device"],
-  preview_open: ["Opening a preview", "Opened a preview"],
-  preview_list: ["Listing previews", "Listed previews"],
-  preview_status: ["Checking the preview", "Checked the preview"],
-  preview_close: ["Closing the preview", "Closed the preview"],
-  preview_navigate: ["Navigating the preview", "Navigated the preview"],
-  preview_snapshot: ["Reading the page", "Read the page"],
-  preview_click: ["Clicking in the preview", "Clicked in the preview"],
-  preview_hover: ["Hovering in the preview", "Hovered in the preview"],
-  preview_drag: ["Dragging in the preview", "Dragged in the preview"],
-  preview_type: ["Typing in the preview", "Typed in the preview"],
-  preview_press: ["Pressing a key", "Pressed a key"],
-  preview_select: ["Choosing an option", "Chose an option"],
-  preview_scroll: ["Scrolling the preview", "Scrolled the preview"],
-  preview_resize: ["Resizing the preview", "Resized the preview"],
-  preview_upload: ["Uploading a file", "Uploaded a file"],
-  preview_dialog: ["Answering a dialog", "Answered a dialog"],
-  preview_evaluate: ["Running a script in the preview", "Ran a script in the preview"],
-  preview_wait_for: ["Waiting on the page", "Waited on the page"],
-  preview_set_appearance: ["Setting the preview's appearance", "Set the preview's appearance"],
-  preview_recording_start: ["Recording the preview", "Started a recording"],
-  preview_recording_stop: ["Stopping the recording", "Stopped the recording"],
-  ask: ["Asking the orchestrator", "Asked the orchestrator"],
-  answer: ["Answering a question", "Answered a question"],
-  escalate: ["Passing a question to you", "Passed a question to you"],
-  land: ["Queuing a thread to land", "Queued a thread to land"],
-  checks_propose: ["Proposing checks", "Proposed checks"],
-  read_context: ["Reading shared context", "Read shared context"],
-  write_context: ["Writing shared context", "Wrote shared context"],
-  spawn_agent: ["Starting a subagent", "Started a subagent"],
-  list_agents: ["Listing subagents", "Listed subagents"],
-  agent_status: ["Checking on a subagent", "Checked on a subagent"],
-  message_agent: ["Messaging a subagent", "Messaged a subagent"],
-  cancel_agent: ["Stopping a subagent", "Stopped a subagent"],
-  agent_diff: ["Reading a subagent's diff", "Read a subagent's diff"],
+  delegate_task: [msg("Delegating a task"), msg("Delegated a task")],
+  task_status: [msg("Checking on a task"), msg("Checked on a task")],
+  task_cancel: [msg("Cancelling a task"), msg("Cancelled a task")],
+  schedule_task: [msg("Scheduling a task"), msg("Scheduled a task")],
+  list_scheduled_tasks: [msg("Listing scheduled tasks"), msg("Listed scheduled tasks")],
+  update_scheduled_task: [msg("Updating a scheduled task"), msg("Updated a scheduled task")],
+  delete_scheduled_task: [msg("Deleting a scheduled task"), msg("Deleted a scheduled task")],
+  run_scheduled_task_now: [msg("Running a scheduled task"), msg("Ran a scheduled task")],
+  request_secret: [msg("Asking you for a secret"), msg("Asked you for a secret")],
+  present_files: [msg("Presenting files"), msg("Presented files")],
+  html_render: [msg("Rendering a page"), msg("Rendered a page")],
+  html_preview: [msg("Previewing a page"), msg("Previewed a page")],
+  pr_link: [msg("Linking a pull request"), msg("Linked a pull request")],
+  pr_unlink: [msg("Unlinking a pull request"), msg("Unlinked a pull request")],
+  link_pull_request: [msg("Linking a pull request"), msg("Linked a pull request")],
+  unlink_pull_request: [msg("Unlinking a pull request"), msg("Unlinked a pull request")],
+  list_thread_pull_requests: [msg("Listing pull requests"), msg("Listed pull requests")],
+  watch_pull_request: [msg("Watching a pull request"), msg("Watched a pull request")],
+  unwatch_pull_request: [msg("Unwatching a pull request"), msg("Unwatched a pull request")],
+  memory_read: [msg("Reading memory"), msg("Read memory")],
+  memory_propose: [msg("Proposing a memory"), msg("Proposed a memory")],
+  memory_write: [msg("Writing memory"), msg("Wrote memory")],
+  device_list: [msg("Listing devices"), msg("Listed devices")],
+  device_open: [msg("Opening a device"), msg("Opened a device")],
+  device_screenshot: [msg("Taking a device screenshot"), msg("Took a device screenshot")],
+  device_close: [msg("Closing a device"), msg("Closed a device")],
+  preview_open: [msg("Opening a preview"), msg("Opened a preview")],
+  preview_list: [msg("Listing previews"), msg("Listed previews")],
+  preview_status: [msg("Checking the preview"), msg("Checked the preview")],
+  preview_close: [msg("Closing the preview"), msg("Closed the preview")],
+  preview_navigate: [msg("Navigating the preview"), msg("Navigated the preview")],
+  preview_snapshot: [msg("Reading the page"), msg("Read the page")],
+  preview_click: [msg("Clicking in the preview"), msg("Clicked in the preview")],
+  preview_hover: [msg("Hovering in the preview"), msg("Hovered in the preview")],
+  preview_drag: [msg("Dragging in the preview"), msg("Dragged in the preview")],
+  preview_type: [msg("Typing in the preview"), msg("Typed in the preview")],
+  preview_press: [msg("Pressing a key"), msg("Pressed a key")],
+  preview_select: [msg("Choosing an option"), msg("Chose an option")],
+  preview_scroll: [msg("Scrolling the preview"), msg("Scrolled the preview")],
+  preview_resize: [msg("Resizing the preview"), msg("Resized the preview")],
+  preview_upload: [msg("Uploading a file"), msg("Uploaded a file")],
+  preview_dialog: [msg("Answering a dialog"), msg("Answered a dialog")],
+  preview_evaluate: [msg("Running a script in the preview"), msg("Ran a script in the preview")],
+  preview_wait_for: [msg("Waiting on the page"), msg("Waited on the page")],
+  preview_set_appearance: [
+    msg("Setting the preview's appearance"),
+    msg("Set the preview's appearance"),
+  ],
+  preview_recording_start: [msg("Recording the preview"), msg("Started a recording")],
+  preview_recording_stop: [msg("Stopping the recording"), msg("Stopped the recording")],
+  ask: [msg("Asking the orchestrator"), msg("Asked the orchestrator")],
+  answer: [msg("Answering a question"), msg("Answered a question")],
+  escalate: [msg("Passing a question to you"), msg("Passed a question to you")],
+  land: [msg("Queuing a thread to land"), msg("Queued a thread to land")],
+  checks_propose: [msg("Proposing checks"), msg("Proposed checks")],
+  read_context: [msg("Reading shared context"), msg("Read shared context")],
+  write_context: [msg("Writing shared context"), msg("Wrote shared context")],
+  spawn_agent: [msg("Starting a subagent"), msg("Started a subagent")],
+  list_agents: [msg("Listing subagents"), msg("Listed subagents")],
+  agent_status: [msg("Checking on a subagent"), msg("Checked on a subagent")],
+  message_agent: [msg("Messaging a subagent"), msg("Messaged a subagent")],
+  cancel_agent: [msg("Stopping a subagent"), msg("Stopped a subagent")],
+  agent_diff: [msg("Reading a subagent's diff"), msg("Read a subagent's diff")],
 };
 
 // Computer use (PLX-897), by what the agent is doing or did and in which app, such as "Clicked in
 // Notes", and what it typed, pressed, or set.
 const computerTools = `${plxdTools}computer_`;
 const computerLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
-  list_apps: ["Listing apps", "Listed apps"],
-  get_app_state: ["Looking at", "Looked at"],
-  click: ["Clicking in", "Clicked in"],
-  perform_secondary_action: ["Using a control in", "Used a control in"],
-  scroll: ["Scrolling", "Scrolled"],
-  drag: ["Dragging in", "Dragged in"],
-  type_text: ["Typing in", "Typed in"],
-  press_key: ["Pressing a key in", "Pressed a key in"],
-  set_value: ["Setting a value in", "Set a value in"],
+  list_apps: [msg("Listing apps"), msg("Listed apps")],
+  get_app_state: [msg("Looking at {{app}}"), msg("Looked at {{app}}")],
+  click: [msg("Clicking in {{app}}"), msg("Clicked in {{app}}")],
+  perform_secondary_action: [msg("Using a control in {{app}}"), msg("Used a control in {{app}}")],
+  scroll: [msg("Scrolling {{app}}"), msg("Scrolled {{app}}")],
+  drag: [msg("Dragging in {{app}}"), msg("Dragged in {{app}}")],
+  type_text: [msg("Typing in {{app}}"), msg("Typed in {{app}}")],
+  press_key: [msg("Pressing a key in {{app}}"), msg("Pressed a key in {{app}}")],
+  set_value: [msg("Setting a value in {{app}}"), msg("Set a value in {{app}}")],
 };
 
 function computerCall(item: Extract<Item, { kind: "tool" }>, doing: boolean) {
   const tool = item.name?.startsWith(computerTools) ? item.name.slice(computerTools.length) : "";
   const labels = computerLabels[tool];
   if (!labels) return undefined;
-  const verb = labels[doing ? 0 : 1];
-  const app = toolHint(item.input, ["app"]);
+  const app = toolHint(item.input, ["app"]) || t("an app");
   return {
-    label: tool === "list_apps" ? verb : `${verb} ${app || "an app"}`,
+    label: t(labels[doing ? 0 : 1], { app }),
     detail: toolHint(item.input, ["text", "key", "action", "value"]),
   };
 }
@@ -424,7 +465,7 @@ function plxdCall(item: Extract<Item, { kind: "tool" }>, doing = false) {
   const labels = plxdLabel(item.name);
   return labels
     ? {
-        label: labels[doing ? 0 : 1],
+        label: t(labels[doing ? 0 : 1]),
         detail:
           item.subagent ??
           toolHint(item.input, ["title", "prompt", "task", "label", "path", "query", "url"]),
@@ -452,7 +493,7 @@ export const skillName = (input?: JsonValue) => toolHint(input, ["skill", "comma
 export function inputText(input: JsonValue): string {
   if (isObject(input) && input["truncated"] === true) {
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
-    return `Too large to show (${Math.ceil(bytes / 1024)} KB)`;
+    return t("Too large to show ({{size}} KB)", { size: Math.ceil(bytes / 1024) });
   }
   return typeof input === "string" ? input : JSON.stringify(input, null, 2);
 }

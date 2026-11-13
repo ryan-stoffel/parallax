@@ -8,6 +8,7 @@ import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { t } from "i18next";
 import { Asset, type AssetMetadata } from "expo-media-library";
 import type { LucideIcon } from "lucide-react-native";
 import {
@@ -58,6 +59,7 @@ import {
   isNew,
   type Model,
 } from "../../desktop/src/renderer/catalog";
+import { msg } from "../../desktop/src/i18n";
 import { imageCaps } from "../../desktop/src/renderer/images";
 import { cleanDictation, voiceText } from "../../desktop/src/renderer/voiceText";
 import { defaultBackend } from "../../desktop/src/renderer/settings/shared";
@@ -130,7 +132,7 @@ async function upload(hostId: string, name: string, data: string, chunk?: number
       data: data.slice(at, at + piece),
       ...(chunk && { uploadId, offset: (at / 4) * 3, last }),
     });
-    if ("error" in answer) throw new Error(`${name} couldn't be sent: ${answer.error.message}`);
+    if ("error" in answer) throw new Error(t("{{name}} couldn't be sent: {{error}}", { name, error: answer.error.message }));
     if (last) return answer.result.path;
     uploadId = answer.result.uploadId;
   }
@@ -142,9 +144,10 @@ const shortName = (name: string) => name.replace(/^(Claude|OpenAI|Cursor) /, "")
 /** What a model offers, in a line: its context windows and fast mode. */
 function modelLine(m: Model): string | undefined {
   const parts = [
-    m.contexts[0] && `${m.contexts[0] >= 1_000_000 ? `${m.contexts[0] / 1_000_000}M` : `${m.contexts[0] / 1000}K`} context`,
-    m.fast && "fast mode",
-    isNew(m) && "new",
+    m.contexts[0] &&
+      t("{{size}} context", { size: m.contexts[0] >= 1_000_000 ? `${m.contexts[0] / 1_000_000}M` : `${m.contexts[0] / 1000}K` }),
+    m.fast && t("fast mode"),
+    isNew(m) && t("new"),
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : undefined;
 }
@@ -178,11 +181,11 @@ function listCommands(hostId: string, backend: string, repo?: string, runId?: st
 
 /** Each access level's short name, for the prompt box's pill. */
 const accessShort: Record<AgentPermission, string> = {
-  manual: "Ask",
-  edit: "Edits",
-  auto: "Auto",
-  plan: "Plan",
-  bypass: "Full",
+  manual: msg("Ask"),
+  edit: msg("Edits"),
+  auto: msg("Auto"),
+  plan: msg("Plan"),
+  bypass: msg("Full", { context: "access level" }),
 };
 
 /** Each access level's icon, as the desktop's composer has them. */
@@ -297,7 +300,7 @@ function ModelSheet({
     </Pressable>
   );
   const chevron = <Icon icon={ChevronRight} size={17} color={c.faintForeground} />;
-  const title = { model: "Select model", provider: "Provider", access: "Access" }[page];
+  const title = { model: t("Select model"), provider: t("Provider"), access: t("Access") }[page];
   const shown = models.find((m) => m.id === model);
   return (
     <Sheet
@@ -307,7 +310,7 @@ function ModelSheet({
         <View style={styles.sheetHead}>
           <T style={sheetTitle}>{title}</T>
           <GlassButton
-            label={page === "model" ? "Close" : "Back"}
+            label={page === "model" ? t("Close") : t("Back")}
             size={40}
             onPress={() => (page === "model" ? onClose() : onPage("model"))}
           >
@@ -325,7 +328,7 @@ function ModelSheet({
             {offers.length > 1 && (
               <View style={card}>
                 {row(
-                  "Provider",
+                  t("Provider"),
                   <>
                     <ProviderLogo kind={current?.kind} size={18} />
                     <T muted numberOfLines={1} style={{ fontSize: 16, flexShrink: 1 }}>
@@ -334,21 +337,21 @@ function ModelSheet({
                   </>,
                   () => onPage("provider"),
                   chevron,
-                  `Provider: ${current?.name ?? provider}`,
+                  t("Provider: {{name}}", { name: current?.name ?? provider }),
                 )}
               </View>
             )}
             <Animated.View layout={LinearTransition.duration(200)} style={card}>
               {row(
-                "Model",
+                t("Model"),
                 <T muted numberOfLines={1} style={{ fontSize: 16, flexShrink: 1 }}>
-                  {shortName(shown?.name ?? (model || "Default"))}
+                  {shortName(shown?.name ?? (model || t("Default")))}
                 </T>,
                 () => choose(() => setListing((l) => !l)),
                 <Animated.View style={turn}>
                   <Icon icon={ChevronDown} size={17} color={c.faintForeground} />
                 </Animated.View>,
-                `Model: ${shown?.name ?? (model || "Default")}`,
+                t("Model: {{name}}", { name: shown?.name ?? (model || t("Default")) }),
               )}
               {listing && (
                 <Animated.View
@@ -377,10 +380,10 @@ function ModelSheet({
               <Animated.View layout={LinearTransition.duration(200)} style={[...card, styles.reasoning]}>
                 <View style={{ gap: 2 }}>
                   <T style={{ fontSize: 17 }}>
-                    Reasoning <T muted style={{ fontSize: 17 }}>{level?.name ?? "Default"}</T>
+                    {t("Reasoning")} <T muted style={{ fontSize: 17 }}>{level ? t(level.name) : t("Default")}</T>
                   </T>
                   <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 18 }}>
-                    {level?.blurb ?? "As the provider sets it, until you pick one"}
+                    {level ? t(level.blurb) : t("As the provider sets it, until you pick one")}
                   </T>
                 </View>
                 <EffortSlider value={effort} onChange={onEffort} />
@@ -389,13 +392,13 @@ function ModelSheet({
             {permission && (
               <Animated.View layout={LinearTransition.duration(200)} style={card}>
                 {row(
-                  "Access",
+                  t("Access"),
                   <T muted numberOfLines={1} style={{ fontSize: 16, flexShrink: 1 }}>
-                    {accessLevels[permission].label}
+                    {t(accessLevels[permission].label)}
                   </T>,
                   () => onPage("access"),
                   chevron,
-                  `Access: ${accessLevels[permission].label}`,
+                  t("Access: {{level}}", { level: t(accessLevels[permission].label) }),
                 )}
               </Animated.View>
             )}
@@ -411,8 +414,8 @@ function ModelSheet({
                     o.id,
                     o.name,
                     can
-                      ? `${o.models.length} model${o.models.length === 1 ? "" : "s"}`
-                      : "Start a new thread to switch to it here.",
+                      ? t("{{count}} models", { count: o.models.length, defaultValue_one: "{{count}} model" })
+                      : t("Start a new thread to switch to it here."),
                     o.id === provider,
                     () => {
                       onProvider(o.id);
@@ -429,7 +432,7 @@ function ModelSheet({
         {page === "access" && (
           <View style={card}>
             {permissions.map((p, i) =>
-              option(p, accessLevels[p].label, accessLevels[p].description, p === permission, () => {
+              option(p, t(accessLevels[p].label), t(accessLevels[p].description), p === permission, () => {
                 onPermission(p);
                 onPage("model");
               }, i === permissions.length - 1),
@@ -533,7 +536,7 @@ export function Composer({
   // An open run without one runs on its CLI's default, which only the provider's name can stand for.
   const shownModel = model ?? run?.model ?? (onStart ? offer.models[0]?.id : undefined) ?? "";
   const modelName =
-    offer.models.find((m) => m.id === shownModel)?.name ?? (shownModel || offer.name || "Default model");
+    offer.models.find((m) => m.id === shownModel)?.name ?? (shownModel || offer.name || t("Default model"));
   const shownEffort = effort ?? run?.effort;
   // A new thread starts with Settings' default access, where its provider takes it.
   const defaultAccess = usePrefs().access;
@@ -571,9 +574,9 @@ export function Composer({
     };
     try {
       if (camera && !(await ImagePicker.requestCameraPermissionsAsync()).granted)
-        return showAlert("Camera is off for Parallax", "Allow it in Settings to take a photo for your message.", [
-          { text: "Not now", style: "cancel" },
-          { text: "Open Settings", onPress: () => void Linking.openSettings() },
+        return showAlert(t("Camera is off for Parallax"), t("Allow it in Settings to take a photo for your message."), [
+          { text: t("Not now"), style: "cancel" },
+          { text: t("Open Settings"), onPress: () => void Linking.openSettings() },
         ]);
       const picked = camera
         ? await ImagePicker.launchCameraAsync(options)
@@ -610,7 +613,7 @@ export function Composer({
     if (had) return setAttached((a) => a.filter((x) => x !== had));
     if (attached.filter((a) => a.kind === "image").length + reading.current.size >= maxImages) {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      return setError(`A message takes up to ${maxImages} photos.`);
+      return setError(t("A message takes up to {{count}} photos.", { count: maxImages, defaultValue_one: "A message takes up to {{count}} photo." }));
     }
     reading.current.add(p.id);
     setPending((x) => [...x, p.id]);
@@ -642,7 +645,7 @@ export function Composer({
       const files = attached.filter((a) => a.kind === "file");
       let paths: string[] = [];
       if ("fileUploads" in capabilities && attached.length) {
-        if (!connected) throw new Error(`${computer.machine.name} isn't connected, so files can't be sent yet.`);
+        if (!connected) throw new Error(t("{{name}} isn't connected, so files can't be sent yet.", { name: computer.machine.name }));
         const chunk = capabilities["fileChunks"]?.["chunkBytes"] as number | undefined;
         for (const [n, image] of images.entries()) {
           const { name, data } = encodedImage(image, n + 1);
@@ -650,7 +653,7 @@ export function Composer({
         }
         for (const f of files)
           paths.push(await upload(computer.machine.id, f.name, await new File(f.uri).base64(), chunk));
-      } else if (files.length) throw new Error(`${computer.machine.name}'s Parallax can't take files.`);
+      } else if (files.length) throw new Error(t("{{name}}'s Parallax can't take files.", { name: computer.machine.name }));
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       if (onStart) {
         // The provider shown when it isn't the default: one picked, or another when the default's is
@@ -748,7 +751,7 @@ export function Composer({
         <View style={[styles.menu, { backgroundColor: c.surface, borderColor: c.border }]}>
           {loaded === undefined ? (
             <T faint style={{ fontSize: 14, padding: 14 }}>
-              Loading commands…
+              {t("Loading commands…")}
             </T>
           ) : (
             <ScrollView keyboardShouldPersistTaps="always" style={{ maxHeight: 280 }}>
@@ -813,7 +816,7 @@ export function Composer({
                 )}
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Remove"
+                  accessibilityLabel={t("Remove")}
                   hitSlop={8}
                   onPress={() => setAttached((x) => x.filter((y) => y.key !== a.key))}
                   style={[styles.remove, { backgroundColor: c.foreground }]}
@@ -826,7 +829,7 @@ export function Composer({
         )}
         <EnrichedMarkdownTextInput
           ref={input}
-          accessibilityLabel="Message"
+          accessibilityLabel={t("Message")}
           onChangeMarkdown={(markdown) => {
             typed.current = markdown;
             onDraft(markdown);
@@ -834,7 +837,7 @@ export function Composer({
           onChangeText={changePlain}
           onChangeSelection={setSelection}
           markdownShortcuts
-          placeholder={placeholder ?? (working ? "Steer, or queue a follow-up" : "Reply")}
+          placeholder={placeholder ?? (working ? t("Steer, or queue a follow-up") : t("Reply"))}
           placeholderTextColor={c.faintForeground}
           cursorColor={c.accent}
           selectionColor={c.accent}
@@ -852,7 +855,7 @@ export function Composer({
         <View style={styles.bar}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Attach"
+            accessibilityLabel={t("Attach")}
             hitSlop={8}
             onPress={() => {
               Keyboard.dismiss();
@@ -865,7 +868,7 @@ export function Composer({
           {changes && (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Model: ${modelName}`}
+              accessibilityLabel={t("Model: {{name}}", { name: modelName })}
               onPress={() => setSheet("model")}
               style={({ pressed }) => [styles.pill, { backgroundColor: pressed ? c.hover : c.selected }]}
             >
@@ -875,7 +878,7 @@ export function Composer({
                 {offer.efforts && shownEffort && (
                   <Text style={{ color: c.mutedForeground }}>
                     {" "}
-                    {effortLevels.find((l) => l.value === shownEffort)?.name ?? shownEffort}
+                    {t(effortLevels.find((l) => l.value === shownEffort)?.name ?? shownEffort)}
                   </Text>
                 )}
               </Text>
@@ -884,7 +887,7 @@ export function Composer({
           {changes && shownAccess && (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Access: ${accessLevels[shownAccess].label}`}
+              accessibilityLabel={t("Access: {{level}}", { level: t(accessLevels[shownAccess].label) })}
               onPress={() => setSheet("access")}
               style={({ pressed }) => [styles.access, { backgroundColor: pressed ? c.hover : c.selected }]}
             >
@@ -894,14 +897,14 @@ export function Composer({
                 color={c.foreground}
               />
               <Text numberOfLines={1} style={[styles.pillText, { color: c.foreground, flexShrink: 1 }]}>
-                {accessShort[shownAccess]}
+                {t(accessShort[shownAccess])}
               </Text>
             </Pressable>
           )}
           <View style={{ flex: 1 }} />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Voice input"
+            accessibilityLabel={t("Voice input")}
             hitSlop={8}
             onPress={() => {
               Keyboard.dismiss();
@@ -915,7 +918,7 @@ export function Composer({
           {working && !ready && (
             <SendButton
               stop
-              label="Stop"
+              label={t("Stop")}
               onPress={() => {
                 void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                 onStop();
@@ -929,12 +932,12 @@ export function Composer({
               style={[styles.steer, { borderColor: c.border }]}
             >
               <T medium style={{ fontSize: 13 }}>
-                Steer
+                {t("Steer")}
               </T>
             </Pressable>
           )}
           {(!working || ready) && (
-            <SendButton label={working ? "Queue" : "Send"} disabled={!ready} onPress={() => void send(false)} />
+            <SendButton label={working ? t("Queue") : t("Send")} disabled={!ready} onPress={() => void send(false)} />
           )}
         </View>
       </View>

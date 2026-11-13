@@ -18,6 +18,7 @@ import {
 } from "@react-navigation/native";
 import { createNativeStackNavigator, type NativeStackNavigationOptions } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
+import i18next, { t } from "i18next";
 import { ChevronLeft, Info, X } from "lucide-react-native";
 import { useContext, useEffect, useRef, useState } from "react";
 import { AppState, Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
@@ -50,6 +51,7 @@ import {
   showThreadStatus,
 } from "./push";
 import { threadStatus } from "./threadStatus";
+import { startLanguage } from "./language";
 import { LightboxHost } from "./Lightbox";
 import { OrchestratorInboxScreen } from "./OrchestratorInbox";
 import { PHONE } from "./phone";
@@ -79,7 +81,7 @@ function SidebarButton() {
   const c = useColors();
   const { open } = useContext(SidebarControl);
   return (
-    <GlassButton label="Open sidebar" onPress={open}>
+    <GlassButton label={t("Open sidebar")} onPress={open}>
       <SidebarIcon color={c.foreground} />
     </GlassButton>
   );
@@ -138,7 +140,7 @@ const inSheet =
 /** A sheet's glass close button. */
 function CloseButton({ onPress }: { onPress: () => void }) {
   return (
-    <GlassButton label="Close" onPress={onPress}>
+    <GlassButton label={t("Close")} onPress={onPress}>
       <Icon icon={X} size={20} />
     </GlassButton>
   );
@@ -147,7 +149,7 @@ function CloseButton({ onPress }: { onPress: () => void }) {
 /** A glass back chevron, which returns to the page or sheet under this one. */
 const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeStackNavigationOptions => ({
   headerLeft: () => (
-    <GlassButton label="Back" onPress={() => navigation.goBack()}>
+    <GlassButton label={t("Back")} onPress={() => navigation.goBack()}>
       <Icon icon={ChevronLeft} size={22} />
     </GlassButton>
   ),
@@ -165,7 +167,7 @@ async function tell(computers: Computer[], hostId: string, runId: string, alert:
   if (!m || !current(m) || !getPrefs().notify[alert]) return;
   const { state } = m.view;
   if (!state.threads.some((t) => t.id === runId && !t.archived)) return;
-  const title = state.titles[runId] ?? "A thread";
+  const title = state.titles[runId] ?? t("A thread");
   notify(alert, hostId, runId, title, alert === "needsYou" ? undefined : await lastReply(hostId, runId));
 }
 
@@ -340,7 +342,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         // The dim is the main view's own (`Rounded`), so it rounds with it; the overlay only closes.
         overlayStyle={{ backgroundColor: "transparent" }}
         style={{ backgroundColor: "transparent" }}
-        overlayAccessibilityLabel="Close sidebar"
+        overlayAccessibilityLabel={t("Close sidebar")}
         swipeEnabled={depth === 0}
         swipeEdgeWidth={width}
         // Closed, only a swipe right opens it, so a swipe left still scrolls what's under it. Open,
@@ -387,10 +389,10 @@ function SettingsSheet() {
         name="SettingsHome"
         component={SettingsScreen}
         options={({ navigation }) => ({
-          title: "Settings",
+          title: t("Settings"),
           headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
           headerRight: () => (
-            <GlassButton label="About Parallax" onPress={() => navigation.navigate("About")}>
+            <GlassButton label={t("About Parallax")} onPress={() => navigation.navigate("About")}>
               <Icon icon={Info} size={20} />
             </GlassButton>
           ),
@@ -399,19 +401,19 @@ function SettingsSheet() {
       <SettingsStack.Screen
         name="PhoneSettings"
         component={PhoneSettingsScreen}
-        options={({ route }) => ({ title: phonePages[route.params.page] })}
+        options={({ route }) => ({ title: t(phonePages[route.params.page]) })}
       />
-      <SettingsStack.Screen name="Account" component={AccountScreen} options={{ title: "Account" }} />
-      <SettingsStack.Screen name="About" component={AboutScreen} options={{ title: "About" }} />
+      <SettingsStack.Screen name="Account" component={AccountScreen} options={{ title: t("Account") }} />
+      <SettingsStack.Screen name="About" component={AboutScreen} options={{ title: t("About") }} />
       <SettingsStack.Screen
         name="ConnectionLog"
         component={ConnectionLogScreen}
-        options={{ title: "Connection log" }}
+        options={{ title: t("Connection log") }}
       />
       {/* Its refresh button is the screen's own (Usage.tsx). */}
-      <SettingsStack.Screen name="Usage" component={UsageScreen} options={{ title: "Usage" }} />
+      <SettingsStack.Screen name="Usage" component={UsageScreen} options={{ title: t("Usage") }} />
       <SettingsStack.Screen name="Computer" component={ComputerScreen} />
-      <SettingsStack.Screen name="ComputerRoutes" component={ComputerRoutesScreen} options={{ title: "Routes" }} />
+      <SettingsStack.Screen name="ComputerRoutes" component={ComputerRoutesScreen} options={{ title: t("Routes") }} />
       <SettingsStack.Screen name="ComputerSettings" component={ComputerSettingsScreen} />
       <SettingsStack.Screen name="Provider" component={ProviderScreen} />
       {/* Its screen doesn't keep clear of a clear header, so its header is solid, on the sheet's background. */}
@@ -433,7 +435,7 @@ function PullRequestsSheet() {
         name="PullRequestList"
         component={PullRequestList}
         options={({ navigation }) => ({
-          title: "Pull requests",
+          title: t("Pull requests"),
           headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
         })}
       />
@@ -454,12 +456,12 @@ function ProjectsSheet() {
         name="ProjectList"
         component={ProjectList}
         options={({ navigation }) => ({
-          title: "Projects",
+          title: t("Projects"),
           headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
         })}
       />
       <ProjectStack.Screen name="Project" component={ProjectScreen} />
-      <ProjectStack.Screen name="ProjectInstructions" component={ProjectInstructionsScreen} options={{ title: "Instructions" }} />
+      <ProjectStack.Screen name="ProjectInstructions" component={ProjectInstructionsScreen} options={{ title: t("Instructions") }} />
     </ProjectStack.Navigator>
   );
 }
@@ -526,7 +528,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
                 ...sheet(c),
                 headerTransparent: false,
                 headerStyle: { backgroundColor: c.background },
-                title: "Thread details",
+                title: t("Thread details"),
                 sheetAllowedDetents: [0.6, 0.95],
               }}
             />
@@ -538,7 +540,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
                 ...sheet(c),
                 headerTransparent: false,
                 headerStyle: { backgroundColor: c.background },
-                title: "Changes",
+                title: t("Changes"),
                 sheetAllowedDetents: [0.6, 0.95],
               }}
             />
@@ -592,8 +594,18 @@ function Gate() {
 }
 
 export default function App() {
+  // The language loads before the first frame, and the whole app remounts when it changes, so
+  // every string, React's or not, is in the new one.
+  const [language, setShown] = useState<string>();
+  useEffect(() => {
+    const show = () => setShown(i18next.language);
+    void startLanguage().then(show);
+    i18next.on("languageChanged", show);
+    return () => i18next.off("languageChanged", show);
+  }, []);
+  if (!language) return null;
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView key={language} style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AccountProvider>
           <Gate />

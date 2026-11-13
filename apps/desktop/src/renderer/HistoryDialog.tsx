@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useRef, useState, type Ref } from "react";
 
 import { browserHistory, byDay, searchHistory } from "./browserHistory";
@@ -22,7 +23,7 @@ export function HistoryDialog({
   return (
     <dialog
       ref={ref}
-      aria-label="History"
+      aria-label={t("History")}
       // Its own toggles, not the confirm's inside it, whose toggle bubbles up here too.
       onToggle={(e) => e.target === e.currentTarget && setOpen(e.newState === "open")}
       className="m-auto flex h-[min(42rem,85vh)] w-[min(44rem,90vw)] flex-col rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/40 not-open:hidden"
@@ -45,13 +46,13 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <h2 className="text-reading font-semibold">History</h2>
+        <h2 className="text-reading font-semibold">{t("History")}</h2>
         <label className="ml-4 flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-[var(--browser-omnibox,var(--selected))] px-2.5 text-body [&>svg]:size-4 [&>svg]:text-muted-foreground">
           <Search aria-hidden />
           <input
             autoFocus
-            aria-label="Search history"
-            placeholder="Search history"
+            aria-label={t("Search history")}
+            placeholder={t("Search history")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground"
@@ -63,16 +64,16 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
           onClick={() => confirm.current?.showModal()}
           className="rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50"
         >
-          Clear browsing history
+          {t("Clear browsing history")}
         </button>
-        <IconButton label="Close history" onClick={close}>
+        <IconButton label={t("Close history")} onClick={close}>
           <Close />
         </IconButton>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {!days.length && (
           <p className="px-3 py-8 text-center text-body text-muted-foreground">
-            {visits.length ? "No visits match." : "Pages you visit show up here."}
+            {visits.length ? t("No visits match.") : t("Pages you visit show up here.")}
           </p>
         )}
         {days.map(({ day, visits: list }) => (
@@ -104,8 +105,8 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
                   </button>
                   <button
                     type="button"
-                    aria-label={`Remove ${v.title || v.url} from history`}
-                    title="Remove from history"
+                    aria-label={t("Remove {{page}} from history", { page: v.title || v.url })}
+                    title={t("Remove from history")}
                     onClick={() => browserHistory.set(browserHistory.get().filter((x) => x !== v))}
                     className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 [&_svg]:size-4"
                   >
@@ -119,14 +120,14 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
       </div>
       <ConfirmDialog
         ref={confirm}
-        title="Clear browsing history?"
-        action="Clear history"
+        title={t("Clear browsing history?")}
+        action={t("Clear history")}
         onConfirm={() => {
           browserHistory.set([]);
           confirm.current?.close();
         }}
       >
-        Every page every browser in Parallax has visited goes from History.
+        {t("Every page every browser in Parallax has visited goes from History.")}
       </ConfirmDialog>
     </>
   );

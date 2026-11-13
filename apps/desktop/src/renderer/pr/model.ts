@@ -1,6 +1,9 @@
 // What the PR view works out from plxd's reads: checks rolled up and grouped, whether a pull
 // request can merge and why not, its review threads, its lines by kind of file, and its guide's
 // state. Pure.
+import { t } from "i18next";
+
+import { msg } from "../../i18n";
 import type {
   PrAction,
   PrCheck,
@@ -114,13 +117,17 @@ export function checkRollup(checks: readonly Pick<PrCheck, "state">[]): Rollup {
           ? "skipped"
           : "none";
   const words = !checks.length
-    ? "No checks"
+    ? t("No checks")
     : !total
-      ? "Checks skipped"
+      ? t("Checks skipped")
       : [
-          `${passed} of ${total} checks passed`,
-          failed && `${failed} failed`,
-          pending && `${pending} running`,
+          t("{{passed}} of {{count}} checks passed", {
+            passed,
+            count: total,
+            defaultValue_one: "{{passed}} of {{count}} checks passed",
+          }),
+          failed && t("{{count}} failed", { count: failed }),
+          pending && t("{{count}} running", { count: pending }),
         ]
           .filter(Boolean)
           .join(", ");
@@ -129,11 +136,13 @@ export function checkRollup(checks: readonly Pick<PrCheck, "state">[]): Rollup {
 
 /** A span of time in a few words: `45s`, `3m 12s`, or `1h 4m`. */
 export function span(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return s % 60 ? `${m}m ${s % 60}s` : `${m}m`;
-  return m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 60)}h`;
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (secs < 60) return t("{{s}}s", { s: secs });
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m < 60) return s ? t("{{m}}m {{s}}s", { m, s }) : t("{{m}}m", { m });
+  const h = Math.floor(m / 60);
+  return m % 60 ? t("{{h}}h {{m}}m", { h, m: m % 60 }) : t("{{h}}h", { h });
 }
 
 /** How long a check ran, or has run so far, or undefined when GitHub didn't say when it started. */
@@ -142,10 +151,29 @@ export function checkTime(c: PrCheck, now = Date.now()): string | undefined {
   return span((c.completedAt ? Date.parse(c.completedAt) : now) - Date.parse(c.startedAt));
 }
 
+/** GitHub's conclusions (plxd lowercases them) and the check states, in words. */
+const endings: Record<string, string> = {
+  success: msg("Success"),
+  failure: msg("Failure"),
+  neutral: msg("Neutral"),
+  cancelled: msg("Cancelled"),
+  skipped: msg("Skipped"),
+  timed_out: msg("Timed out"),
+  action_required: msg("Action required"),
+  stale: msg("Stale"),
+  startup_failure: msg("Startup failure"),
+  error: msg("Error"),
+  passed: msg("Passed"),
+  failed: msg("Failed"),
+};
+
 /** Where a check is, in a word or two: Queued, Running, or how it ended, as "Timed out". */
 export function checkStatus(c: PrCheck): string {
-  if (c.state === "pending") return c.startedAt ? "Running" : "Queued";
-  const ended = (c.conclusion ?? c.state).replaceAll("_", " ");
+  if (c.state === "pending") return c.startedAt ? t("Running") : t("Queued");
+  const how = c.conclusion ?? c.state;
+  if (endings[how]) return t(endings[how]);
+  // One this version doesn't know, as GitHub says it.
+  const ended = how.replaceAll("_", " ");
   return `${ended[0]!.toUpperCase()}${ended.slice(1)}`;
 }
 
@@ -167,7 +195,7 @@ export interface CheckGroupData {
 export function groupChecks(checks: readonly Check[]): CheckGroupData[] {
   const groups = new Map<string, Check[]>();
   for (const c of checks) {
-    const name = c.workflow || "Other checks";
+    const name = c.workflow || t("Other checks");
     groups.set(name, [...(groups.get(name) ?? []), c]);
   }
   return [...groups]
@@ -227,8 +255,8 @@ const matching = (pr: PullRequest, status?: PrStatusResult) =>
  * checks, reviews, or the base.
  */
 export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
-  if (pr.state === "merged") return gate("merged", "Merged");
-  if (pr.state === "closed") return gate("closed", "Closed without merging");
+  if (pr.state === "merged") return gate("merged", t("Merged"));
+  if (pr.state === "closed") return gate("closed", t("Closed without merging"));
   const extra = more(pr);
   const matchingStatus = matching(pr, status);
   const reasons = (matchingStatus?.reasons ?? extra.reasons ?? []).filter(
@@ -240,35 +268,35 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
     matchingStatus?.mergeState?.replaceAll("_", "").toLowerCase() ?? pr.mergeState?.toLowerCase();
   const conflicts = mergeable === "CONFLICTING" || mergeState === "dirty";
   if (pr.draft)
-    return gate("blocked", "This pull request is a draft", [], { draft: true, conflicts });
-  if (conflicts) return gate("blocked", "This branch has conflicts", [], { conflicts });
+    return gate("blocked", t("This pull request is a draft"), [], { draft: true, conflicts });
+  if (conflicts) return gate("blocked", t("This branch has conflicts"), [], { conflicts });
   const checks = checkRollup(pr.checks);
   if (mergeState === "behind")
-    return gate("blocked", `This branch is behind ${pr.baseBranch}`, [], {
+    return gate("blocked", t("This branch is behind {{base}}", { base: pr.baseBranch }), [], {
       behind: true,
       canAutoMerge: true,
     });
   if (mergeState === undefined)
-    return gate("pending", "Checking whether it can merge", [], { canAutoMerge: true });
+    return gate("pending", t("Checking whether it can merge"), [], { canAutoMerge: true });
   if (mergeState === "blocked") {
     const why =
       reasons.length || checks.failed || checks.pending
         ? notes
-        : ["Branch protection needs a review or a check first."];
+        : [t("Branch protection needs a review or a check first.")];
     return checks.pending && !checks.failed
-      ? gate("pending", "Waiting for checks", why, { canAutoMerge: true })
-      : gate("blocked", checks.failed ? "Checks failed" : "Merging is blocked", why, {
+      ? gate("pending", t("Waiting for checks"), why, { canAutoMerge: true })
+      : gate("blocked", checks.failed ? t("Checks failed") : t("Merging is blocked"), why, {
           canAutoMerge: true,
         });
   }
   if (mergeState === "unstable")
-    return gate("warning", "Some checks didn't pass", notes, { canMerge: true });
+    return gate("warning", t("Some checks didn't pass"), notes, { canMerge: true });
   if (mergeState === "clean" || mergeState === "hashooks")
     return reasons.length
-      ? gate("warning", "Can merge", notes, { canMerge: true })
-      : gate("ready", "Ready to merge", [], { canMerge: true });
+      ? gate("warning", t("Can merge"), notes, { canMerge: true })
+      : gate("ready", t("Ready to merge"), [], { canMerge: true });
   // A merge state this version doesn't know: GitHub decides when asked.
-  return gate("pending", "Checking whether it can merge");
+  return gate("pending", t("Checking whether it can merge"));
 }
 
 /** What's wrong between a branch and its base, for the header's base chip. */
@@ -282,33 +310,58 @@ export function baseIssue(pr: PullRequest, status?: PrStatusResult): BaseIssue |
   if (pr.state !== "open") return undefined;
   const gate = mergeGate(pr, status);
   const base = pr.baseBranch;
-  if (gate.conflicts) return { kind: "conflicts", label: `Conflicts with ${base}` };
+  if (gate.conflicts) return { kind: "conflicts", label: t("Conflicts with {{base}}", { base }) };
   // A repository that doesn't require an up-to-date branch still reports how far behind it is.
   const by = matching(pr, status)?.behindBy ?? more(pr).behindBy;
-  if (by) return { kind: "behind", label: `${plural(by, "commit")} behind ${base}` };
-  return gate.behind ? { kind: "behind", label: `Behind ${base}` } : undefined;
+  if (by)
+    return {
+      kind: "behind",
+      label: t("{{count}} commits behind {{base}}", {
+        count: by,
+        base,
+        defaultValue_one: "{{count}} commit behind {{base}}",
+      }),
+    };
+  return gate.behind ? { kind: "behind", label: t("Behind {{base}}", { base }) } : undefined;
 }
 
 /** The ways a pull request can merge: the repository's, once plxd says them, else today's two. */
 export const methodsOf = (pr: PullRequest): PrMergeMethod[] =>
   more(pr).mergeMethods?.length ? more(pr).mergeMethods! : ["squash", "merge"];
 
+/** Each merge method's name, in English: show it with `t`. */
 export const methodLabels: Record<PrMergeMethod, string> = {
-  squash: "Squash and merge",
-  merge: "Create a merge commit",
-  rebase: "Rebase and merge",
+  squash: msg("Squash and merge"),
+  merge: msg("Create a merge commit"),
+  rebase: msg("Rebase and merge"),
 };
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** "1 commit" or "3 commits". */
+const commitCount = (count: number) =>
+  t("{{count}} commits", { count, defaultValue_one: "{{count}} commit" });
 
 /** GitHub's line under a merge method in its menu, with the branch's commits when known. */
 export function methodHint(method: PrMergeMethod, commits?: number): string {
-  const these = commits ? `The ${plural(commits, "commit")}` : "The commits";
   if (method === "merge")
-    return "All commits from this branch will be added to the base branch via a merge commit.";
+    return t("All commits from this branch will be added to the base branch via a merge commit.");
   if (method === "squash")
-    return `${these} from this branch will be combined into one commit in the base branch.`;
-  return `${these} from this branch will be rebased and added to the base branch.`;
+    return commits
+      ? t(
+          "The {{count}} commits from this branch will be combined into one commit in the base branch.",
+          {
+            count: commits,
+            defaultValue_one:
+              "The {{count}} commit from this branch will be combined into one commit in the base branch.",
+          },
+        )
+      : t("The commits from this branch will be combined into one commit in the base branch.");
+  return commits
+    ? t("The {{count}} commits from this branch will be rebased and added to the base branch.", {
+        count: commits,
+        defaultValue_one:
+          "The {{count}} commit from this branch will be rebased and added to the base branch.",
+      })
+    : t("The commits from this branch will be rebased and added to the base branch.");
 }
 
 /** How a status row's icon looks: passed, failed, running, waiting on someone, or neither. */
@@ -323,7 +376,15 @@ export interface StatusRow {
 }
 
 const names = (who: string[]) =>
-  who.length <= 2 ? who.join(" and ") : `${who[0]} and ${who.length - 1} others`;
+  who.length === 2
+    ? t("{{first}} and {{second}}", { first: who[0], second: who[1] })
+    : who.length > 2
+      ? t("{{name}} and {{count}} others", {
+          name: who[0],
+          count: who.length - 1,
+          defaultValue_one: "{{name}} and {{count}} other",
+        })
+      : who.join("");
 
 /**
  * The status box's rows, each only when it applies: checks when any ran, reviews when one was
@@ -338,25 +399,37 @@ export function statusRows(
   const rows: StatusRow[] = [];
 
   const c = checkRollup(checks);
-  const of = `${c.passed} of ${c.total}`;
+  const of = { passed: c.passed, total: c.total };
+  const passedOf = () => t("{{passed}} of {{total}} passed", of);
   if (c.state === "passed")
-    rows.push({ key: "checks", tone: "passed", label: "All checks passed", detail: of });
+    rows.push({
+      key: "checks",
+      tone: "passed",
+      label: t("All checks passed"),
+      detail: t("{{passed}} of {{total}}", of),
+    });
   else if (c.state === "failed")
     rows.push({
       key: "checks",
       tone: "failed",
-      label: `${plural(c.failed, "check")} failed`,
-      detail: `${of} passed`,
+      label: t("{{count}} checks failed", {
+        count: c.failed,
+        defaultValue_one: "{{count}} check failed",
+      }),
+      detail: passedOf(),
     });
   else if (c.state === "pending")
     rows.push({
       key: "checks",
       tone: "running",
-      label: `${plural(c.pending, "check")} running`,
-      detail: `${of} passed`,
+      label: t("{{count}} checks running", {
+        count: c.pending,
+        defaultValue_one: "{{count}} check running",
+      }),
+      detail: passedOf(),
     });
   else if (c.state === "skipped")
-    rows.push({ key: "checks", tone: "neutral", label: "Checks skipped" });
+    rows.push({ key: "checks", tone: "neutral", label: t("Checks skipped") });
 
   // Each reviewer's latest verdict; a later comment doesn't undo an approval.
   const latest = new Map<string, string>();
@@ -370,8 +443,12 @@ export function statusRows(
   const waiting = pr.reviewRequests.filter((who) => !latest.has(who));
   const detail =
     [
-      approvers.length && plural(approvers.length, "approval"),
-      waiting.length && `${names(waiting)} requested`,
+      approvers.length &&
+        t("{{count}} approvals", {
+          count: approvers.length,
+          defaultValue_one: "{{count}} approval",
+        }),
+      waiting.length && t("{{names}} requested", { names: names(waiting) }),
     ]
       .filter(Boolean)
       .join(" · ") || undefined;
@@ -379,21 +456,25 @@ export function statusRows(
     rows.push({
       key: "reviews",
       tone: "failed",
-      label: blockers.length ? `Changes requested by ${names(blockers)}` : "Changes requested",
+      label: blockers.length
+        ? t("Changes requested by {{names}}", { names: names(blockers) })
+        : t("Changes requested"),
       detail,
     });
   else if (decision === "approved" || (!decision && approvers.length))
     rows.push({
       key: "reviews",
       tone: "passed",
-      label: approvers.length ? `Approved by ${names(approvers)}` : "Approved",
+      label: approvers.length
+        ? t("Approved by {{names}}", { names: names(approvers) })
+        : t("Approved"),
       detail,
     });
   else if (decision === "reviewrequired" || pr.reviewRequests.length)
     rows.push({
       key: "reviews",
       tone: "waiting",
-      label: decision === "reviewrequired" ? "Review required" : "Waiting for review",
+      label: decision === "reviewrequired" ? t("Review required") : t("Waiting for review"),
       detail,
     });
 
@@ -403,14 +484,18 @@ export function statusRows(
   const commits = pr.commits?.length;
   const merge = (tone: RowTone, label: string, detail?: string) =>
     rows.push({ key: "merge", tone, label, detail });
-  if (gate.draft) merge("neutral", "This pull request is a draft");
-  else if (gate.conflicts) merge("failed", `Conflicts with ${base}`);
+  if (gate.draft) merge("neutral", t("This pull request is a draft"));
+  else if (gate.conflicts) merge("failed", t("Conflicts with {{base}}", { base }));
   else if (gate.behind)
-    merge("waiting", `Behind ${base}`, behindBy ? plural(behindBy, "commit") : undefined);
-  else if (pr.mergeState === undefined) merge("running", "Checking for conflicts");
+    merge("waiting", t("Behind {{base}}", { base }), behindBy ? commitCount(behindBy) : undefined);
+  else if (pr.mergeState === undefined) merge("running", t("Checking for conflicts"));
   // GitHub reports a conflict before anything that blocks, so blocked means no conflict.
   else
-    merge("passed", `No conflicts with ${base}`, commits ? plural(commits, "commit") : undefined);
+    merge(
+      "passed",
+      t("No conflicts with {{base}}", { base }),
+      commits ? commitCount(commits) : undefined,
+    );
   return rows;
 }
 
@@ -518,9 +603,16 @@ export function threadsOf(pr: PullRequest, status?: PrStatusResult): ThreadView[
   }));
 }
 
-const FILE_KINDS = ["Code", "Tests", "Mocks", "Docs", "Generated"] as const;
+// In English, as code compares them: show each with `t`.
+const FILE_KINDS = [
+  msg("Code"),
+  msg("Tests"),
+  msg("Mocks"),
+  msg("Docs"),
+  msg("Generated"),
+] as const;
 
-/** What a changed file is, by its path, for the header's lines-changed breakdown. */
+/** What a changed file is, by its path, for the header's lines-changed breakdown. In English. */
 export function fileKind(path: string): (typeof FILE_KINDS)[number] {
   const name = path.slice(path.lastIndexOf("/") + 1);
   if (/(^|\/)generated\//i.test(path) || /(\.lockb?|-lock\.(json|yaml)|^go\.sum)$/.test(name))
@@ -550,7 +642,7 @@ export function fileKind(path: string): (typeof FILE_KINDS)[number] {
 export function lineBreakdown(
   pr: PullRequest,
 ): { kind: string; additions: number; deletions: number }[] {
-  const rows = [...FILE_KINDS, "Other"].map((kind) => ({ kind, additions: 0, deletions: 0 }));
+  const rows = [...FILE_KINDS, msg("Other")].map((kind) => ({ kind, additions: 0, deletions: 0 }));
   for (const f of pr.files ?? []) {
     const row = rows[FILE_KINDS.indexOf(fileKind(f.path))]!;
     row.additions += f.additions;

@@ -2,6 +2,7 @@
 // both at once, so the "engine" only waits for what the recognition heard. Recognition stays on the
 // phone where iOS supports that for its language, and otherwise goes to Apple.
 import { ExpoSpeechRecognitionModule as Speech } from "expo-speech-recognition";
+import { t } from "i18next";
 
 import type { VoiceCapture, VoiceDependencies, VoiceEngine } from "../../desktop/src/renderer/voiceSession";
 import { Heard } from "./speechText";
@@ -34,13 +35,13 @@ class Recognition implements VoiceEngine {
     const { granted } = await Speech.requestPermissionsAsync();
     if (!granted) throw new SpeechDenied();
     // Not `throwIfAborted`, which React Native's AbortSignal lacks.
-    if (signal.aborted) throw new Error("Dictation was cancelled.");
+    if (signal.aborted) throw new Error(t("Dictation was cancelled."));
     await new Promise<void>((started, refused) => {
       signal.addEventListener(
         "abort",
         () => {
           this.abandon();
-          refused(new Error("Dictation was cancelled."));
+          refused(new Error(t("Dictation was cancelled.")));
         },
         { once: true },
       );

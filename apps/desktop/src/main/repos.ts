@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { execFile } from "node:child_process";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -41,7 +42,10 @@ export async function listFolders(input: string): Promise<FolderListing> {
     };
   } catch (error) {
     return {
-      error: `Can't open ${input}: ${(error as NodeJS.ErrnoException).code ?? String(error)}`,
+      error: t("Can't open {{path}}: {{why}}", {
+        path: input,
+        why: (error as NodeJS.ErrnoException).code ?? String(error),
+      }),
     };
   }
 }
@@ -65,7 +69,7 @@ export async function createRepo(
   name: string,
   home = homedir(),
 ): Promise<{ path: string } | { error: string }> {
-  if (!isFolderName(name)) return { error: "Use letters, digits, ., _, and - only" };
+  if (!isFolderName(name)) return { error: t("Use letters, digits, ., _, and - only") };
   const root = path.join(home, ".parallax", "projects");
   const dir = path.join(root, name);
   try {
@@ -76,8 +80,11 @@ export async function createRepo(
     return {
       error:
         code === "EEXIST"
-          ? `~/.parallax/projects/${name} already exists`
-          : `Can't create ~/.parallax/projects/${name}: ${code ?? String(error)}`,
+          ? t("~/.parallax/projects/{{name}} already exists", { name })
+          : t("Can't create ~/.parallax/projects/{{name}}: {{why}}", {
+              name,
+              why: code ?? String(error),
+            }),
     };
   }
   try {
@@ -87,6 +94,6 @@ export async function createRepo(
     return { path: dir };
   } catch (error) {
     await rm(dir, { recursive: true, force: true });
-    return { error: gitError(error) ?? "git failed" };
+    return { error: gitError(error) ?? t("git failed") };
   }
 }

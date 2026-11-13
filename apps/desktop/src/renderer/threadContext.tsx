@@ -1,5 +1,6 @@
 // Threads attached to a message as context (PLX-378, decision 0047): how one looks as a chip, in
 // the composer and in the sent message, and what attaching takes.
+import { t } from "i18next";
 import { MessagesSquare, Server } from "lucide-react";
 import {
   createContext,
@@ -81,7 +82,11 @@ export async function readAgentWork(hostId: string) {
 /** A computer as a chip: its icon and name, or a server's and `name` for one no longer listed. */
 export function ComputerChip({ host, name }: { host?: Host; name: string }) {
   return (
-    <Chip tone="thread" title={`Computer: ${name}`} icon={host ? hostIcon(host) : <Server />}>
+    <Chip
+      tone="thread"
+      title={t("Computer: {{name}}", { name })}
+      icon={host ? hostIcon(host) : <Server />}
+    >
       {name}
     </Chip>
   );
@@ -104,7 +109,7 @@ export function lookOf(state: ThreadsState | undefined, runId: string): ThreadLo
   const thread = state?.threads.find((t) => t.id === runId);
   const backend = state?.runs[runId]?.backend;
   return {
-    title: state?.titles[runId] ?? thread?.title ?? (thread ? "Untitled" : "Unavailable"),
+    title: state?.titles[runId] ?? thread?.title ?? (thread ? t("Untitled") : t("Unavailable")),
     Logo: (backend && backendLogos[backend]) || MessagesSquare,
     age: thread && age(lastPrompt(thread)),
     known: !!thread,
@@ -133,15 +138,26 @@ export function ThreadRefChip({
   const repoId = state?.threads.find((t) => t.id === runId)?.repo;
   const repo = state?.repos.find((r) => r.id === repoId);
   const shown = look.known ? look.title : saved || look.title;
-  const where = on ? `Thread on ${on.name}` : "Thread";
-  const inRepo = repo && !repo.scratch ? ` in ${repo.name}` : "";
+  const named = { title: shown, computer: on?.name, repo: repo?.name };
+  const inRepo = !!repo && !repo.scratch;
+  const title = onOpen
+    ? on
+      ? t("Open {{title}} on {{computer}}", named)
+      : t("Open {{title}}", named)
+    : on
+      ? inRepo
+        ? t("Thread on {{computer}}: {{title}} in {{repo}}", named)
+        : t("Thread on {{computer}}: {{title}}", named)
+      : inRepo
+        ? t("Thread: {{title}} in {{repo}}", named)
+        : t("Thread: {{title}}", named);
   return (
     <Chip
       tone="thread"
-      title={onOpen ? `Open ${shown}${on ? ` on ${on.name}` : ""}` : `${where}: ${shown}${inRepo}`}
+      title={title}
       icon={<MessagesSquare aria-hidden />}
       onOpen={onOpen}
-      end={on && <span>on {on.name}</span>}
+      end={on && <span>{t("on {{computer}}", { computer: on.name })}</span>}
     >
       {shown}
     </Chip>

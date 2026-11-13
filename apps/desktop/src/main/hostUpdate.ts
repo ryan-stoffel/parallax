@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import type { ConnectionState, HostUpdateEvent, RpcResponse } from "../preload/bridge";
 import type { HostUpdateResult } from "../protocol/generated/protocol";
 
@@ -82,9 +84,15 @@ type Pending = {
 
 /** What to tell a user whose plxd can't update itself, on a host the app can't reach by ssh. */
 function unsupportedMessage(plxd: string, os: string | undefined, channel: string): string {
-  const old = `plxd ${plxd} there is too old to update itself.`;
-  if (/^(macos|windows)/i.test(os ?? "")) return `${old} Update Parallax on that computer.`;
-  return `${old} On that computer, run: npx plx-cli setup --channel ${channel}`;
+  if (/^(macos|windows)/i.test(os ?? ""))
+    return t(
+      "plxd {{version}} there is too old to update itself. Update Parallax on that computer.",
+      { version: plxd },
+    );
+  return t(
+    "plxd {{version}} there is too old to update itself. On that computer, run: npx plx-cli setup --channel {{channel}}",
+    { version: plxd, channel },
+  );
 }
 
 export class HostUpdater {
@@ -118,7 +126,10 @@ export class HostUpdater {
       } else if (waiting.restarted) {
         this.fail(
           hostId,
-          `plxd restarted, but it's still plxd ${state.plxd}, not ${waiting.version}.`,
+          t("plxd restarted, but it's still plxd {{running}}, not {{wanted}}.", {
+            running: state.plxd,
+            wanted: waiting.version,
+          }),
         );
       }
       // Otherwise it's still the old plxd, waiting for its agents.
@@ -228,7 +239,12 @@ export class HostUpdater {
         () =>
           this.fail(
             hostId,
-            `plxd didn't come back on ${version} within ${RECONNECT_TIMEOUT_MS / 60_000} minutes of restarting.`,
+            t("plxd didn't come back on {{version}} within {{count}} minutes of restarting.", {
+              version,
+              count: RECONNECT_TIMEOUT_MS / 60_000,
+              defaultValue_one:
+                "plxd didn't come back on {{version}} within {{count}} minute of restarting.",
+            }),
           ),
         RECONNECT_TIMEOUT_MS,
       );

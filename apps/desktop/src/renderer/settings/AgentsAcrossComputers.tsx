@@ -1,4 +1,6 @@
+import { t } from "i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Trans } from "react-i18next";
 
 import type { ConnectionState, DeviceHost } from "../../preload/bridge";
 import { isRelay } from "../../preload/routeList";
@@ -32,8 +34,8 @@ export const reachOf = (route: string | undefined) =>
   route === undefined
     ? "Parallax Connect"
     : isRelay(route)
-      ? "Over Parallax Connect"
-      : "Over your network";
+      ? t("Over Parallax Connect")
+      : t("Over your network");
 
 /**
  * `agentWork` on account computer `host`, on a plxd that has it, as a row in its opened card on
@@ -69,7 +71,9 @@ export function AgentWorkRow({
       notify({
         key: "agent-work",
         tone: "error",
-        title: `Couldn't turn agent work ${next ? "on" : "off"} on ${host.name}`,
+        title: next
+          ? t("Couldn't turn agent work on on {{name}}", { name: host.name })
+          : t("Couldn't turn agent work off on {{name}}", { name: host.name }),
         body: answer.error.message,
       });
     else setRead({ on: !!answer.result.agentWork, relay: !!answer.result.relay });
@@ -78,31 +82,35 @@ export function AgentWorkRow({
     state?.status !== "connected"
       ? state
         ? statusLabel(state)
-        : "Connecting…"
+        : t("Connecting…")
       : !able
-        ? "Needs updating"
+        ? t("Needs updating")
         : device.addedWithAllow
-          ? "Added with Allow, so agents can't work with it yet"
+          ? t("Added with Allow, so agents can't work with it yet")
           : undefined;
   // Not connected, its card already says so above.
   const note =
     state?.status !== "connected"
       ? undefined
-      : (why ?? (read?.on && !read.relay ? "Needs Parallax Connect" : undefined));
+      : (why ?? (read?.on && !read.relay ? t("Needs Parallax Connect") : undefined));
   return (
     <div
       data-setting="agents-can-work-on"
       className="mt-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-border/40 pt-3"
     >
       <div className="min-w-[min(14rem,100%)] flex-1">
-        <span className="block text-body font-medium">Agents can work on {host.name}</span>
+        <span className="block text-body font-medium">
+          {t("Agents can work on {{name}}", { name: host.name })}
+        </span>
         <span className="mt-0.5 block text-meta text-muted-foreground">
-          Agents on your other computers can run commands there as you. Also turns on pairing there.
+          {t(
+            "Agents on your other computers can run commands there as you. Also turns on pairing there.",
+          )}
         </span>
         {note && <span className="mt-1 block text-meta text-warning">{note}</span>}
       </div>
       <Switch
-        label={`Let agents on my other computers work on ${host.name}`}
+        label={t("Let agents on my other computers work on {{name}}", { name: host.name })}
         checked={!why && !!read?.on}
         disabled={!!why || !read}
         onChange={(next) => void toggle(next)}
@@ -278,12 +286,12 @@ function balancerBadge(balancer: Balancer, hostId: string): ReactNode {
   const row = balancer.of(hostId);
   if (!row) return null;
   if (hostId === balancer.pick)
-    return <span className={`${badge} text-muted-foreground`}>Next</span>;
+    return <span className={`${badge} text-muted-foreground`}>{t("Next")}</span>;
   if (row.candidate.barred === "left-out")
-    return <span className={`${badge} text-faint-foreground`}>Left out</span>;
+    return <span className={`${badge} text-faint-foreground`}>{t("Left out")}</span>;
   const verdict = assess(row.candidate);
   return "why" in verdict && verdict.why === "full" ? (
-    <span className={`${badge} text-warning`}>Full</span>
+    <span className={`${badge} text-warning`}>{t("Full")}</span>
   ) : null;
 }
 
@@ -310,12 +318,15 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
       ? undefined
       : offline && connection
         ? statusLabel(connection)
-        : whyText[why];
+        : t(whyText[why]);
   const facts = [
-    host.id === localId && "This computer",
+    host.id === localId && t("This computer"),
     // Left out, its mark by its name says so.
     !leftOut && instead,
-    !leftOut && !instead && agents !== undefined && (agents === 1 ? "1 agent" : `${agents} agents`),
+    !leftOut &&
+      !instead &&
+      agents !== undefined &&
+      t("{{count}} agents", { count: agents, defaultValue_one: "{{count}} agent" }),
   ].filter(Boolean);
   const bars = !leftOut && !instead;
   return (
@@ -341,8 +352,8 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
         <div className="ml-auto flex shrink-0 items-center gap-3">
           <Picker
             field
-            label={`How often ${host.name} takes new threads`}
-            options={preferences.map((p) => ({ value: p.value, label: p.name }))}
+            label={t("How often {{name}} takes new threads", { name: host.name })}
+            options={preferences.map((p) => ({ value: p.value, label: t(p.name) }))}
             value={candidate.preference}
             disabled={leftOut}
             align="end"
@@ -355,7 +366,7 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
             }
           />
           <Switch
-            label={`Balance new threads onto ${host.name}`}
+            label={t("Balance new threads onto {{name}}", { name: host.name })}
             checked={!leftOut}
             onChange={(on) =>
               loadBalancer.set({
@@ -372,14 +383,22 @@ function BalancerRow({ host, balancer }: { host: Host; balancer: Balancer }) {
         // Side by side while there's room, one over the other on a narrow card.
         <div className="mt-2 ml-8 grid max-w-md grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-x-6 gap-y-2">
           <Meter
-            label="CPU"
+            label={t("CPU")}
             used={load?.cpu}
-            title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
+            title={
+              load
+                ? t("CPU {{cpu}}% in use, across {{count}} cores", {
+                    cpu: load.cpu,
+                    count: load.cores,
+                    defaultValue_one: "CPU {{cpu}}% in use, across {{count}} core",
+                  })
+                : t("CPU")
+            }
           />
           <Meter
-            label="Memory"
+            label={t("Memory")}
             used={load?.memory}
-            title={load ? `Memory ${load.memory}% in use` : "Memory"}
+            title={load ? t("Memory {{memory}}% in use", { memory: load.memory }) : t("Memory")}
           />
         </div>
       )}
@@ -401,36 +420,35 @@ export function LoadBalancerCard({ hosts }: { hosts: Host[] }) {
   return (
     <CollapsibleCard
       ref={seen}
-      title="Load Balancer"
+      title={t("Load Balancer")}
       summary={
-        <span aria-live="polite" title={pick && "If it has the thread's repository"}>
+        <span aria-live="polite" title={pick && t("If it has the thread's repository")}>
           {!settings.on ? null : pick ? (
-            <>
-              Next thread goes to{" "}
-              <span className="text-foreground">{hosts.find((h) => h.id === pick)?.name}</span>
-            </>
+            <Trans values={{ name: hosts.find((h) => h.id === pick)?.name ?? "" }}>
+              Next thread goes to <span className="text-foreground">{"{{name}}"}</span>
+            </Trans>
           ) : balancer.reading ? (
-            "Checking your computers…"
+            t("Checking your computers…")
           ) : balancer.everyOneOut ? (
-            <span className="text-warning">Every computer is left out. Turn one on.</span>
+            <span className="text-warning">{t("Every computer is left out. Turn one on.")}</span>
           ) : (
-            <span className="text-warning">No computer can take a thread right now.</span>
+            <span className="text-warning">{t("No computer can take a thread right now.")}</span>
           )}
         </span>
       }
       action={
         <Switch
-          label="Balance new threads across my computers"
+          label={t("Balance new threads across my computers")}
           checked={settings.on}
           onChange={(on) => loadBalancer.set({ ...settings, on })}
         />
       }
     >
       <p className="border-border/40 px-4 py-3 text-meta text-muted-foreground not-last:border-b">
-        Start each new thread on the computer with the most free CPU and memory.
+        {t("Start each new thread on the computer with the most free CPU and memory.")}
       </p>
       {balancer.on && (
-        <ul aria-label="Computers the Load Balancer uses">
+        <ul aria-label={t("Computers the Load Balancer uses")}>
           {hosts.map((h) => (
             <BalancerRow key={h.id} host={h} balancer={balancer} />
           ))}

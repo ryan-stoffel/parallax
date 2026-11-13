@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -52,7 +53,7 @@ export function readSettings(file: string): Settings {
   }
   const raw = JSON.parse(text) as unknown;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new Error("it isn't a JSON object");
+    throw new Error(t("it isn't a JSON object"));
   }
   const {
     hosts = [],
@@ -63,26 +64,28 @@ export function readSettings(file: string): Settings {
     accounts = [],
     sshDestinations = {},
   } = raw as Record<string, unknown>;
-  if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
-  if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
+  if (!Array.isArray(hosts)) throw new Error(t("`hosts` isn't a list"));
+  if (ssh !== undefined && typeof ssh !== "string") throw new Error(t("`ssh` isn't a string"));
   if (localName !== undefined && typeof localName !== "string")
-    throw new Error("`localName` isn't a string");
+    throw new Error(t("`localName` isn't a string"));
   const ids = new Set(["local"]);
   for (const entry of hosts as unknown[]) {
     const { id, name, destination, plxdInstalled } = (entry ?? {}) as Record<string, unknown>;
-    const where = `host ${JSON.stringify(entry)}`;
-    if (typeof id !== "string" || !id || ids.has(id)) throw new Error(`${where} has a bad id`);
+    const where = t("host {{entry}}", { entry: JSON.stringify(entry) });
+    if (typeof id !== "string" || !id || ids.has(id))
+      throw new Error(t("{{where}} has a bad id", { where }));
     ids.add(id);
     if (typeof name !== "string" || typeof destination !== "string") {
-      throw new Error(`${where} needs a name and a destination`);
+      throw new Error(t("{{where}} needs a name and a destination", { where }));
     }
     const checked = checkHost({ name, destination });
     if (typeof checked === "string") throw new Error(`${where}: ${checked}`);
-    if (checked.destination !== destination) throw new Error(`${where} has spaces around it`);
+    if (checked.destination !== destination)
+      throw new Error(t("{{where}} has spaces around it", { where }));
     if (plxdInstalled !== undefined && plxdInstalled !== true)
-      throw new Error(`${where} has a bad plxdInstalled`);
+      throw new Error(t("{{where}} has a bad plxdInstalled", { where }));
   }
-  if (!Array.isArray(devices)) throw new Error("`devices` isn't a list");
+  if (!Array.isArray(devices)) throw new Error(t("`devices` isn't a list"));
   for (const entry of devices as unknown[]) {
     const { id, hostName, ip, os, name, icon, off, removed } = (entry ?? {}) as Record<
       string,
@@ -90,22 +93,30 @@ export function readSettings(file: string): Settings {
     >;
     const fields = [id, hostName, ip, os];
     if (!fields.every((f) => typeof f === "string" && f) || ids.has(`tailnet:${String(id)}`))
-      throw new Error(`device ${JSON.stringify(entry)} needs an id, host name, ip, and os`);
+      throw new Error(
+        t("device {{entry}} needs an id, host name, ip, and os", { entry: JSON.stringify(entry) }),
+      );
     ids.add(`tailnet:${String(id)}`);
     if (
       (name !== undefined && typeof name !== "string") ||
       (icon !== undefined && !isDeviceIcon(icon))
     )
-      throw new Error(`device ${JSON.stringify(entry)} has a bad name or icon`);
+      throw new Error(
+        t("device {{entry}} has a bad name or icon", { entry: JSON.stringify(entry) }),
+      );
     if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
-      throw new Error(`device ${JSON.stringify(entry)} has a bad off or removed`);
+      throw new Error(
+        t("device {{entry}} has a bad off or removed", { entry: JSON.stringify(entry) }),
+      );
   }
-  if (!Array.isArray(lan)) throw new Error("`lan` isn't a list");
+  if (!Array.isArray(lan)) throw new Error(t("`lan` isn't a list"));
   for (const entry of lan as unknown[]) {
     const { fingerprint, name, routes } = (entry ?? {}) as Record<string, unknown>;
     const id = `lan:${String(fingerprint)}`;
     if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint) || ids.has(id))
-      throw new Error(`LAN computer ${JSON.stringify(entry)} has a bad fingerprint`);
+      throw new Error(
+        t("LAN computer {{entry}} has a bad fingerprint", { entry: JSON.stringify(entry) }),
+      );
     ids.add(id);
     if (
       typeof name !== "string" ||
@@ -113,14 +124,16 @@ export function readSettings(file: string): Settings {
       !routes.length ||
       !routes.every(isRoute)
     )
-      throw new Error(`LAN computer ${JSON.stringify(entry)} needs a name and routes`);
+      throw new Error(
+        t("LAN computer {{entry}} needs a name and routes", { entry: JSON.stringify(entry) }),
+      );
   }
   checkAccounts(accounts, ids);
   if (typeof sshDestinations !== "object" || sshDestinations === null)
-    throw new Error("`sshDestinations` isn't an object");
+    throw new Error(t("`sshDestinations` isn't an object"));
   for (const [id, destination] of Object.entries(sshDestinations)) {
     const checked =
-      typeof destination === "string" ? checkHost({ name: "", destination }) : "not a string";
+      typeof destination === "string" ? checkHost({ name: "", destination }) : t("not a string");
     if (typeof checked === "string") throw new Error(`\`sshDestinations\` ${id}: ${checked}`);
   }
   return { ...raw, hosts } as Settings;
@@ -143,9 +156,11 @@ export function writeSettings(file: string, settings: Settings): void {
  */
 export function checkHost({ name, destination }: HostInput): HostInput | string {
   const trimmed = destination.trim();
-  if (!trimmed) return "Enter an ssh destination, such as mac-mini or me@192.168.1.20.";
+  if (!trimmed) return t("Enter an ssh destination, such as mac-mini or me@192.168.1.20.");
   if (trimmed.startsWith("-") || /[\s\p{Cc}'`"$\\;&<>|(){}]/u.test(trimmed)) {
-    return "An ssh destination can't start with “-”, or contain spaces, quotes, or characters such as $ ; & | < > ( ) { } \\.";
+    return t(
+      "An ssh destination can't start with “-”, or contain spaces, quotes, or characters such as $ ; & | < > ( ) { } \\.",
+    );
   }
   const label = name.replace(/\p{Cc}/gu, "").trim();
   return { name: label || trimmed, destination: trimmed };

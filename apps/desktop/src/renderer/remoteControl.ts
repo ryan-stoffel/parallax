@@ -1,8 +1,10 @@
 // Claude Remote Control threads (PLX-1140): a thread that follows a Claude Code session
 // `claude remote-control` serves on another computer. Its messages go to that session, so they
 // take text only: images can't go, and a text file goes inside the message under its name.
+import { t } from "i18next";
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 
+import { msg } from "../i18n";
 import type {
   AgentRun,
   RemoteControlSession,
@@ -13,20 +15,23 @@ import type {
 export const isRemoteControl = (run?: Pick<AgentRun, "sessionId"> | null) =>
   !!run?.sessionId?.startsWith("session_");
 
-/** How each state reads: a short label, what it means for a message, and its dot's color. */
+/**
+ * How each state reads: a short label, what it means for a message, and its dot's color. The
+ * label and detail are marked with `msg`: show them with `t`.
+ */
 export const remoteControlLook: Record<
   RemoteControlState,
   { label: string; detail?: string; dot: string; pulse?: boolean }
 > = {
-  running: { label: "Working", dot: "bg-working", pulse: true },
-  idle: { label: "Idle", dot: "bg-faint-foreground/45" },
-  waiting: { label: "Waiting for your answer in Claude", dot: "bg-warning" },
+  running: { label: msg("Working"), dot: "bg-working", pulse: true },
+  idle: { label: msg("Idle"), dot: "bg-faint-foreground/45" },
+  waiting: { label: msg("Waiting for your answer in Claude"), dot: "bg-warning" },
   offline: {
-    label: "Offline",
-    detail: "Your message is queued until the computer is back",
+    label: msg("Offline"),
+    detail: msg("Your message is queued until the computer is back"),
     dot: "bg-faint-foreground/45",
   },
-  archived: { label: "Archived", dot: "bg-faint-foreground/45" },
+  archived: { label: msg("Archived"), dot: "bg-faint-foreground/45" },
 };
 
 /** Whether `state` asks something of the user, so its tab leads the composer's line. */
@@ -36,12 +41,13 @@ export const needsAttention = (state?: RemoteControlState) =>
 /** Why a Remote Control thread can't send now, which turns Send off: only once it's archived. */
 export const remoteControlDisabled = (session?: RemoteControlSession) =>
   session?.state === "archived"
-    ? "This Claude Remote Control session is archived, so it can't take new messages"
+    ? t("This Claude Remote Control session is archived, so it can't take new messages")
     : undefined;
 
-/** Why the composer refuses an image for a Remote Control thread. */
-export const IMAGES_REFUSED =
-  "A Claude Remote Control session takes text only, so images can't be sent to it.";
+/** Why the composer refuses an image for a Remote Control thread, marked with `msg`: show it with `t`. */
+export const IMAGES_REFUSED = msg(
+  "A Claude Remote Control session takes text only, so images can't be sent to it.",
+);
 
 /** The most bytes of text files one message to a Remote Control session carries. */
 export const MAX_INLINE_BYTES = 100 * 1024;
@@ -56,10 +62,15 @@ export async function readTextFile(
 ): Promise<{ text: string } | { error: string }> {
   if (file.size > room)
     return {
-      error: `${file.name} is too large: a message to a Claude Remote Control session carries at most 100 KB of files.`,
+      error: t(
+        "{{name}} is too large: a message to a Claude Remote Control session carries at most 100 KB of files.",
+        { name: file.name },
+      ),
     };
   const notText = {
-    error: `${file.name} isn't a text file. A Claude Remote Control session takes text files only.`,
+    error: t("{{name}} isn't a text file. A Claude Remote Control session takes text files only.", {
+      name: file.name,
+    }),
   };
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());

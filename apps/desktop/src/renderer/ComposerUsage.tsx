@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { Minimize2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import { msg } from "../i18n";
 import type { RequestUsage, ThreadUsage } from "./transcript";
 
 /** Missing, zero-denominator, and inconsistent token counts remain unknown. */
@@ -33,12 +35,14 @@ export function tokensPerSecond(tokens?: number, ms?: number): number | undefine
   return Math.round((tokens / ms) * 1000);
 }
 
-/** What each provider's sample measures, since neither is pure generation time. */
+/** What each provider's sample measures, since neither is pure generation time, in English for `t`. */
 const speedSource: Record<string, string> = {
-  claude:
+  claude: msg(
     "the time Claude's responses streamed in the last turn, from each one's first token, which leaves out the wait for it and subagents' output (or the turn's API time, when it didn't stream)",
-  opencode:
+  ),
+  opencode: msg(
     "the time OpenCode spent streaming text and reasoning in the last model request without tool calls, which leaves out the wait for the first token",
+  ),
 };
 
 /** How full a meter is: amber from 75%, red from 90%, as on the Usage page. */
@@ -139,7 +143,10 @@ export function threadUsageOf({
     connected && usage?.backend === backend && usage.accountId === accountId
       ? usage.usage
       : undefined;
-  const reportedAt = measured && usage ? ` Reported ${new Date(usage.at).toLocaleString()}.` : "";
+  const reportedAt =
+    measured && usage
+      ? ` ${t("Reported {{at}}.", { at: new Date(usage.at).toLocaleString() })}`
+      : "";
   const context = tokenPercent(measured?.contextTokens, measured?.contextWindow);
   const contextUsed =
     context === undefined ? undefined : (measured!.contextTokens! / measured!.contextWindow!) * 100;
@@ -153,21 +160,36 @@ export function threadUsageOf({
       ? {
           input: compact(input!),
           output: compact(totals.outputTokens),
-          title: `Every request this thread made, its subagents' included: ${totals.inputTokens.toLocaleString()} new input, ${totals.cacheReadTokens.toLocaleString()} read from cache, ${totals.cacheWriteTokens.toLocaleString()} written to cache, and ${totals.outputTokens.toLocaleString()} output tokens.${totals.fromStart ? "" : " Earlier turns aren't loaded, so these are lower bounds."}`,
+          title: `${t(
+            "Every request this thread made, its subagents' included: {{input}} new input, {{cacheRead}} read from cache, {{cacheWrite}} written to cache, and {{output}} output tokens.",
+            {
+              input: totals.inputTokens.toLocaleString(),
+              cacheRead: totals.cacheReadTokens.toLocaleString(),
+              cacheWrite: totals.cacheWriteTokens.toLocaleString(),
+              output: totals.outputTokens.toLocaleString(),
+            },
+          )}${totals.fromStart ? "" : ` ${t("Earlier turns aren't loaded, so these are lower bounds.")}`}`,
           cost: totals.costUsdMicros === undefined ? undefined : dollars(totals.costUsdMicros),
-          costTitle: `What the provider reports these tokens cost at API prices. A subscription isn't billed per token.${totals.fromStart ? "" : " Earlier turns aren't loaded, so this is a lower bound."}`,
+          costTitle: `${t("What the provider reports these tokens cost at API prices. A subscription isn't billed per token.")}${totals.fromStart ? "" : ` ${t("Earlier turns aren't loaded, so this is a lower bound.")}`}`,
           partial: !totals.fromStart,
         }
       : undefined;
 
   let summary: Summary | undefined;
   if (context !== undefined)
-    summary = { used: contextUsed!, tone: tone(contextUsed!), label: `${context} of context used` };
+    summary = {
+      used: contextUsed!,
+      tone: tone(contextUsed!),
+      label: t("{{percent}} of context used", { percent: context }),
+    };
   else if (shownTotals)
     summary = {
       used: 0,
       tone: "normal",
-      label: `${shownTotals.input} in, ${shownTotals.output} out this thread`,
+      label: t("{{input}} in, {{output}} out this thread", {
+        input: shownTotals.input,
+        output: shownTotals.output,
+      }),
     };
 
   return {
@@ -178,25 +200,49 @@ export function threadUsageOf({
         ? undefined
         : `${compact(measured!.contextTokens!)} / ${compact(measured!.contextWindow!)}`,
     contextTitle: context
-      ? `${kind === "claude" ? "Latest request input" : kind === "codex" ? "Latest request tokens" : "Reported context tokens"} / provider-reported context window (${measured?.contextTokens?.toLocaleString()} / ${measured?.contextWindow?.toLocaleString()}).${reportedAt}`
-      : "Context utilization unavailable until this provider reports context tokens and its window.",
+      ? `${t("{{measure}} / provider-reported context window ({{tokens}} / {{window}}).", {
+          measure:
+            kind === "claude"
+              ? t("Latest request input")
+              : kind === "codex"
+                ? t("Latest request tokens")
+                : t("Reported context tokens"),
+          tokens: measured?.contextTokens?.toLocaleString(),
+          window: measured?.contextWindow?.toLocaleString(),
+        })}${reportedAt}`
+      : t(
+          "Context utilization unavailable until this provider reports context tokens and its window.",
+        ),
     cache,
     cacheTitle: cache
-      ? `Latest request input served from cache (${measured?.cachedInputTokens?.toLocaleString()} / ${measured?.inputTokens?.toLocaleString()} input tokens).${reportedAt}`
-      : "Cache utilization unavailable until this provider reports request input and cached input tokens.",
+      ? `${t("Latest request input served from cache ({{cached}} / {{input}} input tokens).", {
+          cached: measured?.cachedInputTokens?.toLocaleString(),
+          input: measured?.inputTokens?.toLocaleString(),
+        })}${reportedAt}`
+      : t(
+          "Cache utilization unavailable until this provider reports request input and cached input tokens.",
+        ),
     speed,
     speedTitle:
       speed !== undefined && kind
-        ? `Output speed: ${measured?.outputTokens?.toLocaleString()} output tokens over ${speedSource[kind]} (${((measured?.outputMs ?? 0) / 1000).toFixed(1)} s).${reportedAt}`
+        ? `${t("Output speed: {{tokens}} output tokens over {{source}} ({{seconds}} s).", {
+            tokens: measured?.outputTokens?.toLocaleString(),
+            source: t(speedSource[kind]!),
+            seconds: ((measured?.outputMs ?? 0) / 1000).toFixed(1),
+          })}${reportedAt}`
         : timed
-          ? "Output speed unavailable until this provider reports output tokens and their timing."
-          : "Output speed unavailable. This provider does not report model timing, and turn wall-clock time would include tool runs.",
+          ? t(
+              "Output speed unavailable until this provider reports output tokens and their timing.",
+            )
+          : t(
+              "Output speed unavailable. This provider does not report model timing, and turn wall-clock time would include tool runs.",
+            ),
     totals: shownTotals,
     summary,
   };
 }
 
-const speedText = (speed: number) => `~${speed.toLocaleString()} tok/s`;
+const speedText = (speed: number) => t("~{{speed}} tok/s", { speed: speed.toLocaleString() });
 
 const ringTone = {
   normal: "text-muted-foreground",
@@ -260,7 +306,7 @@ export function UsageRing({
     >
       <button
         type="button"
-        aria-label={`Usage: ${summary.label}`}
+        aria-label={t("Usage: {{summary}}", { summary: summary.label })}
         aria-expanded={open}
         aria-controls={card}
         title={open ? undefined : summary.label}
@@ -294,7 +340,7 @@ export function UsageRing({
       <div
         id={card}
         role="group"
-        aria-label="Usage"
+        aria-label={t("Usage")}
         hidden={!open}
         className="absolute right-0 bottom-full z-20 mb-2 w-72 rounded-xl border border-border bg-surface p-3.5 text-body text-foreground shadow-composer tabular-nums"
       >
@@ -309,7 +355,7 @@ export function UsageRing({
             className="mt-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-body hover:bg-hover [&_svg]:size-4 [&_svg]:text-muted-foreground"
           >
             <Minimize2 aria-hidden />
-            Compact context
+            {t("Compact context")}
           </button>
         )}
       </div>
@@ -329,20 +375,23 @@ export function UsageRows({ data }: { data: ComposerUsageData }) {
   const groups = [
     [
       data.speed !== undefined && {
-        label: "Output speed",
+        label: t("Output speed"),
         title: data.speedTitle,
         value: speedText(data.speed),
       },
-      data.cache && { label: "Cache hit", title: data.cacheTitle, value: data.cache },
+      data.cache && { label: t("Cache hit"), title: data.cacheTitle, value: data.cache },
     ],
     [
       totals && {
-        label: "Tokens",
+        label: t("Tokens"),
         title: totals.title,
-        value: `${totals.input}${more} in · ${totals.output}${more} out`,
+        value: t("{{input}} in · {{output}} out", {
+          input: `${totals.input}${more}`,
+          output: `${totals.output}${more}`,
+        }),
       },
       totals?.cost && {
-        label: "API cost",
+        label: t("API cost"),
         title: totals.costTitle,
         value: `${totals.cost}${more}`,
       },
@@ -357,7 +406,7 @@ export function UsageRows({ data }: { data: ComposerUsageData }) {
       {data.context !== undefined && (
         <div title={data.contextTitle}>
           <div className="flex justify-between gap-3">
-            <span className="text-muted-foreground">Context</span>
+            <span className="text-muted-foreground">{t("Context")}</span>
             <span>
               {data.contextDetail} · {data.context}
             </span>

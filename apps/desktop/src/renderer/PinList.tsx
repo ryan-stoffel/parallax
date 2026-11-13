@@ -1,5 +1,6 @@
 // The sidebar's pinned threads (pins.ts, 0075): thread rows under the drafts, in the order the user
 // drags them into, each with its pin after its status (PLX-1043, 0094).
+import { t } from "i18next";
 import { useState, type DragEvent, type ReactNode } from "react";
 
 import {
@@ -131,12 +132,12 @@ export function PinList({
       // A strip to drop on, even with nothing pinned.
       className="flex min-h-1 flex-col"
     >
-      <ul aria-label="Pinned" className="flex flex-col gap-1">
+      <ul aria-label={t("Pinned")} className="flex flex-col gap-1">
         {shown.map((key) => row(key, searching ? undefined : drag(key)))}
       </ul>
       {rowOver && (
         <div className="grow-in mt-0.5 grid h-8 place-items-center rounded-md border border-dashed border-accent/50 bg-accent/5 text-meta font-medium text-accent">
-          Drop to pin
+          {t("Drop to pin")}
         </div>
       )}
     </div>

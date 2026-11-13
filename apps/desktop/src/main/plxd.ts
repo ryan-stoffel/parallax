@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -303,7 +304,7 @@ export async function replaceServe(
         return { stopped: true, why: `restarted plxd's login service on its copy, ${wanted}` };
       await system.sleep(100);
     }
-    throw new Error("plxd's login service did not start the updated daemon within 10 seconds");
+    throw new Error(t("plxd's login service did not start the updated daemon within 10 seconds"));
   }
   try {
     system.kill(pid);
@@ -319,5 +320,5 @@ export async function replaceServe(
     }
     await system.sleep(100);
   }
-  throw new Error(`plxd serve ${running} did not exit within 10 seconds`);
+  throw new Error(t("plxd serve {{version}} did not exit within 10 seconds", { version: running }));
 }

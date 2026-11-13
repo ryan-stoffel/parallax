@@ -5,19 +5,20 @@ import type {
   ProviderEnvVar,
   ProviderInstance,
 } from "../../desktop/src/protocol/generated/protocol";
+import { msg } from "../../desktop/src/i18n";
 import { kindInfoOf, slug, unique, type Preset } from "../../desktop/src/renderer/providerKinds";
 
-/** A computer's settings pages, as the desktop's Settings names its sections. */
+/** A computer's settings pages, as the desktop's Settings names its sections. Shown with `t`. */
 export const pages = {
-  providers: "Providers",
-  accounts: "Accounts",
-  threads: "Threads",
-  schedules: "Schedules",
-  sourceControl: "Source control",
-  computerUse: "Computer use",
-  scripts: "Scripts",
-  connections: "Connections",
-  storage: "Storage",
+  providers: msg("Providers"),
+  accounts: msg("Accounts"),
+  threads: msg("Threads"),
+  schedules: msg("Schedules"),
+  sourceControl: msg("Source control"),
+  computerUse: msg("Computer use"),
+  scripts: msg("Scripts"),
+  connections: msg("Connections"),
+  storage: msg("Storage"),
 } as const;
 
 export type SettingsPage = keyof typeof pages;

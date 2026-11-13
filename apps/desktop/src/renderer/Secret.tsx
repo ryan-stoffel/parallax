@@ -7,6 +7,7 @@
 // draws it into the DOM beside the field, masked until the user shows it, without going through
 // state. A picked file's contents are read only when the user saves.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
+import { t } from "i18next";
 import { Eye, EyeOff, FileKey, FolderOpen, KeyRound, ShieldCheck, Upload, X } from "lucide-react";
 import {
   useId,
@@ -18,7 +19,9 @@ import {
   type KeyboardEvent,
 } from "react";
 import { flushSync } from "react-dom";
+import { Trans } from "react-i18next";
 
+import { msg } from "../i18n";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
 import { formatBytes } from "./settings/parts";
@@ -147,7 +150,7 @@ export function SecretCard({
     if ("error" in reply) {
       notify({
         tone: "error",
-        title: saving ? "Couldn't save the secret" : "Couldn't decline the secret",
+        title: saving ? t("Couldn't save the secret") : t("Couldn't decline the secret"),
         body: describeError(reply.error),
       });
       setBusy(undefined);
@@ -175,7 +178,11 @@ export function SecretCard({
     try {
       bytes = new Uint8Array(await file.arrayBuffer());
     } catch {
-      notify({ tone: "error", title: `Couldn't use ${file.name}`, body: "It couldn't be read." });
+      notify({
+        tone: "error",
+        title: t("Couldn't use {{name}}", { name: file.name }),
+        body: t("It couldn't be read."),
+      });
       setBusy(undefined);
       return;
     }
@@ -185,10 +192,11 @@ export function SecretCard({
   /** Takes `file` for a `file` input, if it's what the request asks for. */
   function pick(file: File) {
     const refuse = (body: string) =>
-      notify({ tone: "error", title: `Couldn't use ${file.name}`, body });
-    if (!acceptsFile(file.name, request.accept)) return refuse(`Choose ${wanted}.`);
-    if (!file.size) return refuse("It's empty.");
-    if (file.size > maxSecretBytes) return refuse("A secret can be up to 64 KB.");
+      notify({ tone: "error", title: t("Couldn't use {{name}}", { name: file.name }), body });
+    if (!acceptsFile(file.name, request.accept))
+      return refuse(t("Choose {{file}}.", { file: wanted }));
+    if (!file.size) return refuse(t("It's empty."));
+    if (file.size > maxSecretBytes) return refuse(t("A secret can be up to 64 KB."));
     setPicked(file);
   }
 
@@ -207,18 +215,18 @@ export function SecretCard({
 
   async function loadFile(file: File) {
     const refuse = (body: string) =>
-      notify({ tone: "error", title: `Couldn't use ${file.name}`, body });
-    if (file.size > maxSecretBytes) return refuse("A secret can be up to 64 KB.");
+      notify({ tone: "error", title: t("Couldn't use {{name}}", { name: file.name }), body });
+    if (file.size > maxSecretBytes) return refuse(t("A secret can be up to 64 KB."));
     let text;
     try {
       // This drops a leading BOM, which would otherwise break the first variable for shells and dotenv.
       text = await file.text();
     } catch {
-      return refuse("It couldn't be read.");
+      return refuse(t("It couldn't be read."));
     }
     // A binary file wouldn't survive being read as text.
     if (!text.trim() || text.includes("\0") || text.includes("\uFFFD"))
-      return refuse("Use a text file with something in it.");
+      return refuse(t("Use a text file with something in it."));
     if (field.current) field.current.value = text;
     setLoads((count) => count + 1);
     field.current?.focus();
@@ -239,7 +247,9 @@ export function SecretCard({
     else void loadFile(file);
   }
 
-  const wanted = request.accept?.length ? `a ${request.accept.join(" or ")} file` : "a file";
+  const wanted = request.accept?.length
+    ? t("a {{types}} file", { types: request.accept.join(` ${t("or")} `) })
+    : t("a file");
   const picker = (
     <input
       ref={filePicker}
@@ -264,7 +274,7 @@ export function SecretCard({
       title={disabledReason}
       className={buttonClass("primary")}
     >
-      {busy === "save" ? "Saving…" : "Save"}
+      {busy === "save" ? t("Saving…") : t("Save")}
     </button>
   );
 
@@ -299,13 +309,13 @@ export function SecretCard({
                 <FileKey aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-body">
-                    {dropOver ? "Drop to replace this file" : picked.name}
+                    {dropOver ? t("Drop to replace this file") : picked.name}
                   </span>
                   <span className="block text-meta text-faint-foreground">
                     {formatBytes(picked.size)}
                   </span>
                 </span>
-                <IconButton label="Remove the file" size="sm" disabled={off} onClick={unpick}>
+                <IconButton label={t("Remove the file")} size="sm" disabled={off} onClick={unpick}>
                   <X />
                 </IconButton>
               </div>
@@ -323,14 +333,14 @@ export function SecretCard({
                 />
                 <span className="text-body text-muted-foreground">
                   {dropOver ? (
-                    "Drop to use this file"
+                    t("Drop to use this file")
                   ) : (
-                    <>
-                      Drop {wanted} here, or{" "}
+                    <Trans values={{ file: wanted }}>
+                      Drop {"{{file}}"} here, or{" "}
                       <span className="text-foreground underline decoration-foreground/30 underline-offset-2">
                         choose one
                       </span>
-                    </>
+                    </Trans>
                   )}
                 </span>
               </button>
@@ -358,7 +368,7 @@ export function SecretCard({
                 disabled={off}
                 onInput={repaint}
                 onKeyDown={commandEnterSaves}
-                placeholder={request.placeholder ?? "Paste your .env, or drop the file here"}
+                placeholder={request.placeholder ?? t("Paste your .env, or drop the file here")}
                 className={`relative block field-sizing-content min-w-full resize-none overflow-hidden bg-transparent px-2.5 py-1.5 whitespace-pre text-transparent caret-foreground [grid-area:1/1] placeholder:font-sans placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-50 ${shown ? "" : "[-webkit-text-security:disc]"}`}
               />
             </div>
@@ -374,7 +384,7 @@ export function SecretCard({
               spellCheck={false}
               disabled={off}
               onInput={(event) => setFilled(!!event.currentTarget.value.trim())}
-              placeholder={request.placeholder ?? "Paste the secret"}
+              placeholder={request.placeholder ?? t("Paste the secret")}
               className={`${fieldClass} h-8 min-w-0 flex-1 px-2.5 font-mono placeholder:font-sans placeholder:text-faint-foreground`}
             />
             {saveButton}
@@ -384,13 +394,17 @@ export function SecretCard({
           <p className="mr-auto flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground">
             <ShieldCheck aria-hidden className="size-3.5 shrink-0" />
             {request.delivery === "file"
-              ? "Kept out of chat, in a private file this agent's commands can read for 24 hours."
-              : "Kept in this host's keychain. The agent gets a one-time reference, never the value."}
+              ? t(
+                  "Kept out of chat, in a private file this agent's commands can read for 24 hours.",
+                )
+              : t(
+                  "Kept in this host's keychain. The agent gets a one-time reference, never the value.",
+                )}
           </p>
           {input === "env" && (
             <>
               <IconButton
-                label={shown ? "Hide values" : "Show values"}
+                label={shown ? t("Hide values") : t("Show values")}
                 size="sm"
                 aria-pressed={shown}
                 onClick={() => setShown(!shown)}
@@ -398,7 +412,7 @@ export function SecretCard({
                 {shown ? <EyeOff /> : <Eye />}
               </IconButton>
               <IconButton
-                label="Open a file"
+                label={t("Open a file")}
                 size="sm"
                 disabled={off}
                 onClick={() => filePicker.current?.click()}
@@ -413,7 +427,7 @@ export function SecretCard({
             title={disabledReason}
             onClick={() => void send({ type: "decline" })}
           >
-            {busy === "decline" ? "Declining…" : "Decline"}
+            {busy === "decline" ? t("Declining…") : t("Decline")}
           </Button>
           {input !== "value" && saveButton}
         </div>
@@ -422,11 +436,11 @@ export function SecretCard({
   );
 }
 
-/** How a secret request ended, by its status. */
+/** How a secret request ended, by its status. Show it with `t`. */
 const outcomes: Record<string, string> = {
-  saved: "Saved",
-  declined: "Declined",
-  cancelled: "Closed",
+  saved: msg("Saved"),
+  declined: msg("Declined"),
+  cancelled: msg("Closed"),
 };
 
 /** A secret request's line in the transcript: what was asked for, and how it ended. */
@@ -437,7 +451,7 @@ export function SecretLine({ secret }: { secret: SecretItem }) {
         <KeyRound />
       </TraceIcon>
       <TraceTitle className="shrink-0">
-        {secret.status ? (outcomes[secret.status] ?? "Ended") : "Waiting for you"}
+        {secret.status ? t(outcomes[secret.status] ?? msg("Ended")) : t("Waiting for you")}
       </TraceTitle>
       <span className="truncate text-faint-foreground">{secret.request.label}</span>
     </TraceLine>

@@ -4,6 +4,7 @@
 // its thread. A question is answered in place, from its pick so far or typed. An item's text is
 // plxd's line, which quotes what agents wrote, so it only ever renders as text.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import { Circle, CircleAlert, CircleCheck, Lightbulb, MessageCircleQuestion, Scale } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
@@ -22,11 +23,11 @@ import { Button, Input, Row, Section, T, useColors } from "./ui";
 
 /** Each kind's word, icon, and color. */
 const looks = (c: Colors): Record<string, { label: string; icon: LucideIcon; color: string }> => ({
-  needsYou: { label: "Needs you", icon: MessageCircleQuestion, color: c.warning },
-  done: { label: "Done", icon: CircleCheck, color: c.added },
-  failed: { label: "Failed", icon: CircleAlert, color: c.danger },
-  decided: { label: "Decided", icon: Scale, color: c.accent },
-  learned: { label: "Learned", icon: Lightbulb, color: c.accent },
+  needsYou: { label: t("Needs you"), icon: MessageCircleQuestion, color: c.warning },
+  done: { label: t("Done"), icon: CircleCheck, color: c.added },
+  failed: { label: t("Failed"), icon: CircleAlert, color: c.danger },
+  decided: { label: t("Decided"), icon: Scale, color: c.accent },
+  learned: { label: t("Learned"), icon: Lightbulb, color: c.accent },
 });
 
 /** A question's answers: its pick so far, which a tap sends, and a field for any other. */
@@ -46,16 +47,16 @@ function QuestionBox({
     setBusy(true);
     const failed = await onAnswer(answer.trim());
     setBusy(false);
-    if (failed) showAlert("Couldn't send your answer", failed);
+    if (failed) showAlert(t("Couldn't send your answer"), failed);
     else setText("");
   }
   return (
     <View style={{ paddingHorizontal: 16, paddingBottom: 14, gap: 8 }}>
-      {!!assumption && <Button label={`Its pick: ${assumption}`} disabled={busy} onPress={() => void send(assumption)} />}
+      {!!assumption && <Button label={t("Its pick: {{assumption}}", { assumption })} disabled={busy} onPress={() => void send(assumption)} />}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <Input
-          accessibilityLabel={`Answer: ${question}`}
-          placeholder={assumption ? "Something else" : "Your answer"}
+          accessibilityLabel={t("Answer: {{question}}", { question })}
+          placeholder={assumption ? t("Something else") : t("Your answer")}
           value={text}
           editable={!busy}
           autoCapitalize="sentences"
@@ -66,7 +67,7 @@ function QuestionBox({
           onSubmitEditing={() => void send(text)}
           style={{ flex: 1 }}
         />
-        <Button label="Send" primary disabled={busy || !text.trim()} onPress={() => void send(text)} />
+        <Button label={t("Send")} primary disabled={busy || !text.trim()} onPress={() => void send(text)} />
       </View>
     </View>
   );
@@ -99,7 +100,7 @@ export function OrchestratorInboxScreen({ route }: NativeStackScreenProps<Screen
   const look = looks(c);
   const titleFor = (run: string) => {
     const known = state?.runs[run];
-    return state?.titles[run] ?? (known ? titleOf(known) : "Thread");
+    return state?.titles[run] ?? (known ? titleOf(known) : t("Thread"));
   };
   const row = (item: InboxItem, last: boolean) => {
     const question = questionOf(item, questions);
@@ -114,7 +115,7 @@ export function OrchestratorInboxScreen({ route }: NativeStackScreenProps<Screen
           icon={kind.icon}
           iconColor={unread ? kind.color : c.faintForeground}
           title={titleFor(item.run)}
-          detail={`${answered ? "Answered" : kind.label} · ${item.text}`}
+          detail={`${answered ? t("Answered") : kind.label} · ${item.text}`}
           right={
             <T faint style={{ fontSize: 12 }}>
               {ago(item.createdAt)}
@@ -139,11 +140,11 @@ export function OrchestratorInboxScreen({ route }: NativeStackScreenProps<Screen
   return (
     <Page>
       <T accessibilityRole="header" style={{ fontSize: 17, fontWeight: "600", textAlign: "center", lineHeight: 22 }}>
-        Inbox
+        {t("Inbox")}
       </T>
       {sections.length === 0 && (
         <T muted style={{ textAlign: "center" }}>
-          What this orchestrator's threads report shows here.
+          {t("What this orchestrator's threads report shows here.")}
         </T>
       )}
       {sections.map((section) => (

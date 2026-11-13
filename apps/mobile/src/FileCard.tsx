@@ -5,6 +5,7 @@
 // opens it in Quick Look, whose share button saves or sends it.
 import * as Haptics from "expo-haptics";
 import { File, Paths } from "expo-file-system";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import {
   ArrowDown,
@@ -55,8 +56,8 @@ async function sliceOf(
   const answer = await window.parallax.request(hostId, "agent/file", { runId, path, side: "working", ...at });
   if ("error" in answer) throw new Error(answer.error.message);
   const file = answer.result;
-  if (!file.exists) throw new Error("This file isn't in the thread's folder anymore.");
-  if (file.tooLarge || file.content == null) throw new Error("This file is too large to open here.");
+  if (!file.exists) throw new Error(t("This file isn't in the thread's folder anymore."));
+  if (file.tooLarge || file.content == null) throw new Error(t("This file is too large to open here."));
   return { data: file.content, size: file.size ?? 0 };
 }
 
@@ -70,7 +71,7 @@ async function sizeOf(source: FileSource): Promise<number> {
     sizeOnly: true,
   });
   if ("error" in answer) throw new Error(answer.error.message);
-  if (!answer.result.exists) throw new Error("This file isn't in the thread's folder anymore.");
+  if (!answer.result.exists) throw new Error(t("This file isn't in the thread's folder anymore."));
   return answer.result.size ?? 0;
 }
 
@@ -129,7 +130,7 @@ async function openFile(source: FileSource, onProgress?: (share: number) => void
   try {
     await preview(await download(source, onProgress));
   } catch (error) {
-    showAlert(`Couldn't open ${source.name}`, error instanceof Error ? error.message : String(error));
+    showAlert(t("Couldn't open {{name}}", { name: source.name }), error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -150,10 +151,10 @@ const countUpTo = 5 * 1024 * 1024;
 
 /** `bytes` as people read a size: 512 bytes, 12 KB, 3.4 MB, as the desktop's `sizeOf`. */
 function sizeText(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes < 1024) return t("{{count}} bytes", { count: bytes, defaultValue_one: "{{count}} byte" });
+  if (bytes < 1024 * 1024) return t("{{size}} KB", { size: Math.round(bytes / 1024) });
+  if (bytes < 1024 ** 3) return t("{{size}} MB", { size: (bytes / 1024 / 1024).toFixed(1) });
+  return t("{{size}} GB", { size: (bytes / 1024 ** 3).toFixed(1) });
 }
 
 type Kind = "pdf" | "image" | "video" | "audio" | "document" | "sheet" | "slides" | "archive" | "code" | "file";
@@ -264,10 +265,10 @@ export function FileCard({ source }: { source: FileSource }) {
       live = false;
     };
   }, [keyOf(source)]);
-  const type = /\.([^./]+)$/.exec(source.name)?.[1]?.toUpperCase() ?? "File";
+  const type = /\.([^./]+)$/.exec(source.name)?.[1]?.toUpperCase() ?? t("File");
   const detail =
     error ??
-    [type, pages && `${pages} ${pages === 1 ? "page" : "pages"}`, size !== undefined && sizeText(size)]
+    [type, pages && t("{{count}} pages", { count: pages, defaultValue_one: "{{count}} page" }), size !== undefined && sizeText(size)]
       .filter(Boolean)
       .join(" · ");
   const open = () => {
@@ -278,7 +279,7 @@ export function FileCard({ source }: { source: FileSource }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${source.name}`}
+      accessibilityLabel={t("Open {{name}}", { name: source.name })}
       accessibilityHint={detail}
       onPress={open}
       style={({ pressed }) => [
@@ -358,10 +359,10 @@ export async function openLinked(hostId: string, runId: string, path: string): P
   try {
     const inside = inFolder(path, isAbsolute(path) ? await threadFolder(hostId, runId) : undefined);
     if (inside === undefined)
-      return showAlert("Couldn't open the file", "This file is outside the thread's folder, so it can't be opened here.");
+      return showAlert(t("Couldn't open the file"), t("This file is outside the thread's folder, so it can't be opened here."));
     await openFile({ hostId, runId, path: inside, name: inside.slice(inside.lastIndexOf("/") + 1) });
   } catch (error) {
-    showAlert("Couldn't open the file", error instanceof Error ? error.message : String(error));
+    showAlert(t("Couldn't open the file"), error instanceof Error ? error.message : String(error));
   }
 }
 

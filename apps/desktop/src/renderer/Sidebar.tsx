@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   AlarmClock,
   Archive,
@@ -91,6 +92,7 @@ import type {
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
+import { msg } from "../i18n";
 import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection } from "./App";
 import { clock } from "./Approval";
@@ -267,7 +269,7 @@ export function Sidebar({
   return (
     <nav
       id="sidebar"
-      aria-label="Sidebar"
+      aria-label={t("Sidebar")}
       hidden={!open}
       data-peek={peek || undefined}
       onMouseLeave={peek ? onPeekLeave : undefined}
@@ -280,7 +282,7 @@ export function Sidebar({
       <TopBar className="traffic-light-inset night-sky-text relative">
         {peek ? (
           <IconButton
-            label="Show sidebar"
+            label={t("Show sidebar")}
             command="sidebar"
             aria-expanded={false}
             aria-controls="sidebar"
@@ -290,7 +292,7 @@ export function Sidebar({
           </IconButton>
         ) : (
           <IconButton
-            label="Hide sidebar"
+            label={t("Hide sidebar")}
             command="sidebar"
             aria-expanded
             aria-controls="sidebar"
@@ -463,7 +465,12 @@ const unbrowsable = (hosts: HostThreads[]) =>
     hosts.flatMap(({ host, view }): [string, string][] =>
       host.id === localId || "hostFolders" in view.capabilities
         ? []
-        : [[host.id, Object.keys(view.capabilities).length ? "Update plxd to browse" : "Offline"]],
+        : [
+            [
+              host.id,
+              Object.keys(view.capabilities).length ? t("Update plxd to browse") : t("Offline"),
+            ],
+          ],
     ),
   );
 
@@ -476,7 +483,6 @@ const autoArchived = new Set<string>();
 
 /** Text cut to fit a toast. */
 const short = (text: string) => (text.length > 30 ? `${text.slice(0, 28).trimEnd()}…` : text);
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const working = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
 /** Whether a host keeps thread pins: `pins`, or `areas` on a plxd from before areas were removed. */
 const pinsOn = (view: ThreadsView) => "pins" in view.capabilities || "areas" in view.capabilities;
@@ -622,7 +628,7 @@ export function ThreadList({
   const scopeLabel = scopeRepo
     ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
     : scope === "none"
-      ? { name: "No repo", color: "var(--faint-foreground)" }
+      ? { name: t("No repo"), color: "var(--faint-foreground)" }
       : undefined;
   const sections = { ...sectionDefaults, ...sectionsStore.use()[scope] };
   const toggleSection = (name: keyof Sections, value = !sections[name]) => {
@@ -885,10 +891,10 @@ export function ThreadList({
   const jump = (step: 1 | -1) => {
     const key = jumpTarget(jumpList, selectedKey, step);
     const item = key ? byKey.get(key) : undefined;
-    if (!item) return toast("Nothing needs you right now");
+    if (!item) return toast(t("Nothing needs you right now"));
     if (!inScope(item, scope)) {
       setScope("all", false);
-      toast(`Switched to All threads for “${short(item.title)}”`);
+      toast(t("Switched to All threads for “{{title}}”", { title: short(item.title) }));
     }
     if (!matched.has(item.key)) setQuery("");
     focusNext.current = { key: item.key };
@@ -996,35 +1002,38 @@ export function ThreadList({
   // `focusAt` comes from E, for `focusAfter`.
   const archive = async (item: Item, focusAt?: number) => {
     if (item.kind !== "thread" || leaving.current.has(item.key)) return;
-    const { thread: t, host: h } = item;
-    const was = !!t.archived;
+    const { thread, host: h } = item;
+    const was = !!thread.archived;
     leaving.current.add(item.key);
     // Archiving, the row slides away first; it comes back if plxd says no.
     const sweep = was ? undefined : sweepOut([item.key], "translateX(-12px)");
     if (sweep?.done) await sweep.done;
-    const error = await item.view.archive(t.id, !was);
+    const error = await item.view.archive(thread.id, !was);
     leaving.current.delete(item.key);
-    actionFailed(error, was ? "Couldn't unarchive the thread" : "Couldn't archive the thread");
+    actionFailed(
+      error,
+      was ? t("Couldn't unarchive the thread") : t("Couldn't archive the thread"),
+    );
     if (error) return sweep?.restore();
     focusAfter(item.key, focusAt);
-    toast(was ? "Unarchived" : `Archived “${short(item.title)}”`, () => {
-      void viewOf(h.id)?.archive(t.id, was);
+    toast(was ? t("Unarchived") : t("Archived “{{title}}”", { title: short(item.title) }), () => {
+      void viewOf(h.id)?.archive(thread.id, was);
     });
   };
   const snoozeUntil = async (item: Item, until: Date, focusAt?: number) => {
     if (item.kind !== "thread") return;
-    const { thread: t, host: h } = item;
-    const was = t.snoozedUntil;
-    const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
-    actionFailed(error, "Couldn't snooze the thread");
+    const { thread, host: h } = item;
+    const was = thread.snoozedUntil;
+    const error = await item.view.update(thread.id, { snoozedUntil: until.toISOString() });
+    actionFailed(error, t("Couldn't snooze the thread"));
     if (error) return;
     // A row that stays, as one already snoozed or archived or that needs the user, keeps focus.
     const stays = isSnoozed(item) || isArchived(item) || rowAttention(item) === "needsYou";
     focusAfter(item.key, stays ? undefined : focusAt);
     const ending = until.getTime() <= Date.now();
-    toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
+    toast(ending ? t("Unsnoozed") : t("Snoozed until {{time}}", { time: when(until) }), () => {
       // With no snooze to restore, a past time ends this one. Its creation keeps its place in the list.
-      void viewOf(h.id)?.update(t.id, { snoozedUntil: was ?? t.createdAt });
+      void viewOf(h.id)?.update(thread.id, { snoozedUntil: was ?? thread.createdAt });
     });
   };
   // A thread row dragged onto another section (PLX-1095): Today takes it out of Archived or
@@ -1047,19 +1056,19 @@ export function ThreadList({
     moving && takes(to, moving) ? () => void moveTo(to, moving) : undefined;
   const markUnread = (item: Item) => {
     pinUnread.set([...pinUnread.get().filter((k) => k !== item.key), item.key]);
-    toast(`Marked “${short(item.title)}” unread`, () =>
+    toast(t("Marked “{{title}}” unread", { title: short(item.title) }), () =>
       pinUnread.set(pinUnread.get().filter((k) => k !== item.key)),
     );
   };
   const pin = async (item: Item) => {
     if (item.kind !== "thread" || item.thread.parent) return;
-    const { thread: t, host: h } = item;
-    const was = !!t.pinned;
-    const error = await item.view.update(t.id, { pinned: !was });
-    actionFailed(error, was ? "Couldn't unpin the thread" : "Couldn't pin the thread");
+    const { thread, host: h } = item;
+    const was = !!thread.pinned;
+    const error = await item.view.update(thread.id, { pinned: !was });
+    actionFailed(error, was ? t("Couldn't unpin the thread") : t("Couldn't pin the thread"));
     if (!error)
-      toast(was ? "Unpinned" : "Pinned to top", () => {
-        void viewOf(h.id)?.update(t.id, { pinned: was });
+      toast(was ? t("Unpinned") : t("Pinned to top"), () => {
+        void viewOf(h.id)?.update(thread.id, { pinned: was });
       });
   };
   const rename = async (item: Item, title: string | undefined) => {
@@ -1067,19 +1076,19 @@ export function ThreadList({
     focusNext.current = { key: item.key };
     const next = title?.trim();
     if (item.kind !== "thread" || !next || next === item.title) return;
-    const { thread: t, host: h } = item;
-    const was = t.title ?? "";
+    const { thread, host: h } = item;
+    const was = thread.title ?? "";
     const error = item.orchestration
       ? await item.view.updateOrchestrator(item.orchestration.orchestrator.id, { name: next })
-      : await item.view.update(t.id, { title: next });
-    actionFailed(error, "Couldn't rename the thread");
+      : await item.view.update(thread.id, { title: next });
+    actionFailed(error, t("Couldn't rename the thread"));
     if (!error)
-      toast("Renamed", () => {
+      toast(t("Renamed"), () => {
         if (item.orchestration)
           void viewOf(h.id)?.updateOrchestrator(item.orchestration.orchestrator.id, {
             name: item.title,
           });
-        else void viewOf(h.id)?.update(t.id, { title: was });
+        else void viewOf(h.id)?.update(thread.id, { title: was });
       });
   };
   // The picked threads that are still listed, including backed orchestrator threads.
@@ -1103,7 +1112,6 @@ export function ThreadList({
   const bulk = async (action: "archive" | "snooze" | "pin") => {
     const list = pickedItems.map((i) => ({ item: i, t: i.thread }));
     if (!list.length) return;
-    const n = plural(list.length, "thread");
     const errors: (string | undefined)[] = [];
     if (action === "archive") {
       const keys = list.map(({ item }) => item.key);
@@ -1115,10 +1123,16 @@ export function ThreadList({
       for (const k of keys) leaving.current.delete(k);
       sweep.restore(keys.filter((_, n) => errors[n]));
       setPicked(new Set());
-      toast(`Archived ${n}`, () => {
-        for (const { item, t } of list)
-          if (!t.archived) void viewOf(item.host.id)?.archive(t.id, false);
-      });
+      toast(
+        t("Archived {{count}} threads", {
+          count: list.length,
+          defaultValue_one: "Archived {{count}} thread",
+        }),
+        () => {
+          for (const { item, t } of list)
+            if (!t.archived) void viewOf(item.host.id)?.archive(t.id, false);
+        },
+      );
     } else if (action === "snooze") {
       // Only where plxd keeps snoozes (`threadAttention`).
       const able = list.filter(({ item }) => "threadAttention" in item.view.capabilities);
@@ -1130,12 +1144,18 @@ export function ThreadList({
         )),
       );
       setPicked(new Set());
-      toast(`Snoozed ${plural(able.length, "thread")} for an hour`, () => {
-        for (const { item, t } of able)
-          void viewOf(item.host.id)?.update(t.id, {
-            snoozedUntil: t.snoozedUntil ?? t.createdAt,
-          });
-      });
+      toast(
+        t("Snoozed {{count}} threads for an hour", {
+          count: able.length,
+          defaultValue_one: "Snoozed {{count}} thread for an hour",
+        }),
+        () => {
+          for (const { item, t } of able)
+            void viewOf(item.host.id)?.update(t.id, {
+              snoozedUntil: t.snoozedUntil ?? t.createdAt,
+            });
+        },
+      );
     } else {
       // Only top-level threads, where plxd keeps pins.
       const tops = list.filter(({ item, t }) => !t.parent && pinsOn(item.view));
@@ -1144,12 +1164,28 @@ export function ThreadList({
       errors.push(
         ...(await Promise.all(tops.map(({ item, t }) => item.view.update(t.id, { pinned: on })))),
       );
-      toast(`${on ? "Pinned" : "Unpinned"} ${plural(tops.length, "thread")}`, () => {
-        for (const { item, t } of tops)
-          void viewOf(item.host.id)?.update(t.id, { pinned: !!t.pinned });
-      });
+      const count = tops.length;
+      toast(
+        on
+          ? t("Pinned {{count}} threads", { count, defaultValue_one: "Pinned {{count}} thread" })
+          : t("Unpinned {{count}} threads", {
+              count,
+              defaultValue_one: "Unpinned {{count}} thread",
+            }),
+        () => {
+          for (const { item, t } of tops)
+            void viewOf(item.host.id)?.update(t.id, { pinned: !!t.pinned });
+        },
+      );
     }
-    actionFailed(errors.find(Boolean), `Couldn't ${action} every thread`);
+    actionFailed(
+      errors.find(Boolean),
+      action === "archive"
+        ? t("Couldn't archive every thread")
+        : action === "snooze"
+          ? t("Couldn't snooze every thread")
+          : t("Couldn't pin every thread"),
+    );
   };
   // Down or Up from the focused row to the next or previous one shown, drafts among them.
   const stepRows = (e: ReactKeyboardEvent<HTMLElement>) => {
@@ -1184,10 +1220,7 @@ export function ThreadList({
     else if (key === "u" && thread && item.attention === "settled") act(() => markUnread(item));
     else if (key === "a")
       act(() =>
-        e.currentTarget
-          .closest("li")
-          ?.querySelector<HTMLElement>('[aria-label$="actions"]')
-          ?.click(),
+        e.currentTarget.closest("li")?.querySelector<HTMLElement>("[data-row-actions]")?.click(),
       );
     else if (key === "x" && thread) act(() => pick(item, e.shiftKey), { key: item.key });
     else if ((key === "Backspace" || key === "Delete") && thread) act(() => askDelete(item));
@@ -1200,9 +1233,9 @@ export function ThreadList({
     const n = modHeld ? listed.indexOf(item) : -1;
     const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
     const selected = item.key === openKey;
-    const { thread: t, view } = item;
-    const pinnable = pinsOn(view) && !t.parent;
-    const projects = t.parent ? undefined : projectChoices(t, view, hosts);
+    const { thread, view } = item;
+    const pinnable = pinsOn(view) && !thread.parent;
+    const projects = thread.parent ? undefined : projectChoices(thread, view, hosts);
     return (
       <ThreadRow
         key={item.key}
@@ -1213,7 +1246,7 @@ export function ThreadList({
         orchestration={
           item.orchestration
             ? orchestratorActions({ ...item, kind: "orchestrator", ...item.orchestration }).filter(
-                (a) => a.label !== "Rename…" && !a.danger,
+                (a) => a.label !== t("Rename…") && !a.danger,
               )
             : undefined
         }
@@ -1222,13 +1255,13 @@ export function ThreadList({
           (item.orchestration.orchestrator.integrationBranch ??
             item.orchestration.orchestrator.branch)
         }
-        thread={t}
+        thread={thread}
         hostId={item.host.id}
         device={item.host}
         title={item.title}
         run={item.run}
         repo={item.repo}
-        project={t.project ? view.state.repos.find((r) => r.id === t.project) : undefined}
+        project={thread.project ? view.state.repos.find((r) => r.id === thread.project) : undefined}
         attention={rowAttention(item)}
         selected={selected}
         picked={picked.has(item.key)}
@@ -1256,7 +1289,7 @@ export function ThreadList({
           setPicked(new Set());
           anchor.current = item.key;
           if (item.orchestration) openItem(item);
-          else onSelect(item.host.id, { kind: "thread", threadId: t.id, pr: { url } });
+          else onSelect(item.host.id, { kind: "thread", threadId: thread.id, pr: { url } });
         }}
         onKeys={(e) => rowKeys(e, item)}
         onArchive={() => void archive(item)}
@@ -1271,20 +1304,22 @@ export function ThreadList({
         onStartRename={() => setRenaming(item.key)}
         onDelete={() => askDelete(item)}
         onOpenInTab={
-          item.orchestration || !onOpenInTab ? undefined : () => onOpenInTab(item.host.id, t.id)
+          item.orchestration || !onOpenInTab
+            ? undefined
+            : () => onOpenInTab(item.host.id, thread.id)
         }
         onOpenBeside={
           !item.orchestration &&
           item.host.id === host.id &&
           selection.kind === "thread" &&
           !selected
-            ? () => onOpenBeside(t.id)
+            ? () => onOpenBeside(thread.id)
             : undefined
         }
         onFork={
           "threadFork" in view.capabilities
             ? async (choice) => {
-                const forked = await view.fork(t.id, undefined, choice);
+                const forked = await view.fork(thread.id, undefined, choice);
                 if (typeof forked !== "string") return forked;
                 onSelect(item.host.id, { kind: "thread", threadId: forked });
                 return undefined;
@@ -1301,12 +1336,12 @@ export function ThreadList({
         }
         onAutoResume={async (autoResume) => {
           const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
-            runId: t.id,
+            runId: thread.id,
             ...(autoResume !== undefined && { autoResume }),
           });
           actionFailed(
             "error" in answer ? answer.error.message : undefined,
-            "Couldn't change auto-resume",
+            t("Couldn't change auto-resume"),
           );
         }}
         onRest={restCard(item)}
@@ -1323,7 +1358,7 @@ export function ThreadList({
     card.current?.show(el, {
       title: item.title,
       run: item.run,
-      repo: { name: place?.name ?? "No repo", icon: <RepoIcon repo={place} /> },
+      repo: { name: place?.name ?? t("No repo"), icon: <RepoIcon repo={place} /> },
       host: item.host,
       snoozedUntil: item.thread.snoozedUntil,
     });
@@ -1333,21 +1368,21 @@ export function ThreadList({
     if (!toDelete) return;
     if (toDelete.kind === "thread") {
       // Held back while Undo can take it back; it goes once the toast does.
-      const { key, host: h, thread: t, title } = toDelete;
+      const { key, host: h, thread, title } = toDelete;
       deleteDialog.current?.close();
       setDoomed((d) => new Set(d).add(key));
       if (key === selectedKey)
-        onSelect(h.id, { kind: "new", groupId: groupOf(toDelete.view.state, t) });
+        onSelect(h.id, { kind: "new", groupId: groupOf(toDelete.view.state, thread) });
       const restore = () =>
         setDoomed((d) => {
           const next = new Set(d);
           next.delete(key);
           return next;
         });
-      toast(`Deleted “${short(title)}”`, restore, () => {
-        void onDelete(h.id, t).then((error) => {
+      toast(t("Deleted “{{title}}”", { title: short(title) }), restore, () => {
+        void onDelete(h.id, thread).then((error) => {
           restore();
-          actionFailed(error, "Couldn't delete the thread");
+          actionFailed(error, t("Couldn't delete the thread"));
         });
       });
       return;
@@ -1396,7 +1431,7 @@ export function ThreadList({
     ...(!i.orchestration && onOpenInTab
       ? [
           {
-            label: "Open in new tab",
+            label: t("Open in new tab"),
             icon: <PanelTop aria-hidden />,
             run: () => onOpenInTab(i.host.id, i.thread.id),
           },
@@ -1408,17 +1443,22 @@ export function ThreadList({
     i.key !== openKey
       ? [
           {
-            label: "Open side by side",
+            label: t("Open side by side"),
             icon: <Columns2 aria-hidden />,
             run: () => onOpenBeside(i.thread.id),
           },
         ]
       : []),
-    { label: "Archive", icon: <Archive aria-hidden />, shortcut: "E", run: () => void archive(i) },
+    {
+      label: t("Archive"),
+      icon: <Archive aria-hidden />,
+      shortcut: "E",
+      run: () => void archive(i),
+    },
     ...("threadAttention" in i.view.capabilities
       ? [
           {
-            label: "Snooze for an hour",
+            label: t("Snooze for an hour"),
             icon: <AlarmClock aria-hidden />,
             shortcut: "S",
             run: () => void snoozeUntil(i, new Date(Date.now() + 3_600_000)),
@@ -1426,7 +1466,7 @@ export function ThreadList({
         ]
       : []),
     {
-      label: "Delete…",
+      label: t("Delete…"),
       icon: <Trash2 aria-hidden />,
       danger: true,
       shortcut: "⌫",
@@ -1621,17 +1661,17 @@ export function ThreadList({
     return (
       // It fills the space left, so a pinned, archived, or snoozed thread can drop anywhere in it.
       <div {...listZone} className={`flex-1 rounded-lg transition-colors ${listLook}`}>
-        <ul aria-label="Threads" className={cardGap}>
+        <ul aria-label={t("Threads")} className={cardGap}>
           {groups ? groupList(groups) : topThreads.map((i) => rowOf(i))}
         </ul>
-        {empty && words.length > 0 && <p className={emptyNote}>Nothing matches</p>}
+        {empty && words.length > 0 && <p className={emptyNote}>{t("Nothing matches")}</p>}
       </div>
     );
   };
   // Discards a draft, with Undo.
   const discardDraft = (draft: Draft) => {
     drafts.remove(draft.id);
-    toast("Discarded the draft", () => drafts.put(draft));
+    toast(t("Discarded the draft"), () => drafts.put(draft));
   };
   // A draft's keys: Up and Down move through the rows, and Backspace or Delete discards it.
   const draftKeys = (e: ReactKeyboardEvent<HTMLElement>, d: DraftItem) => {
@@ -1646,7 +1686,7 @@ export function ThreadList({
   // The unsent New Thread prompts, atop the list under a line (0094).
   const draftList = draftRows.length > 0 && (
     <>
-      <ul aria-label="Drafts" className={cardGap}>
+      <ul aria-label={t("Drafts")} className={cardGap}>
         {draftRows.map((d) => (
           <DraftRow
             key={d.key}
@@ -1699,7 +1739,11 @@ export function ThreadList({
       const archived = stale.filter((_, n) => !errors[n]);
       if (!archived.length) return;
       toast(
-        `Archived ${plural(archived.length, "thread")} quiet for over ${quietFor(autoHours)}`,
+        t("Archived {{count}} threads quiet for over {{time}}", {
+          count: archived.length,
+          time: quietFor(autoHours),
+          defaultValue_one: "Archived {{count}} thread quiet for over {{time}}",
+        }),
         () => {
           for (const i of archived) void viewOf(i.host.id)?.archive(i.thread.id, false);
         },
@@ -1715,21 +1759,21 @@ export function ThreadList({
     return [
       ...(can("orchestratorEdit")
         ? [
-            { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
-            { label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") },
+            { label: t("Rename…"), icon: <PencilLine aria-hidden />, run: open("rename") },
+            { label: t("Change icon…"), icon: <Palette aria-hidden />, run: open("icon") },
           ]
         : []),
       ...(can("orchestratorPermission") && orchestrator.permission !== "bypass"
-        ? [{ label: "Full access…", icon: <ShieldCheck aria-hidden />, run: open("access") }]
+        ? [{ label: t("Full access…"), icon: <ShieldCheck aria-hidden />, run: open("access") }]
         : []),
       ...(can("orchestratorAutonomy")
-        ? [{ label: "Autonomy…", icon: <Bot aria-hidden />, run: open("autonomy") }]
+        ? [{ label: t("Autonomy…"), icon: <Bot aria-hidden />, run: open("autonomy") }]
         : []),
       // Its orchestrator's next message starts a new session from the orchestrator's state (0079).
       ...(can("orchestratorEpochs") && orchestrator.run
         ? [
             {
-              label: "Fresh session",
+              label: t("Fresh session"),
               icon: <RotateCcw aria-hidden />,
               run: async () => {
                 const answer = await window.parallax.request(item.host.id, "orchestrator/fresh", {
@@ -1737,7 +1781,7 @@ export function ThreadList({
                 });
                 actionFailed(
                   "error" in answer ? answer.error.message : undefined,
-                  "Couldn't start a fresh session",
+                  t("Couldn't start a fresh session"),
                 );
               },
             },
@@ -1746,7 +1790,7 @@ export function ThreadList({
       ...(can("orchestratorDelete")
         ? [
             {
-              label: "Delete…",
+              label: t("Delete…"),
               icon: <Trash2 aria-hidden />,
               danger: true,
               run: () => askDelete(item),
@@ -1763,12 +1807,12 @@ export function ThreadList({
     const open = (what: EntryDialog) => (square: HTMLElement) =>
       entryDialogs.current?.open(what, project, entry.view, square);
     return [
-      { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
+      { label: t("Rename…"), icon: <PencilLine aria-hidden />, run: open("rename") },
       ...("threadAttention" in entry.view.capabilities
-        ? [{ label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") }]
+        ? [{ label: t("Change icon…"), icon: <Palette aria-hidden />, run: open("icon") }]
         : []),
       {
-        label: "Delete…",
+        label: t("Delete…"),
         icon: <Trash2 aria-hidden />,
         danger: true,
         run: () => {
@@ -1837,7 +1881,7 @@ export function ThreadList({
   };
   // Traditional's pinned Projects, as cards the size of a pinned thread's (0093).
   const pinnedProjectList = pinnedEntries.length > 0 && (
-    <ul aria-label="Pinned projects" className={cardGap}>
+    <ul aria-label={t("Pinned projects")} className={cardGap}>
       {pinnedEntries.map((e) => (
         <ProjectCard
           key={e.key}
@@ -1853,7 +1897,7 @@ export function ThreadList({
     </ul>
   );
   const pinnedOrchestratorList = pinnedOrchestrators.length > 0 && (
-    <ul aria-label="Pinned orchestrator threads" className={cardGap}>
+    <ul aria-label={t("Pinned orchestrator threads")} className={cardGap}>
       {pinnedOrchestrators.map((p) => orchestratorCard(p))}
     </ul>
   );
@@ -1912,8 +1956,12 @@ export function ThreadList({
     <input
       ref={search}
       type="search"
-      aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and orchestrators"}
-      placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
+      aria-label={
+        scopeLabel
+          ? t("Search {{name}}", { name: scopeLabel.name })
+          : t("Search threads and orchestrators")
+      }
+      placeholder={scopeLabel ? t("Search {{name}}", { name: scopeLabel.name }) : t("Search")}
       value={query}
       onChange={(e) => {
         quiet();
@@ -1971,16 +2019,19 @@ export function ThreadList({
           {scopeMenu}
           {/* The Projects page, which Inbox has instead of a Projects drawer; pressed while open. */}
           <IconButton
-            label="Projects"
+            label={t("Projects")}
             aria-pressed={page === "projects"}
             onClick={() => onOpenPage("projects")}
           >
             <LayoutGrid />
           </IconButton>
-          <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+          <IconButton
+            label={t("New project or repository")}
+            onClick={() => addDialog.current?.open()}
+          >
             <FolderPlus />
           </IconButton>
-          <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+          <IconButton label={t("New thread")} command="newThread" onClick={onNewThread}>
             <SquarePen />
           </IconButton>
         </div>
@@ -2007,11 +2058,15 @@ export function ThreadList({
         className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 *:shrink-0 ${fadeBottom}`}
       >
         {words.length > 0 && nothingShown && !searching ? (
-          <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
-            Nothing matches “{query.trim()}”.
+          <EmptyCard
+            title={
+              scopeLabel ? t("No matches in {{name}}", { name: scopeLabel.name }) : t("No matches")
+            }
+          >
+            {t("Nothing matches “{{query}}”.", { query: query.trim() })}
             {scope !== "all" && (
               <button type="button" onClick={() => setScope("all", false)} className={cardButton}>
-                Search all threads
+                {t("Search all threads")}
               </button>
             )}
           </EmptyCard>
@@ -2020,7 +2075,7 @@ export function ThreadList({
         )}
       </div>
       <Drawer
-        label="Working"
+        label={t("Working")}
         quiet
         items={workingTops}
         row={(item) => rowOf(item)}
@@ -2028,7 +2083,7 @@ export function ThreadList({
         onOpenChange={(o) => toggleSection("working", o)}
       />
       <Drawer
-        label="Snoozed"
+        label={t("Snoozed")}
         items={snoozedItems}
         row={(i) => rowOf(i)}
         open={sections.snoozed}
@@ -2036,7 +2091,7 @@ export function ThreadList({
         onDrop={dropOn("snoozed")}
       />
       <Drawer
-        label="Archived"
+        label={t("Archived")}
         items={archived}
         row={(i) => rowOf(i)}
         open={sections.archived}
@@ -2063,13 +2118,13 @@ export function ThreadList({
         unbrowsable={unbrowsable(hosts)}
         hostId={host.id}
         repos={open?.state.repos ?? []}
-        create={open?.createOrchestrator ?? (async () => "Not connected")}
+        create={open?.createOrchestrator ?? (async () => t("Not connected"))}
         onCreated={(hostId, orchestrator) => onOpenOrchestrator(hostId, orchestrator.id)}
         onNewProject={onNewProject}
       />
       <EntryDialogs
         ref={entryDialogs}
-        onError={(error) => actionFailed(error, "Couldn't change the orchestrator")}
+        onError={(error) => actionFailed(error, t("Couldn't change the orchestrator"))}
       />
       {toMove && (
         <MoveThread
@@ -2084,31 +2139,33 @@ export function ThreadList({
       <ConfirmDialog
         ref={deleteDialog}
         title={
-          toDelete?.kind === "orchestrator" ? "Delete this orchestrator?" : "Delete this thread?"
+          toDelete?.kind === "orchestrator"
+            ? t("Delete this orchestrator?")
+            : t("Delete this thread?")
         }
-        action="Delete"
-        busy={deleting ? "Deleting…" : undefined}
+        action={t("Delete")}
+        busy={deleting ? t("Deleting…") : undefined}
         error={deleteError}
         onConfirm={() => void confirmDelete()}
       >
-        “{toDelete?.title}” goes for good
+        {t("“{{title}}” goes for good", { title: toDelete?.title ?? "" })}
         {toDelete?.kind === "orchestrator"
           ? orchestratorLoss(toDelete.runs.length, keptOnDelete === toDelete.key)
           : threadLoss(keptOnDelete === toDelete?.key)}
       </ConfirmDialog>
       <ConfirmDialog
         ref={projectDelete}
-        title="Delete this Project?"
-        action="Delete"
-        busy={deleting ? "Deleting…" : undefined}
+        title={t("Delete this Project?")}
+        action={t("Delete")}
+        busy={deleting ? t("Deleting…") : undefined}
         error={deleteError}
         onConfirm={() => void confirmProjectDelete()}
       >
-        “{projectToDelete?.name}” goes for good, with{" "}
-        {projectToDelete?.threads === 1
-          ? "its thread"
-          : `its ${projectToDelete?.threads ?? 0} threads`}
-        , instructions, and files.
+        {t("“{{name}}” goes for good, with its {{count}} threads, instructions, and files.", {
+          name: projectToDelete?.name ?? "",
+          count: projectToDelete?.threads ?? 0,
+          defaultValue_one: "“{{name}}” goes for good, with its thread, instructions, and files.",
+        })}
       </ConfirmDialog>
       <div className="p-2">
         <ConnectionStatus hostId={host.id} />
@@ -2170,14 +2227,16 @@ function BulkBar({
   return (
     <div
       role="toolbar"
-      aria-label="Selected threads"
+      aria-label={t("Selected threads")}
       className="mx-2 mt-1 mb-1.5 flex shrink-0 items-center gap-0.5 rounded-xl bg-surface py-1 pr-1 pl-3 shadow-composer ring-1 ring-border motion-safe:animate-[sidebar-rise_140ms_ease-out]"
     >
-      <span className="flex-1 text-meta font-semibold tabular-nums">{count} selected</span>
+      <span className="flex-1 text-meta font-semibold tabular-nums">
+        {t("{{count}} selected", { count })}
+      </span>
       <button
         type="button"
-        aria-label="Archive"
-        title="Archive (E)"
+        aria-label={t("Archive")}
+        title={t("Archive (E)")}
         onClick={() => onAction("archive")}
         className={button}
       >
@@ -2185,8 +2244,8 @@ function BulkBar({
       </button>
       <button
         type="button"
-        aria-label="Snooze"
-        title="Snooze for an hour (S)"
+        aria-label={t("Snooze")}
+        title={t("Snooze for an hour (S)")}
         disabled={!can.snooze}
         onClick={() => onAction("snooze")}
         className={`${button} disabled:pointer-events-none disabled:opacity-40`}
@@ -2195,8 +2254,8 @@ function BulkBar({
       </button>
       <button
         type="button"
-        aria-label="Pin"
-        title="Pin (P)"
+        aria-label={t("Pin")}
+        title={t("Pin (P)")}
         disabled={!can.pin}
         onClick={() => onAction("pin")}
         className={`${button} disabled:pointer-events-none disabled:opacity-40`}
@@ -2205,8 +2264,8 @@ function BulkBar({
       </button>
       <button
         type="button"
-        aria-label="Clear selection"
-        title="Clear selection (Esc)"
+        aria-label={t("Clear selection")}
+        title={t("Clear selection (Esc)")}
         onClick={onClear}
         className={button}
       >
@@ -2225,23 +2284,23 @@ function Toasts() {
       aria-live="polite"
       className="pointer-events-none absolute bottom-3.5 left-[calc(100%+1rem)] z-50 flex w-max flex-col items-start gap-1.5"
     >
-      {list.map((t) => (
+      {list.map((item) => (
         <div
-          key={t.id}
+          key={item.id}
           className="pointer-events-auto flex max-w-85 items-center gap-2.5 rounded-xl bg-foreground py-1.5 pr-1.5 pl-3 text-body text-background shadow-composer motion-safe:animate-[sidebar-rise_160ms_ease-out]"
         >
-          <span className="min-w-0 truncate">{t.text}</span>
-          {t.undo && (
+          <span className="min-w-0 truncate">{item.text}</span>
+          {item.undo && (
             <button
               type="button"
-              onClick={() => undo(t.id)}
-              title={`Undo (${shortcut("Z")})`}
+              onClick={() => undo(item.id)}
+              title={t("Undo ({{keys}})", { keys: shortcut("Z") })}
               className="shrink-0 rounded-md bg-background/15 px-2.25 py-0.75 font-semibold hover:bg-background/25"
             >
-              Undo
+              {t("Undo")}
             </button>
           )}
-          {!t.undo && <span className="w-1.5" />}
+          {!item.undo && <span className="w-1.5" />}
         </div>
       ))}
     </div>
@@ -2254,8 +2313,8 @@ function Toasts() {
  */
 export function threadLoss(kept: boolean): string {
   return kept
-    ? ", with its transcript. Its worktree and branch stay on disk."
-    : ", with its transcript, worktree, and branch.";
+    ? t(", with its transcript. Its worktree and branch stay on disk.")
+    : t(", with its transcript, worktree, and branch.");
 }
 
 /**
@@ -2264,13 +2323,23 @@ export function threadLoss(kept: boolean): string {
  */
 export function orchestratorLoss(agents: number, kept: boolean): string {
   if (agents === 0) return ".";
-  if (agents === 1)
-    return kept
-      ? ", with its agent's transcript. A running agent is stopped first. Its worktree and branch stay on disk."
-      : ", with its agent's transcript, worktree, and branch. A running agent is stopped first.";
   return kept
-    ? `, with its ${agents} agents' transcripts. Running agents are stopped first. Their worktrees and branches stay on disk.`
-    : `, with its ${agents} agents' transcripts, worktrees, and branches. Running agents are stopped first.`;
+    ? t(
+        ", with its {{count}} agents' transcripts. Running agents are stopped first. Their worktrees and branches stay on disk.",
+        {
+          count: agents,
+          defaultValue_one:
+            ", with its agent's transcript. A running agent is stopped first. Its worktree and branch stay on disk.",
+        },
+      )
+    : t(
+        ", with its {{count}} agents' transcripts, worktrees, and branches. Running agents are stopped first.",
+        {
+          count: agents,
+          defaultValue_one:
+            ", with its agent's transcript, worktree, and branch. A running agent is stopped first.",
+        },
+      );
 }
 
 /** `Date.now()`, rendering again each minute. */
@@ -2377,7 +2446,7 @@ function Drawer<T>({
             className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground"
           >
             <Plus aria-hidden className="size-3.5 shrink-0" />
-            Show {more} more
+            {t("Show {{count}} more", { count: more })}
           </button>
         )}
       </div>
@@ -2443,7 +2512,7 @@ function ScopeMenu({
   const count = (n: number) =>
     n > 0 && (
       <span
-        title={`${n} ${n === 1 ? "needs" : "need"} you`}
+        title={t("{{count}} need you", { count: n, defaultValue_one: "{{count}} needs you" })}
         className="grid h-4.25 min-w-4.25 place-items-center rounded-full bg-warning/15 px-1.25 text-caption font-semibold text-warning tabular-nums"
       >
         {n}
@@ -2489,8 +2558,8 @@ function ScopeMenu({
           {canIcon && (
             <button
               type="button"
-              aria-label={`Change ${repo.name}'s icon`}
-              title="Change icon"
+              aria-label={t("Change {{name}}'s icon", { name: repo.name })}
+              title={t("Change icon")}
               onClick={(e) => {
                 setEditing({ view, repo });
                 picker.current?.showPopover({ source: e.currentTarget });
@@ -2523,15 +2592,17 @@ function ScopeMenu({
     </button>
   );
 
-  const label = current?.name ?? "All threads";
+  const label = current?.name ?? t("All threads");
   const title = current
-    ? `Showing ${current.name}${outside ? `. ${outside} waiting elsewhere` : ""}`
-    : "Filter by repo";
+    ? outside
+      ? t("Showing {{name}}. {{count}} waiting elsewhere", { name: current.name, count: outside })
+      : t("Showing {{name}}", { name: current.name })
+    : t("Filter by repo");
   return (
     <>
       <button
         type="button"
-        aria-label={`Showing ${label}`}
+        aria-label={t("Showing {{name}}", { name: label })}
         title={title}
         aria-pressed={scope !== "all"}
         aria-haspopup="menu"
@@ -2560,7 +2631,7 @@ function ScopeMenu({
         id={menuId}
         popover="auto"
         role="menu"
-        aria-label="Repos"
+        aria-label={t("Repos")}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
           if (e.newState === "open") e.currentTarget.querySelector("input")?.focus();
           else setQuery("");
@@ -2571,8 +2642,8 @@ function ScopeMenu({
         <label className="flex shrink-0 items-center gap-2 border-b border-border px-3.5 py-2.5">
           <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <input
-            aria-label="Search repos"
-            placeholder="Search repos…"
+            aria-label={t("Search repos")}
+            placeholder={t("Search repos…")}
             value={query}
             autoComplete="off"
             onChange={(e) => setQuery(e.target.value)}
@@ -2588,18 +2659,18 @@ function ScopeMenu({
           />
         </label>
         <div className="min-h-0 overflow-y-auto p-1.5">
-          {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
-          {(repos.length > 0 || !q) && heading("Repos")}
+          {!q && fixedRow("all", <Layers aria-hidden />, t("All threads"))}
+          {(repos.length > 0 || !q) && heading(t("Repos"))}
           {repos.map(row)}
-          {!q && fixedRow("none", <SquareDashed aria-hidden />, "No repo")}
+          {!q && fixedRow("none", <SquareDashed aria-hidden />, t("No repo"))}
           {q && repos.length === 0 && (
-            <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">{t("No repos match")}</p>
           )}
         </div>
         <div className="shrink-0 border-t border-border p-3">{view}</div>
         <div className="flex shrink-0 gap-3 border-t border-border px-3.5 py-1.5 text-caption text-faint-foreground">
-          <span>↑↓ move</span>
-          <span>↵ open</span>
+          <span>{t("↑↓ move")}</span>
+          <span>{t("↵ open")}</span>
         </div>
       </div>
       {/* Each pick saves at once; the picker stays open for the next. */}
@@ -2747,10 +2818,10 @@ function EntryDialogs({
           ref={dialog}
           label={
             opened.orchestrator && "repoPath" in opened.orchestrator
-              ? "Rename orchestrator"
-              : "Rename Project"
+              ? t("Rename orchestrator")
+              : t("Rename Project")
           }
-          action="Rename"
+          action={t("Rename")}
           onClose={close}
           onSave={() => {
             // An empty name, or the same one, saves nothing.
@@ -2759,9 +2830,9 @@ function EntryDialogs({
           }}
         >
           <label className="block text-body font-medium">
-            Name
+            {t("Name")}
             <input
-              aria-label="Orchestrator name"
+              aria-label={t("Orchestrator name")}
               autoFocus
               value={name}
               spellCheck={false}
@@ -2775,24 +2846,23 @@ function EntryDialogs({
       {opened?.what === "access" && (
         <SettingDialog
           ref={dialog}
-          label={`${opened.orchestrator.name} full access`}
-          action="Give full access"
+          label={t("{{name}} full access", { name: opened.orchestrator.name })}
+          action={t("Give full access")}
           onClose={close}
           onSave={() => void update({ permission: "bypass" })}
         >
-          <p className="text-body font-medium">Full access</p>
+          <p className="text-body font-medium">{t("Full access")}</p>
           <p className="mt-1 text-body text-muted-foreground">
-            New agents in this orchestrator run commands and edit files without asking, as in new
-            orchestrators. Agents running now keep asking until they next start. Agents on Cursor,
-            Grok Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
-            switch back.
+            {t(
+              "New agents in this orchestrator run commands and edit files without asking, as in new orchestrators. Agents running now keep asking until they next start. Agents on Cursor, Grok Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't switch back.",
+            )}
           </p>
         </SettingDialog>
       )}
       {opened?.what === "autonomy" && (
         <SettingDialog
           ref={dialog}
-          label={`${opened.orchestrator.name} autonomy`}
+          label={t("{{name}} autonomy", { name: opened.orchestrator.name })}
           onClose={close}
           onSave={() => void update({ autonomy })}
         >
@@ -2807,7 +2877,7 @@ function EntryDialogs({
 function SettingDialog({
   ref,
   label,
-  action = "Save",
+  action = t("Save"),
   onSave,
   onClose,
   children,
@@ -2842,7 +2912,7 @@ function SettingDialog({
             onClick={() => ref.current?.close()}
             className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
           >
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="submit"
@@ -2964,8 +3034,8 @@ function OrchestratorRow({
         onUnpin && (
           <button
             type="button"
-            aria-label="Unpin"
-            title="Unpin"
+            aria-label={t("Unpin")}
+            title={t("Unpin")}
             onClick={onUnpin}
             className={rowTool}
           >
@@ -2978,8 +3048,9 @@ function OrchestratorRow({
           <button
             ref={trigger}
             type="button"
-            aria-label="Orchestrator actions"
-            title="More (or right-click)"
+            aria-label={t("Orchestrator actions")}
+            title={t("More (or right-click)")}
+            data-row-actions
             popoverTarget={menuId}
             className={rowTool}
           >
@@ -2991,7 +3062,7 @@ function OrchestratorRow({
       {actions.length > 0 && (
         <Menu
           id={menuId}
-          label="Orchestrator actions"
+          label={t("Orchestrator actions")}
           align="end"
           focus='[role^="menuitem"]'
           className="min-w-56 p-1"
@@ -3037,7 +3108,7 @@ export function RowPlace({
     <span className="flex min-w-0 items-center gap-1.5">
       <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">
-        <Marked text={label ?? (repo && !repo.scratch ? repo.name : "No repo")} words={words} />
+        <Marked text={label ?? (repo && !repo.scratch ? repo.name : t("No repo"))} words={words} />
       </span>
     </span>
   );
@@ -3129,7 +3200,9 @@ function useRowDetails({
       {providers.length > 0 && (
         <span
           role="img"
-          aria-label={`Providers: ${providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}`}
+          aria-label={t("Providers: {{names}}", {
+            names: providers.map(({ backend }) => instanceName(backend) ?? backend).join(", "),
+          })}
           title={providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}
           className={`flex shrink-0 items-center gap-1 ${selected ? "" : "opacity-80 grayscale"}`}
         >
@@ -3157,7 +3230,10 @@ function useRowDetails({
         </span>
         {prs.urls.length > 0 && (
           <span
-            title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
+            title={t("{{count}} linked pull requests", {
+              count: prs.urls.length,
+              defaultValue_one: "{{count}} linked pull request",
+            })}
             className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
           >
             <prLook.Icon aria-hidden className="size-3.5" />
@@ -3250,7 +3326,7 @@ function DraftStatus() {
   return (
     <span className={statusMark}>
       <PencilLine aria-hidden />
-      <span className="sr-only">Draft</span>
+      <span className="sr-only">{t("Draft")}</span>
     </span>
   );
 }
@@ -3285,7 +3361,7 @@ function DraftRow({
   const attached = draft.images.length + draft.files.length + draft.threads.length;
   const title =
     draft.text.trim().split("\n")[0] ||
-    `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
+    t("{{count}} attachments", { count: attached, defaultValue_one: "{{count}} attachment" });
   return (
     <RowCard
       rowKey={rowKey}
@@ -3300,8 +3376,8 @@ function DraftRow({
       actions={
         <button
           type="button"
-          aria-label="Discard draft"
-          title="Discard (⌫)"
+          aria-label={t("Discard draft")}
+          title={t("Discard (⌫)")}
           onClick={onDiscard}
           className={rowTool}
         >
@@ -3495,7 +3571,7 @@ function ThreadRow({
   const mainLabel = (
     <>
       {thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-      {thread.archived ? "Unarchive" : "Archive"}
+      {thread.archived ? t("Unarchive") : t("Archive")}
     </>
   );
   // A rule between the actions menu's groups, gone where a group has no rows.
@@ -3507,12 +3583,12 @@ function ThreadRow({
     (!thread.archived && snoozed(thread, attention) ? (
       <span className={statusMark}>
         <RingingAlarmMark />
-        <span className="sr-only">Wakes</span> {resumeTime(thread.snoozedUntil!)}
+        <span className="sr-only">{t("Wakes")}</span> {resumeTime(thread.snoozedUntil!)}
       </span>
     ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
       <span className={statusMark}>
         <AlarmClock aria-hidden />
-        <span className="sr-only">{run.resumeAt ? "Resumes" : "Waiting"}</span>
+        <span className="sr-only">{run.resumeAt ? t("Resumes") : t("Waiting")}</span>
         {run.resumeAt && <> {resumeTime(run.resumeAt)}</>}
       </span>
     ) : attention === "settled" ? (
@@ -3526,7 +3602,7 @@ function ThreadRow({
     ));
   const titleText = renaming ? (
     <input
-      aria-label="Thread name"
+      aria-label={t("Thread name")}
       defaultValue={title}
       autoFocus
       maxLength={256}
@@ -3564,8 +3640,8 @@ function ThreadRow({
     (onPin ? (
       <button
         type="button"
-        aria-label="Unpin"
-        title="Unpin (P)"
+        aria-label={t("Unpin")}
+        title={t("Unpin (P)")}
         onClick={() => {
           onLeave();
           onPin();
@@ -3576,9 +3652,9 @@ function ThreadRow({
       </button>
     ) : (
       <span
-        title="Pinned"
+        title={t("Pinned")}
         role="img"
-        aria-label="Pinned"
+        aria-label={t("Pinned")}
         className={`${rowTool} hover:bg-transparent`}
       >
         <Pin className="size-3.5" />
@@ -3620,7 +3696,7 @@ function ThreadRow({
         }),
       }}
       main={{
-        "aria-description": picked ? "Selected" : undefined,
+        "aria-description": picked ? t("Selected") : undefined,
         onClick: renaming ? undefined : onOpen,
         // A middle click opens it in a new tab, as in a browser.
         onAuxClick: (e) => {
@@ -3660,8 +3736,12 @@ function ThreadRow({
           {snoozable && (
             <button
               type="button"
-              aria-label={snoozedNow ? "Snoozed" : "Snooze"}
-              title={snoozedNow ? `Snoozed until ${clock(thread.snoozedUntil!)}` : "Snooze (S)"}
+              aria-label={snoozedNow ? t("Snoozed") : t("Snooze")}
+              title={
+                snoozedNow
+                  ? t("Snoozed until {{time}}", { time: clock(thread.snoozedUntil!) })
+                  : t("Snooze (S)")
+              }
               popoverTarget={snoozeId}
               onClick={onLeave}
               className={rowTool}
@@ -3671,7 +3751,7 @@ function ThreadRow({
           )}
           <button
             type="button"
-            title={`${thread.archived ? "Unarchive" : "Archive"} (E)`}
+            title={thread.archived ? t("Unarchive (E)") : t("Archive (E)")}
             onClick={() => {
               onLeave();
               onArchive();
@@ -3683,8 +3763,9 @@ function ThreadRow({
           <button
             ref={actions}
             type="button"
-            aria-label={orchestration ? "Orchestrator actions" : "Thread actions"}
-            title="More (or right-click)"
+            aria-label={orchestration ? t("Orchestrator actions") : t("Thread actions")}
+            title={t("More (or right-click)")}
+            data-row-actions
             popoverTarget={menuId}
             onClick={onLeave}
             className={rowTool}
@@ -3699,7 +3780,7 @@ function ThreadRow({
         <Menu
           ref={snoozeMenu}
           id={snoozeId}
-          label="Snooze"
+          label={t("Snooze")}
           align="end"
           className="min-w-56 p-1"
           onBeforeToggle={(e) => e.newState === "open" && setSnoozeOpen(true)}
@@ -3717,7 +3798,7 @@ function ThreadRow({
                 >
                   {c.label}
                   <span className="ml-auto text-meta text-faint-foreground tabular-nums">
-                    {c.label.startsWith("In") ? clock(c.until.toISOString()) : when(c.until)}
+                    {c.hours ? clock(c.until.toISOString()) : when(c.until)}
                   </span>
                 </button>
               ))}
@@ -3732,7 +3813,7 @@ function ThreadRow({
               >
                 <input
                   type="datetime-local"
-                  aria-label="Snooze until"
+                  aria-label={t("Snooze until")}
                   value={custom}
                   onChange={(e) => setCustom(e.target.value)}
                   className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-meta [color-scheme:inherit]"
@@ -3742,7 +3823,7 @@ function ThreadRow({
                   disabled={!custom}
                   className="rounded-md px-2 py-1 text-meta hover:bg-hover disabled:opacity-50"
                 >
-                  Custom
+                  {t("Custom")}
                 </button>
               </form>
               {snoozedNow && (
@@ -3752,7 +3833,7 @@ function ThreadRow({
                   className={menuItem}
                   onClick={choose(() => onSnooze(new Date()))}
                 >
-                  Unsnooze
+                  {t("Unsnooze")}
                 </button>
               )}
             </>
@@ -3762,7 +3843,7 @@ function ThreadRow({
       <Menu
         ref={menu}
         id={menuId}
-        label={orchestration ? "Orchestrator actions" : "Thread actions"}
+        label={orchestration ? t("Orchestrator actions") : t("Thread actions")}
         align="end"
         focus='[role^="menuitem"]'
         className="min-w-60 p-1.5"
@@ -3780,14 +3861,14 @@ function ThreadRow({
             {onOpenInTab && (
               <ToolbarMenuRow
                 icon={<PanelTop aria-hidden />}
-                label="Open in new tab"
+                label={t("Open in new tab")}
                 onClick={choose(onOpenInTab)}
               />
             )}
             {onOpenBeside && (
               <ToolbarMenuRow
                 icon={<Columns2 aria-hidden />}
-                label="Open side by side"
+                label={t("Open side by side")}
                 onClick={choose(onOpenBeside)}
               />
             )}
@@ -3795,7 +3876,7 @@ function ThreadRow({
             {onPin && (
               <ToolbarMenuRow
                 icon={<Pin aria-hidden />}
-                label={thread.pinned ? "Unpin" : "Pin to top"}
+                label={thread.pinned ? t("Unpin") : t("Pin to top")}
                 keys="P"
                 onClick={choose(onPin)}
               />
@@ -3803,7 +3884,7 @@ function ThreadRow({
             {onMarkUnread && (
               <ToolbarMenuRow
                 icon={<CircleDot aria-hidden />}
-                label="Mark as unread"
+                label={t("Mark as unread")}
                 keys="U"
                 onClick={choose(onMarkUnread)}
               />
@@ -3811,7 +3892,7 @@ function ThreadRow({
             {renamable && (
               <ToolbarMenuRow
                 icon={<PencilLine aria-hidden />}
-                label="Rename"
+                label={t("Rename")}
                 keys="R"
                 onClick={choose(onStartRename)}
               />
@@ -3821,7 +3902,7 @@ function ThreadRow({
               // The Projects' menu opens under the actions button, as Fork's does.
               <ToolbarMenuRow
                 icon={<MessagesSquare aria-hidden />}
-                label={thread.project ? "Move to Project…" : "Add to Project…"}
+                label={thread.project ? t("Move to Project…") : t("Add to Project…")}
                 onClick={choose(() =>
                   projectMenu.current?.showPopover({ source: actions.current ?? undefined }),
                 )}
@@ -3831,9 +3912,9 @@ function ThreadRow({
               // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
               <ToolbarMenuRow
                 icon={<GitFork aria-hidden />}
-                label="Fork…"
+                label={t("Fork…")}
                 disabled={isRunning(run.status)}
-                title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
+                title={isRunning(run.status) ? t("Fork once this turn finishes") : undefined}
                 onClick={choose(() =>
                   forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
                 )}
@@ -3842,9 +3923,9 @@ function ThreadRow({
             {onMove && run && (
               <ToolbarMenuRow
                 icon={<MonitorUp aria-hidden />}
-                label="Move to another computer…"
+                label={t("Move to another computer…")}
                 disabled={isRunning(run.status)}
-                title={isRunning(run.status) ? "Move once this turn finishes" : undefined}
+                title={isRunning(run.status) ? t("Move once this turn finishes") : undefined}
                 onClick={choose(onMove)}
               />
             )}
@@ -3852,7 +3933,7 @@ function ThreadRow({
               // Choosing the host's setting clears the override, so the thread follows the host again.
               <ToolbarMenuRow
                 icon={<AlarmClock aria-hidden />}
-                label="Resume after usage limits"
+                label={t("Resume after usage limits")}
                 checked={resumes}
                 onClick={choose(() =>
                   onAutoResume(!resumes === hostResumes ? undefined : !resumes),
@@ -3873,7 +3954,7 @@ function ThreadRow({
             {menuRule}
             <ToolbarMenuRow
               icon={thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-              label={thread.archived ? "Unarchive" : "Archive"}
+              label={thread.archived ? t("Unarchive") : t("Archive")}
               keys="E"
               onClick={choose(onArchive)}
             />
@@ -3884,7 +3965,7 @@ function ThreadRow({
                   <Trash2 aria-hidden />
                 </span>
               }
-              label="Delete…"
+              label={t("Delete…")}
               keys="⌫"
               className="text-danger"
               onClick={choose(onDelete)}
@@ -3924,7 +4005,10 @@ function GitCounts({ git }: { git: GitStatus }) {
     <>
       {git.ahead > 0 && (
         <span
-          title={`${plural(git.ahead, "commit")} not pushed`}
+          title={t("{{count}} commits not pushed", {
+            count: git.ahead,
+            defaultValue_one: "{{count}} commit not pushed",
+          })}
           className="flex shrink-0 items-center tabular-nums"
         >
           <ArrowUp aria-hidden className="size-3" />
@@ -3933,7 +4017,10 @@ function GitCounts({ git }: { git: GitStatus }) {
       )}
       {git.changes > 0 && (
         <span
-          title={`${plural(git.changes, "file")} uncommitted`}
+          title={t("{{count}} files uncommitted", {
+            count: git.changes,
+            defaultValue_one: "{{count}} file uncommitted",
+          })}
           className="shrink-0 tabular-nums"
         >
           <span className="text-diff-added">+{git.insertions ?? 0}</span>{" "}
@@ -3944,16 +4031,17 @@ function GitCounts({ git }: { git: GitStatus }) {
   );
 }
 
+/** Each checks state's mark; its `label` is English, shown with `t`. */
 const checksLook = {
-  passed: { Icon: CircleCheck, color: "text-added", label: "Checks passed" },
-  failed: { Icon: CircleX, color: "text-danger", label: "Checks failed" },
-  pending: { Icon: CircleDashed, color: "text-warning", label: "Checks running" },
+  passed: { Icon: CircleCheck, color: "text-added", label: msg("Checks passed") },
+  failed: { Icon: CircleX, color: "text-danger", label: msg("Checks failed") },
+  pending: { Icon: CircleDashed, color: "text-warning", label: msg("Checks running") },
 };
 
 /** A pull request's checks, as one mark beside its number. */
 function ChecksMark({ state }: { state: keyof typeof checksLook }) {
   const { Icon, color, label } = checksLook[state];
-  return <Icon role="img" aria-label={label} className={`ml-0.5 size-3 ${color}`} />;
+  return <Icon role="img" aria-label={t(label)} className={`ml-0.5 size-3 ${color}`} />;
 }
 
 /** A menu item's key, at its end. */
@@ -4073,7 +4161,7 @@ function ThreadCard({
         {run?.checkout ? (
           <li>
             <Folder />
-            <span className="truncate">Local checkout</span>
+            <span className="truncate">{t("Local checkout")}</span>
           </li>
         ) : (
           run?.branch && (
@@ -4095,7 +4183,7 @@ function ThreadCard({
           <li>
             <FileDiff />
             <span className="tabular-nums">
-              {run.diff.files} {run.diff.files === 1 ? "file" : "files"}{" "}
+              {t("{{count}} files", { count: run.diff.files, defaultValue_one: "{{count}} file" })}{" "}
               <span className="text-diff-added">+{run.diff.insertions}</span>{" "}
               <span className="text-diff-removed">−{run.diff.deletions}</span>
             </span>
@@ -4104,18 +4192,22 @@ function ThreadCard({
         {snoozedUntil && Date.parse(snoozedUntil) > Date.now() && (
           <li>
             <AlarmClock />
-            <span className="truncate">Snoozed until {clock(snoozedUntil)}</span>
+            <span className="truncate">
+              {t("Snoozed until {{time}}", { time: clock(snoozedUntil) })}
+            </span>
           </li>
         )}
         {run && look && (
           <li className={look.color}>
             <look.Icon />
             <span className="line-clamp-2">
-              {runStatusLabel(run.status)}
+              {run.status === "waiting" && run.resumeAt
+                ? t("{{status}}: resumes at {{time}}", {
+                    status: runStatusLabel(run.status),
+                    time: resumeTime(run.resumeAt),
+                  })
+                : runStatusLabel(run.status)}
               {run.status === "failed" && run.error && `: ${run.error}`}
-              {run.status === "waiting" &&
-                run.resumeAt &&
-                `: resumes at ${resumeTime(run.resumeAt)}`}
             </span>
           </li>
         )}
@@ -4124,15 +4216,20 @@ function ThreadCard({
   );
 }
 
-/** How long ago, as the sidebar writes it: "now", "12m", "3h", "2d", "1w". */
+/**
+ * How long ago, as the sidebar writes it: "now", "12m", "3h", "2d", "1w", in the user's language.
+ * Compare it with `t("now")`, not "now".
+ */
 export function age(time: string, now = Date.now()): string {
   const minutes = Math.floor((now - Date.parse(time)) / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1) return t("now");
+  if (minutes < 60) return t("{{count}}m", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return t("{{count}}h", { count: hours });
   const days = Math.floor(hours / 24);
-  return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
+  return days < 7
+    ? t("{{count}}d", { count: days })
+    : t("{{count}}w", { count: Math.floor(days / 7) });
 }
 
 /** Each Settings section's icon. */
@@ -4157,6 +4254,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   beta: FlaskConical,
   about: Info,
 };
+/** Each Settings section's English name, marked with `msg` in search.ts; show it with `t`. */
 export const settingsNames = Object.fromEntries(
   settingsSections.map((s) => [s.id, s.name]),
 ) as Record<SettingsSection, string>;
@@ -4202,11 +4300,11 @@ export function SettingsNav({
             ref={box}
             type="search"
             role="combobox"
-            aria-label="Search settings"
+            aria-label={t("Search settings")}
             aria-expanded={results.length > 0}
             aria-controls={list}
             aria-activedescendant={chosen ? `${list}-${results.indexOf(chosen)}` : undefined}
-            placeholder="Search settings"
+            placeholder={t("Search settings")}
             value={query}
             spellCheck={false}
             autoComplete="off"
@@ -4232,7 +4330,7 @@ export function SettingsNav({
           {query ? (
             <button
               type="button"
-              aria-label="Clear search"
+              aria-label={t("Clear search")}
               onClick={() => {
                 setQuery("");
                 box.current?.focus();
@@ -4256,7 +4354,7 @@ export function SettingsNav({
           <div
             id={list}
             role="listbox"
-            aria-label="Settings found"
+            aria-label={t("Settings found")}
             className="flex flex-col gap-px"
           >
             {results.map((r, i) => {
@@ -4291,16 +4389,16 @@ export function SettingsNav({
             })}
             {results.length === 0 && (
               <p className="px-2 py-6 text-center text-body text-faint-foreground">
-                No settings match “{query.trim()}”
+                {t("No settings match “{{query}}”", { query: query.trim() })}
               </p>
             )}
           </div>
         ) : (
           <div className="flex flex-col gap-4 pb-4">
             {[...new Set(settingsSections.map((s) => s.group))].map((group) => (
-              <div key={group} role="group" aria-label={group} className="flex flex-col gap-px">
+              <div key={group} role="group" aria-label={t(group)} className="flex flex-col gap-px">
                 <span className="px-2 pb-1 text-meta font-medium text-faint-foreground">
-                  {group}
+                  {t(group)}
                 </span>
                 {settingsSections
                   .filter((s) => s.group === group)
@@ -4315,7 +4413,7 @@ export function SettingsNav({
                         className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
                       >
                         <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-                        {s.name}
+                        {t(s.name)}
                       </button>
                     );
                   })}

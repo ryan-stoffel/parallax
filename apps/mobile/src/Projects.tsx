@@ -3,6 +3,7 @@
 // of its name, New thread, and its instructions and file names; and its instructions in a text
 // editor. A thread's long press and Thread details change its Project with `threadProject`.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import { Check, FileText, FolderMinus, LayoutGrid, Pencil, Plus, SquarePen } from "lucide-react-native";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, TextInput, View } from "react-native";
@@ -69,13 +70,13 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
 
   async function make(computer: Computer, name: string) {
     const made = await computer.view.createProject(name);
-    if (typeof made === "string") return showAlert("Couldn't create the Project", made);
+    if (typeof made === "string") return showAlert(t("Couldn't create the Project"), made);
     navigation.navigate("Project", { hostId: computer.machine.id, id: made.id });
   }
 
   function create() {
     showPrompt(
-      "New Project",
+      t("New Project"),
       undefined,
       (text) => {
         const name = text.trim();
@@ -83,7 +84,7 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
         if (makers.length === 1) return void make(makers[0]!, name);
         showMenu(
           makers.map((computer) => ({ label: computer.machine.name, onPress: () => void make(computer, name) })),
-          `Which computer should ${name} be on?`,
+          t("Which computer should {{name}} be on?", { name }),
         );
       },
       "plain-text",
@@ -98,7 +99,7 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
       navigation.setOptions({
         headerRight: canCreate
           ? () => (
-              <GlassButton label="New Project" onPress={() => latest.current()}>
+              <GlassButton label={t("New Project")} onPress={() => latest.current()}>
                 <Icon icon={Plus} size={20} />
               </GlassButton>
             )
@@ -116,7 +117,10 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
               key={name}
               leading={<RepoIcon repo={home.view.state.repos.find((r) => r.id === home.id)} size={28} />}
               title={name}
-              detail={[`${threads} thread${threads === 1 ? "" : "s"}`, holders > 1 && `${holders} computers`]
+              detail={[
+                t("{{count}} threads", { count: threads, defaultValue_one: "{{count}} thread" }),
+                holders > 1 && t("{{count}} computers", { count: holders, defaultValue_one: "{{count}} computer" }),
+              ]
                 .filter(Boolean)
                 .join(" · ")}
               right={
@@ -135,9 +139,9 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
       ) : (
         <Empty
           icon={LayoutGrid}
-          title="No Projects yet"
-          note="A Project groups threads and gives them shared instructions and files."
-          action={canCreate ? <Button label="New Project" icon={Plus} onPress={create} /> : undefined}
+          title={t("No Projects yet")}
+          note={t("A Project groups threads and gives them shared instructions and files.")}
+          action={canCreate ? <Button label={t("New Project")} icon={Plus} onPress={create} /> : undefined}
         />
       )}
     </Page>
@@ -157,17 +161,17 @@ export function ProjectScreen({ route, navigation }: NativeStackScreenProps<Proj
   const project = computer?.view.state.repos.find((r) => r.id === id && r.project);
   const name = project?.name;
 
-  useEffect(() => navigation.setOptions({ title: name ?? "Project" }), [navigation, name]);
+  useEffect(() => navigation.setOptions({ title: name ?? t("Project") }), [navigation, name]);
 
   if (!computer || !project)
     return (
       <Page>
-        <T muted>This Project isn't loaded.</T>
+        <T muted>{t("This Project isn't loaded.")}</T>
       </Page>
     );
 
   const many = computers.filter((m) => holds(m, project.name)).length > 1;
-  const on = many ? `On ${computer.machine.name}.` : undefined;
+  const on = many ? t("On {{computer}}.", { computer: computer.machine.name }) : undefined;
   const threads = computers
     .flatMap((m) => {
       const { state } = m.view;
@@ -180,7 +184,7 @@ export function ProjectScreen({ route, navigation }: NativeStackScreenProps<Proj
             computer: m,
             thread,
             run,
-            title: state.titles[thread.id] ?? "Thread",
+            title: state.titles[thread.id] ?? t("Thread"),
             at: activeAt(thread, run, state.stoppedAt[thread.id]),
             attention: attentionOf(thread, run, asksOf(state, thread.id), waitingOf(state, thread.id)),
           };
@@ -193,15 +197,15 @@ export function ProjectScreen({ route, navigation }: NativeStackScreenProps<Proj
   return (
     <Page>
       <Button
-        label="New thread"
+        label={t("New thread")}
         icon={SquarePen}
         primary
         onPress={() => show({ name: "StartThread", params: { hostId, groupId: id } })}
       />
-      <Section title="Threads">
+      <Section title={t("Threads")}>
         {threads.length === 0 && (
           <T muted style={styles.text}>
-            No threads yet. Each thread here follows this Project's instructions and can read its files.
+            {t("No threads yet. Each thread here follows this Project's instructions and can read its files.")}
           </T>
         )}
         {threads.map(({ computer: m, thread, run, title, at, attention }, i) => (
@@ -233,7 +237,10 @@ export function ProjectScreen({ route, navigation }: NativeStackScreenProps<Proj
         ))}
       </Section>
       {(canEdit || !!project.instructions) && (
-        <Section title="Instructions" footer={on && `${on} Other computers keep their own.`}>
+        <Section
+          title={t("Instructions")}
+          footer={many ? t("On {{computer}}. Other computers keep their own.", { computer: computer.machine.name }) : undefined}
+        >
           <T
             muted={!!project.instructions}
             faint={!project.instructions}
@@ -243,12 +250,12 @@ export function ProjectScreen({ route, navigation }: NativeStackScreenProps<Proj
               ...(canEdit && { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border }),
             }}
           >
-            {project.instructions || "Tell every thread here how to work: who it's for, the tone and format you want, and what it should know."}
+            {project.instructions || t("Tell every thread here how to work: who it's for, the tone and format you want, and what it should know.")}
           </T>
           {canEdit && (
             <Row
               icon={Pencil}
-              title={project.instructions ? "Edit" : "Add"}
+              title={project.instructions ? t("Edit") : t("Add")}
               chevron
               last
               onPress={() => navigation.navigate("ProjectInstructions", { hostId, id })}
@@ -257,7 +264,7 @@ export function ProjectScreen({ route, navigation }: NativeStackScreenProps<Proj
         </Section>
       )}
       {files.length > 0 && (
-        <Section title="Files" footer={on}>
+        <Section title={t("Files")} footer={on}>
           {files.map((path, i) => (
             <Row key={path} icon={FileText} title={path.split(/[\\/]/).at(-1) ?? path} last={i === files.length - 1} />
           ))}
@@ -283,7 +290,7 @@ export function ProjectInstructionsScreen({
     setSaving(true);
     const failed = await view.updateRepo(id, { instructions: text });
     setSaving(false);
-    if (failed) return showAlert("Couldn't save the instructions", failed);
+    if (failed) return showAlert(t("Couldn't save the instructions"), failed);
     navigation.goBack();
   }
   const latest = useRef(save);
@@ -293,7 +300,7 @@ export function ProjectInstructionsScreen({
     () =>
       navigation.setOptions({
         headerRight: () => (
-          <GlassButton label="Save instructions" onPress={() => void latest.current()}>
+          <GlassButton label={t("Save instructions")} onPress={() => void latest.current()}>
             {saving ? <ActivityIndicator color={c.foreground} /> : <Icon icon={Check} size={20} />}
           </GlassButton>
         ),
@@ -303,16 +310,16 @@ export function ProjectInstructionsScreen({
 
   return (
     <Page>
-      <Section footer="New threads in this Project follow them.">
+      <Section footer={t("New threads in this Project follow them.")}>
         <TextInput
-          accessibilityLabel="Instructions"
+          accessibilityLabel={t("Instructions")}
           autoFocus
           multiline
           // The page scrolls, so the keyboard keeps the cursor in view.
           scrollEnabled={false}
           value={text}
           onChangeText={setText}
-          placeholder="Answer as a patient tutor. Show the steps, then the result."
+          placeholder={t("Answer as a patient tutor. Show the steps, then the result.")}
           placeholderTextColor={c.faintForeground}
           selectionColor={c.accent}
           style={[styles.editor, { color: c.foreground }]}
@@ -329,14 +336,14 @@ function chooseProject(thread: Thread, view: ThreadsView, projects: Repo[], curr
     const failed = project
       ? await addToProject(view, [thread], project)
       : await view.setProject([thread.id]);
-    if (failed) showAlert("Couldn't change the thread's Project", failed);
+    if (failed) showAlert(t("Couldn't change the thread's Project"), failed);
   };
   showMenu(
     [
       ...projects.map((p) => ({ label: p.name, checked: p.id === current?.id, onPress: () => void move(p) })),
-      ...(current ? [{ label: "Remove from Project", icon: FolderMinus, destructive: true, onPress: () => void move() }] : []),
+      ...(current ? [{ label: t("Remove from Project"), icon: FolderMinus, destructive: true, onPress: () => void move() }] : []),
     ],
-    current ? `Project: ${current.name}` : "Add to Project",
+    current ? t("Project: {{name}}", { name: current.name }) : t("Add to Project"),
   );
 }
 
@@ -352,7 +359,7 @@ export function threadProject(thread: Thread, view: ThreadsView, computers: Comp
   const current = startedIn ?? projects.find((p) => p.id === thread.project);
   return {
     current,
-    label: current ? `Project: ${current.name}` : "Add to Project",
+    label: current ? t("Project: {{name}}", { name: current.name }) : t("Add to Project"),
     choose: startedIn ? undefined : () => chooseProject(thread, view, projects, current),
   };
 }

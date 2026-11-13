@@ -1,3 +1,4 @@
+import { msg } from "../i18n";
 import type {
   ProviderEnvVar,
   ProviderInfo,
@@ -40,7 +41,7 @@ export const agents: Agent[] = [
   ...presets
     .filter((p) => ["claude", "codex", "cursor", "pi", "opencode", "hermes"].includes(p.kind))
     .map((p) => ({ ...p, id: p.kind })),
-  { kind: "grokBuild", name: "Grok Build", blurb: "xAI's agent", id: "grok-build" },
+  { kind: "grokBuild", name: "Grok Build", blurb: msg("xAI's agent"), id: "grok-build" },
 ];
 
 /** The instance on a host for `agent`: one with its id, else the first of its kind. */

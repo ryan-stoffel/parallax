@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { readXml, unzip, type Parts } from "./ooxml";
 
 /**
@@ -52,7 +54,7 @@ export const splitRef = (ref: string) => {
 export function openXlsx(bytes: Uint8Array): Xlsx {
   const parts = unzip(bytes);
   const workbook = readXml(parts, "xl/workbook.xml");
-  if (!workbook) throw new Error("This file has no Excel workbook in it.");
+  if (!workbook) throw new Error(t("This file has no Excel workbook in it."));
   const relDoc = readXml(parts, "xl/_rels/workbook.xml.rels");
   const targets = new Map(
     [...(relDoc?.getElementsByTagName("Relationship") ?? [])].map((r) => [
@@ -116,7 +118,7 @@ export function openXlsx(bytes: Uint8Array): Xlsx {
       covered,
     });
   }
-  if (!sheets.length) throw new Error("This workbook has no sheets.");
+  if (!sheets.length) throw new Error(t("This workbook has no sheets."));
   return { sheets, shared, styles: stylesOf(parts) };
 }
 

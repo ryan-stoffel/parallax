@@ -1,19 +1,20 @@
+import { msg } from "../i18n";
 import { stored } from "./stored";
 
 // What Thread details shows, how it's arranged, kept on this computer (PLX-1343).
 
-// Ids are stored, so never rename one.
+// Ids are stored, so never rename one. Labels are marked with `msg`: show them with `t`.
 export const THREAD_DETAILS_ITEMS = [
-  { id: "environment", label: "Computer and folder" },
-  { id: "openIn", label: "Open in editor and terminal" },
-  { id: "actions", label: "Repository actions" },
-  { id: "project", label: "Project" },
-  { id: "branch", label: "Branch" },
-  { id: "changes", label: "Changes" },
-  { id: "gitActions", label: "Git actions" },
-  { id: "prs", label: "Pull requests" },
-  { id: "context", label: "Context" },
-  { id: "lineage", label: "Lineage" },
+  { id: "environment", label: msg("Computer and folder") },
+  { id: "openIn", label: msg("Open in editor and terminal") },
+  { id: "actions", label: msg("Repository actions") },
+  { id: "project", label: msg("Project") },
+  { id: "branch", label: msg("Branch") },
+  { id: "changes", label: msg("Changes") },
+  { id: "gitActions", label: msg("Git actions") },
+  { id: "prs", label: msg("Pull requests") },
+  { id: "context", label: msg("Context") },
+  { id: "lineage", label: msg("Lineage") },
 ] as const;
 
 export type ThreadDetailsItemId = (typeof THREAD_DETAILS_ITEMS)[number]["id"];

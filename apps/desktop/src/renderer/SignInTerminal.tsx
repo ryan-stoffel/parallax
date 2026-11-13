@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useRef, useState } from "react";
 
 import type { TerminalTarget } from "../preload/bridge";
@@ -37,18 +38,18 @@ export function SignInTerminal({
         <span className="text-body text-muted-foreground">
           {install
             ? ended
-              ? `${name} install ended.`
-              : `Installing ${name}…`
+              ? t("{{name}} install ended.", { name })
+              : t("Installing {{name}}…", { name })
             : ended
-              ? `${name} sign-in ended.`
-              : `Signing in to ${name}…`}
+              ? t("{{name}} sign-in ended.", { name })
+              : t("Signing in to {{name}}…", { name })}
         </span>
         <button
           type="button"
           onClick={onClose}
           className="-my-1 rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
-          {ended ? "Close" : "Cancel"}
+          {ended ? t("Close") : t("Cancel")}
         </button>
       </div>
       {/* The fit addon sizes the terminal to the inner box, so the padding goes outside it. */}
@@ -57,13 +58,19 @@ export function SignInTerminal({
           key={JSON.stringify(target)}
           id="sign-in"
           target={target}
-          label={`${name} ${install ? "install" : "sign-in"} terminal`}
+          label={
+            install
+              ? t("{{name}} install terminal", { name })
+              : t("{{name}} sign-in terminal", { name })
+          }
           onEnd={(why) => {
             setEnded(true);
             if (why)
               return notify({
                 tone: "error",
-                title: install ? `Couldn't install ${name}` : `Couldn't sign in to ${name}`,
+                title: install
+                  ? t("Couldn't install {{name}}", { name })
+                  : t("Couldn't sign in to {{name}}", { name }),
                 body: why,
               });
             onExit();

@@ -4,6 +4,7 @@ import { preloadParser } from "react-native-enriched-markdown";
 
 import { App } from "./App";
 import { CrashBoundary } from "./Crash";
+import { startLanguage } from "./language";
 import { applyTheme } from "./theme";
 import { Tooltips } from "./ui";
 import "katex/dist/katex.min.css";
@@ -60,11 +61,14 @@ void window.parallax.version().then((version) => {
   classList.toggle("stage", version.includes("-nightly") || version.endsWith("-dev"));
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <CrashBoundary>
-      <App />
-    </CrashBoundary>
-    <Tooltips />
-  </StrictMode>,
+// The language loads first, so the first frame is in it.
+void startLanguage().then(() =>
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <CrashBoundary>
+        <App />
+      </CrashBoundary>
+      <Tooltips />
+    </StrictMode>,
+  ),
 );

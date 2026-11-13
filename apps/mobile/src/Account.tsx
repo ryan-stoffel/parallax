@@ -7,6 +7,7 @@
 // account's name, password, and deletion are on Clerk's account pages, since an OAuth token
 // can't change the user.
 import { sha256 } from "@noble/hashes/sha2.js";
+import { t } from "i18next";
 import { randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import * as SecureStore from "expo-secure-store";
 import {
@@ -79,7 +80,7 @@ async function token(params: Record<string, string>) {
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok || typeof body["access_token"] !== "string") {
     const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
-    throw new ClerkError(String(why ?? `Clerk answered ${res.status}.`), body["error"] === "invalid_grant");
+    throw new ClerkError(String(why ?? t("Clerk answered {{status}}.", { status: res.status })), body["error"] === "invalid_grant");
   }
   const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 3600;
   return {
@@ -90,7 +91,7 @@ async function token(params: Record<string, string>) {
 
 async function userinfo(bearer: string): Promise<User> {
   const res = await fetch(`${API}/oauth/userinfo`, { headers: { Authorization: `Bearer ${bearer}` } });
-  if (!res.ok) throw new ClerkError(`Clerk answered ${res.status}.`);
+  if (!res.ok) throw new ClerkError(t("Clerk answered {{status}}.", { status: res.status }));
   const { email, given_name, family_name, picture } = (await res.json()) as User;
   return { email, given_name, family_name, picture };
 }
@@ -145,7 +146,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         const { session, moved } = restore<Session>(raw, API);
         if (!moved) return setSession(session);
         // Signed in to another Clerk instance, as before the move to production: signed out.
-        setNotice(MOVED);
+        setNotice(t(MOVED));
         await endSession();
       },
       () => setSession(null),
@@ -184,7 +185,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       );
       const code = answer.get("code");
       if (answer.get("state") !== state || !code)
-        return answer.get("error_description") ?? "Sign-in didn't finish. Try again.";
+        return answer.get("error_description") ?? t("Sign-in didn't finish. Try again.");
       try {
         const fresh = await token({
           grant_type: "authorization_code",
@@ -192,7 +193,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
           code_verifier: verifier,
           redirect_uri: REDIRECT,
         });
-        if (!fresh.refreshToken) return "Clerk sent no refresh token.";
+        if (!fresh.refreshToken) return t("Clerk sent no refresh token.");
         const user = await userinfo(fresh.access.token);
         setAccess(fresh.access);
         setNotice(undefined);
@@ -259,12 +260,12 @@ export function SignIn() {
           Parallax
         </Text>
         <T muted style={{ fontSize: 17, lineHeight: 25 }}>
-          Every thread on every one of your computers, from your phone.
+          {t("Every thread on every one of your computers, from your phone.")}
         </T>
       </View>
       <View style={{ gap: 12 }}>
         <Button
-          label={busy ? "Signing in…" : "Sign in"}
+          label={busy ? t("Signing in…") : t("Sign in")}
           primary
           disabled={busy}
           onPress={() => void go(false)}
@@ -275,7 +276,7 @@ export function SignIn() {
           onPress={() => void go(true)}
           style={{ alignSelf: "center", padding: 10 }}
         >
-          <T style={{ fontSize: 15, color: c.accent }}>Create an account</T>
+          <T style={{ fontSize: 15, color: c.accent }}>{t("Create an account")}</T>
         </Pressable>
         {error ? (
           <T alert style={{ color: c.danger, fontSize: 14, textAlign: "center" }}>

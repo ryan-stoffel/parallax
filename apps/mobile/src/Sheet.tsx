@@ -2,6 +2,7 @@
 // them: a card rounded on every corner rising from the bottom over a light dim. Its grabber and
 // header sit on the card's own background, and a drag down on them puts the sheet away, as a tap
 // outside does. The keyboard lifts it, for a sheet with a text box.
+import { t } from "i18next";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import {
@@ -78,7 +79,7 @@ export function Sheet({
     <Modal visible={shown} transparent animationType="none" onRequestClose={onClose} onDismiss={onDismissed}>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, scrimStyle]}>
-          <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close" />
+          <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel={t("Close")} />
         </Animated.View>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -95,7 +96,7 @@ export function Sheet({
             ]}
           >
             <GestureDetector gesture={pan}>
-              <View accessibilityHint="Drag down to close">
+              <View accessibilityHint={t("Drag down to close")}>
                 <View style={styles.grab}>
                   <View style={[styles.grabber, { backgroundColor: c.border }]} />
                 </View>

@@ -1,5 +1,7 @@
+import { t } from "i18next";
 import { Check, CircleCheck, Copy, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Trans } from "react-i18next";
 
 import type { DeviceHost, SetupCode } from "../preload/bridge";
 import {
@@ -120,9 +122,9 @@ export function ConnectWizard({
       <div className="flex max-h-[85vh] flex-col">
         <header className="flex items-center gap-3 px-5 pt-4 pb-3">
           <h2 id={titleId} className="min-w-0 flex-1 truncate text-reading font-semibold">
-            Add a computer
+            {t("Add a computer")}
           </h2>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label={t("Close")} onClick={close}>
             <X aria-hidden />
           </IconButton>
         </header>
@@ -141,7 +143,7 @@ export function ConnectWizard({
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-4">
             {finished ? <Finished /> : <Setup channel={channel} />}
             {found.length > 0 && (
-              <ul aria-label="New computers" className="rounded-lg border border-border">
+              <ul aria-label={t("New computers")} className="rounded-lg border border-border">
                 {found.map((d) => (
                   <ComputerRow
                     key={d.id}
@@ -166,10 +168,10 @@ export function ConnectWizard({
                     setConnected(new Set());
                   }}
                 >
-                  Add another
+                  {t("Add another")}
                 </button>
                 <button type="button" className={primaryButton} onClick={close}>
-                  Done
+                  {t("Done")}
                 </button>
               </>
             ) : (
@@ -179,10 +181,10 @@ export function ConnectWizard({
                   className="mr-auto flex items-center gap-2 text-body text-muted-foreground [&_svg]:size-3.5"
                 >
                   <LoaderCircle aria-hidden className="animate-spin" />
-                  Looking for your computer…
+                  {t("Looking for your computer…")}
                 </span>
                 <button type="button" className={quietButton} onClick={close}>
-                  Close
+                  {t("Close")}
                 </button>
               </>
             )}
@@ -209,48 +211,57 @@ function Setup({ channel }: { channel: "stable" | "nightly" }) {
   return (
     <>
       <p className="text-body text-muted-foreground">
-        Run agents on your other computers from here. Do this on the computer you want to add.
+        {t(
+          "Run agents on your other computers from here. Do this on the computer you want to add.",
+        )}
       </p>
       <div className="flex">
         <Segmented
-          label="How to add it"
+          label={t("How to add it")}
           value={path}
           onChange={setPath}
           options={[
-            { value: "app", name: "With the app" },
-            { value: "terminal", name: "In a terminal" },
+            { value: "app", name: t("With the app") },
+            { value: "terminal", name: t("In a terminal") },
           ]}
         />
       </div>
       {path === "app" ? (
         <ol className="rounded-lg border border-border">
-          <Step n={1} title="Install Parallax">
-            <a href={downloadUrl(channel)} target="_blank" rel="noreferrer" className="underline">
-              Download it
-            </a>{" "}
-            for macOS, Windows, or Linux.
+          <Step n={1} title={t("Install Parallax")}>
+            <Trans>
+              <a href={downloadUrl(channel)} target="_blank" rel="noreferrer" className="underline">
+                Download it
+              </a>{" "}
+              for macOS, Windows, or Linux.
+            </Trans>
           </Step>
-          <Step n={2} title="Sign in">
-            Use the same account{email && <>, {email}</>}.
+          <Step n={2} title={t("Sign in")}>
+            {email ? t("Use the same account, {{email}}.", { email }) : t("Use the same account.")}
           </Step>
-          <Step n={3} title="Choose Show setup code">
-            It's in Settings › Connections there. Then allow the code it shows on both, or type it
-            here.
+          <Step n={3} title={t("Choose Show setup code")}>
+            {t(
+              "It's in Settings › Connections there. Then allow the code it shows on both, or type it here.",
+            )}
           </Step>
         </ol>
       ) : (
         <ol className="rounded-lg border border-border">
-          <Step n={1} title="Run this there">
-            <Command label="macOS or Linux" command={connectCommand(channel, "unix", device)} />
+          <Step n={1} title={t("Run this there")}>
+            <Command
+              label={t("macOS or Linux")}
+              command={connectCommand(channel, "unix", device)}
+            />
             <Command label="Windows" command={connectCommand(channel, "windows", device)} />
-            Setup needs nothing installed, and works on a server or over SSH.
+            {t("Setup needs nothing installed, and works on a server or over SSH.")}
           </Step>
-          <Step n={2} title="Sign in">
-            In a browser there, or with a link it prints that opens on any device.
+          <Step n={2} title={t("Sign in")}>
+            {t("In a browser there, or with a link it prints that opens on any device.")}
           </Step>
-          <Step n={3} title="Allow its code here">
-            Parallax shows a code as soon as that computer is ready. Allow it if that computer shows
-            the same.
+          <Step n={3} title={t("Allow its code here")}>
+            {t(
+              "Parallax shows a code as soon as that computer is ready. Allow it if that computer shows the same.",
+            )}
           </Step>
         </ol>
       )}
@@ -264,8 +275,8 @@ function Finished() {
     <div className="flex gap-3 [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-added">
       <CircleCheck aria-hidden />
       <p className="text-body text-muted-foreground">
-        <span className="block font-medium text-foreground">You're connected</span>
-        Pick it under Runs on when you start a thread. Its threads show up in your sidebar.
+        <span className="block font-medium text-foreground">{t("You're connected")}</span>
+        {t("Pick it under Runs on when you start a thread. Its threads show up in your sidebar.")}
       </p>
     </div>
   );
@@ -289,7 +300,7 @@ function CodeStep({
       <div className="px-5 pb-4">
         <h3 className="flex items-center gap-2 text-body font-medium">
           <DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">Found {computer.name}</span>
+          <span className="min-w-0 truncate">{t("Found {{name}}", { name: computer.name })}</span>
         </h3>
         <CompareCode
           computer={computer}
@@ -303,15 +314,15 @@ function CodeStep({
     <form onSubmit={(e) => void form.submit(e)} className="px-5 pb-4">
       <h3 className="flex items-center gap-2 text-body font-medium">
         <DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate">Found {computer.name}</span>
+        <span className="min-w-0 truncate">{t("Found {{name}}", { name: computer.name })}</span>
       </h3>
       <SetupCodeField id={computer.id} name={computer.name} form={form} />
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className={quietButton} onClick={onCancel}>
-          Not now
+          {t("Not now")}
         </button>
         <button type="submit" className={primaryButton} disabled={!form.ready}>
-          {form.busy ? "Connecting…" : "Connect"}
+          {form.busy ? t("Connecting…") : t("Connect")}
         </button>
       </div>
     </form>
@@ -326,13 +337,13 @@ function Command({ label, command }: { label: string; command: string }) {
       <span className="block text-meta text-faint-foreground">{label}</span>
       <span className="mt-0.5 flex items-center gap-2 rounded-lg border border-border bg-background py-1 pr-1 pl-3">
         <code
-          aria-label={`Command for ${label}`}
+          aria-label={t("Command for {{os}}", { os: label })}
           className="min-w-0 flex-1 font-mono text-body break-all"
         >
           {command}
         </code>
         <IconButton
-          label={copied ? "Copied" : `Copy command for ${label}`}
+          label={copied ? t("Copied") : t("Copy command for {{os}}", { os: label })}
           onClick={() => {
             void navigator.clipboard.writeText(command);
             setCopied(true);
@@ -364,7 +375,7 @@ function ComputerRow({
     // `onConnected` is new each render; only the connection coming up counts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [up]);
-  const status = accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…");
+  const status = accessLabel(device) ?? (state ? statusLabel(state) : t("Connecting…"));
   return (
     <li className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b">
       <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
@@ -372,14 +383,14 @@ function ComputerRow({
       {up ? (
         <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
           <CircleCheck aria-hidden />
-          Connected
+          {t("Connected")}
         </span>
       ) : (
         <span className="text-body text-muted-foreground">{status}</span>
       )}
       {access?.step === "needsCode" && (
         <button type="button" className={quietButton} onClick={onEnterCode}>
-          Enter code
+          {t("Enter code")}
         </button>
       )}
       {access?.step === "ask" && (
@@ -389,7 +400,7 @@ function ComputerRow({
           className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
         >
           <RefreshCw aria-hidden />
-          Ask again
+          {t("Ask again")}
         </button>
       )}
     </li>
@@ -400,20 +411,22 @@ function ComputerRow({
 export function accessLabel({ access }: Pick<DeviceHost, "access">): string | undefined {
   switch (access?.step) {
     case "needsCode":
-      return access.offline ? "Waiting for it to come online" : "Needs its setup code";
+      return access.offline ? t("Waiting for it to come online") : t("Needs its setup code");
     case "pairing":
     case "signingIn":
-      return "Connecting…";
+      return t("Connecting…");
     case "compare":
-      return `Allow it if it shows ${spacedCode(access.code)}`;
+      return t("Allow it if it shows {{code}}", { code: spacedCode(access.code) });
     case "confirm":
-      return `Confirm it there · ${spacedCode(access.code)}`;
+      return t("Confirm it there · {{code}}", { code: spacedCode(access.code) });
     case "pending":
-      return `Allow this computer on another device · ${spacedCode(access.code)}`;
+      return t("Allow this computer on another device · {{code}}", {
+        code: spacedCode(access.code),
+      });
     case "ask":
       return access.why;
     case "offline":
-      return "Offline";
+      return t("Offline");
     default:
       return undefined;
   }
@@ -477,7 +490,7 @@ export function SetupCodeDialog({
 
   return (
     <Modal
-      title={approved ? `${name} is connected` : "Show setup code"}
+      title={approved ? t("{{name}} is connected", { name }) : t("Show setup code")}
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
@@ -486,7 +499,10 @@ export function SetupCodeDialog({
     >
       {approved ? (
         <p className="mt-1.5 text-body text-muted-foreground">
-          {approved} can reach {name} now, and so can your other signed-in computers.
+          {t("{{computer}} can reach {{name}} now, and so can your other signed-in computers.", {
+            computer: approved,
+            name,
+          })}
         </p>
       ) : typeof shown === "string" ? (
         <p role="alert" className="mt-2 text-body text-danger">
@@ -495,18 +511,22 @@ export function SetupCodeDialog({
       ) : shown ? (
         <>
           <p className="mt-1.5 text-body text-muted-foreground">
-            Type this in Parallax on your other computer. It asks when it finds {name}, or choose
-            Enter code beside {name} in Settings › Connections there.
+            {t(
+              "Type this in Parallax on your other computer. It asks when it finds {{name}}, or choose Enter code beside {{name}} in Settings › Connections there.",
+              { name },
+            )}
           </p>
           <p
-            aria-label="Code"
+            aria-label={t("Code", { context: "pairing code" })}
             className="mt-3 rounded-md border border-border py-2 text-center font-mono text-xl tracking-[0.3em] tabular-nums"
           >
             {spacedCode(shown.code)}
           </p>
           <p className="mt-2 text-meta text-faint-foreground">
-            Works once, for 10 minutes. This keeps Reach from anywhere and pairing on, so your
-            signed-in computers can reach {name}.
+            {t(
+              "Works once, for 10 minutes. This keeps Reach from anywhere and pairing on, so your signed-in computers can reach {{name}}.",
+              { name },
+            )}
           </p>
         </>
       ) : (
@@ -515,17 +535,17 @@ export function SetupCodeDialog({
           className="mt-1.5 flex items-center gap-2 text-body text-muted-foreground [&_svg]:size-3.5"
         >
           <LoaderCircle aria-hidden className="animate-spin" />
-          Getting {name} ready…
+          {t("Getting {{name}} ready…", { name })}
         </p>
       )}
       <div className="mt-4 flex justify-end gap-2">
         {!approved && shown !== undefined && (
           <button type="button" className={quietButton} onClick={() => void ask()}>
-            {typeof shown === "string" ? "Try again" : "New code"}
+            {typeof shown === "string" ? t("Try again") : t("New code")}
           </button>
         )}
         <button type="submit" className={primaryButton}>
-          Done
+          {t("Done")}
         </button>
       </div>
     </Modal>

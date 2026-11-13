@@ -1,3 +1,6 @@
+import i18next, { t } from "i18next";
+
+import { msg } from "../../i18n";
 import type { SettingsSection } from "../App";
 import { commands } from "../keybindings";
 
@@ -8,86 +11,116 @@ export const settingsSections: {
   group: string;
   keywords?: string;
 }[] = [
-  { id: "general", name: "General", group: "App", keywords: "preferences basics" },
-  { id: "appearance", name: "Appearance", group: "App", keywords: "look theme style display" },
+  { id: "general", name: msg("General"), group: msg("App"), keywords: msg("preferences basics") },
+  {
+    id: "appearance",
+    name: msg("Appearance"),
+    group: msg("App"),
+    keywords: msg("look theme style display"),
+  },
   {
     id: "accessibility",
-    name: "Accessibility",
-    group: "App",
-    keywords: "a11y contrast color blind motion diff legibility vision",
+    name: msg("Accessibility"),
+    group: msg("App"),
+    keywords: msg("a11y contrast color blind motion diff legibility vision"),
   },
   {
     id: "keybinds",
-    name: "Keybindings",
-    group: "App",
-    keywords: "shortcuts hotkeys keyboard keybinds",
+    name: msg("Keybindings"),
+    group: msg("App"),
+    keywords: msg("shortcuts hotkeys keyboard keybinds"),
   },
-  { id: "providers", name: "Providers", group: "Agents", keywords: "agents models accounts ai" },
-  { id: "threads", name: "Threads", group: "Agents", keywords: "chats conversations defaults" },
+  {
+    id: "providers",
+    name: msg("Providers"),
+    group: msg("Agents"),
+    keywords: msg("agents models accounts ai"),
+  },
+  {
+    id: "threads",
+    name: msg("Threads"),
+    group: msg("Agents"),
+    keywords: msg("chats conversations defaults"),
+  },
   {
     id: "orchestrators",
-    name: "Orchestrators",
-    group: "Agents",
-    keywords: "autonomy children landing checks",
+    name: msg("Orchestrators"),
+    group: msg("Agents"),
+    keywords: msg("autonomy children landing checks"),
   },
-  { id: "schedules", name: "Schedules", group: "Agents", keywords: "cron timers automation" },
+  {
+    id: "schedules",
+    name: msg("Schedules"),
+    group: msg("Agents"),
+    keywords: msg("cron timers automation"),
+  },
   {
     id: "browser",
-    name: "Browser",
-    group: "Agents",
-    keywords: "web chrome helium tabs pages internet",
+    name: msg("Browser"),
+    group: msg("Agents"),
+    keywords: msg("web chrome helium tabs pages internet"),
   },
   {
     id: "devices",
-    name: "Devices",
-    group: "Agents",
-    keywords: "emulator simulator ios android xcode phone",
+    name: msg("Devices"),
+    group: msg("Agents"),
+    keywords: msg("emulator simulator ios android xcode phone"),
   },
   {
     id: "computerUse",
-    name: "Computer use",
-    group: "Agents",
-    keywords: "desktop apps mac control accessibility",
+    name: msg("Computer use"),
+    group: msg("Agents"),
+    keywords: msg("desktop apps mac control accessibility"),
   },
   {
     id: "projects",
-    name: "Projects",
-    group: "Code",
-    keywords: "repositories repos per repo defaults scripts setup",
+    name: msg("Projects"),
+    group: msg("Code"),
+    keywords: msg("repositories repos per repo defaults scripts setup"),
   },
   {
     id: "sourceControl",
-    name: "Source control",
-    group: "Code",
-    keywords: "git github pull request",
+    name: msg("Source control"),
+    group: msg("Code"),
+    keywords: msg("git github pull request"),
   },
-  { id: "worktrees", name: "Worktrees", group: "Code", keywords: "branch prefix base cleanup git" },
+  {
+    id: "worktrees",
+    name: msg("Worktrees"),
+    group: msg("Code"),
+    keywords: msg("branch prefix base cleanup git"),
+  },
   // Connections: the computers this app uses, then how this one is reached (PLX-1492). Computers
   // keeps the id the one Connections page had, so what opened that page still opens it.
   {
     id: "connections",
-    name: "Computers",
-    group: "Connections",
-    keywords: "hosts connections ssh machines remote devices",
+    name: msg("Computers"),
+    group: msg("Connections"),
+    keywords: msg("hosts connections ssh machines remote devices"),
   },
   {
     id: "sharing",
-    name: "Sharing & access",
-    group: "Connections",
-    keywords: "connections reach pair access devices this computer relay",
+    name: msg("Sharing & access"),
+    group: msg("Connections"),
+    keywords: msg("connections reach pair access devices this computer relay"),
   },
-  { id: "storage", name: "Storage", group: "System", keywords: "disk space cleanup" },
+  {
+    id: "storage",
+    name: msg("Storage"),
+    group: msg("System"),
+    keywords: msg("disk space cleanup"),
+  },
   {
     id: "beta",
-    name: "Beta",
-    group: "System",
-    keywords: "experimental preview labs early features flask tabs cards",
+    name: msg("Beta"),
+    group: msg("System"),
+    keywords: msg("experimental preview labs early features flask tabs cards"),
   },
   {
     id: "about",
-    name: "About",
-    group: "System",
-    keywords: "version licenses credits bug report star support ko-fi discussion feedback",
+    name: msg("About"),
+    group: msg("System"),
+    keywords: msg("version licenses credits bug report star support ko-fi discussion feedback"),
   },
 ];
 
@@ -104,9 +137,29 @@ interface SettingEntry {
   anchor?: string;
 }
 
-/** A title as a `data-setting`: "Time format" → "time-format". */
+/** The shown language's text to its English key, built once per language. */
+let english: { language: string; of: Map<string, string> } | undefined;
+
+/**
+ * The English text `shown` was translated from, or `shown` when it isn't a translation. Pages pass
+ * `anchorOf` their titles as shown, and search and the pages' fixed anchors use English.
+ */
+function englishOf(shown: string): string {
+  const language = i18next.language;
+  if (!language || language === "en") return shown;
+  if (english?.language !== language) {
+    const bundle: Record<string, string> = i18next.getResourceBundle(language, "translation") ?? {};
+    english = { language, of: new Map(Object.entries(bundle).map(([key, text]) => [text, key])) };
+  }
+  return english.of.get(shown) ?? shown;
+}
+
+/**
+ * A title as a `data-setting`: "Time format" → "time-format". A translated title gets its English
+ * one's, so an anchor is the same in every language.
+ */
 export const anchorOf = (title: string) =>
-  title
+  englishOf(title)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
@@ -118,433 +171,565 @@ export const anchorOf = (title: string) =>
  */
 export const settingsIndex: SettingEntry[] = [
   // General
-  ...entries("general", "Open", [
-    ["Open folders in", "What Open uses", "editor ide vscode cursor finder explorer default app"],
+  ...entries("general", msg("Open"), [
     [
-      "Terminal",
-      "The terminal used to open folders",
-      "ghostty iterm alacritty warp kitty shell console",
+      msg("Open folders in"),
+      msg("What Open uses"),
+      msg("editor ide vscode cursor finder explorer default app"),
     ],
     [
-      "Terminal command",
-      "Type parallax in a terminal to open Parallax there",
-      "cli path shell install",
-    ],
-  ]),
-  ...entries("general", "Notifications", [
-    [
-      "System notifications",
-      "An alert from your computer when a thread finishes, fails, or needs you",
-      "alerts notify os banner sound",
+      msg("Terminal"),
+      msg("The terminal used to open folders"),
+      msg("ghostty iterm alacritty warp kitty shell console"),
     ],
     [
-      "In-app notifications",
-      "A toast when a thread finishes, fails, or needs you",
-      "alerts toast popup",
+      msg("Terminal command"),
+      msg("Type parallax in a terminal to open Parallax there"),
+      msg("cli path shell install"),
     ],
   ]),
-  ...entries("general", "Preferences", [
-    ["Time format", "System default follows your OS clock", "clock 12-hour 24-hour am pm hours"],
+  ...entries("general", msg("Notifications"), [
     [
-      "Send shortcut",
-      "What sends a message, and what starts a new line",
-      "enter submit cmd ctrl newline keyboard",
+      msg("System notifications"),
+      msg("An alert from your computer when a thread finishes, fails, or needs you"),
+      msg("alerts notify os banner sound"),
+    ],
+    [
+      msg("In-app notifications"),
+      msg("A toast when a thread finishes, fails, or needs you"),
+      msg("alerts toast popup"),
     ],
   ]),
-  ...entries("general", "Updates", [
+  ...entries("general", msg("Preferences"), [
     [
-      "Download updates automatically",
-      "Download a new Parallax release as soon as it's out",
-      "auto update upgrade release",
+      msg("Time format"),
+      msg("System default follows your OS clock"),
+      msg("clock 12-hour 24-hour am pm hours"),
     ],
     [
-      "Check for provider updates",
-      "Check Claude Code and Codex for new releases",
-      "claude codex cli version",
+      msg("Send shortcut"),
+      msg("What sends a message, and what starts a new line"),
+      msg("enter submit cmd ctrl newline keyboard"),
+    ],
+  ]),
+  ...entries("general", msg("Updates"), [
+    [
+      msg("Download updates automatically"),
+      msg("Download a new Parallax release as soon as it's out"),
+      msg("auto update upgrade release"),
     ],
     [
-      "Update providers automatically",
-      "Update Claude Code and Codex when a release is found",
-      "auto upgrade claude codex",
+      msg("Check for provider updates"),
+      msg("Check Claude Code and Codex for new releases"),
+      msg("claude codex cli version"),
+    ],
+    [
+      msg("Update providers automatically"),
+      msg("Update Claude Code and Codex when a release is found"),
+      msg("auto upgrade claude codex"),
     ],
   ]),
   // Threads
-  ...entries("threads", "New threads", [
-    ["Computer", "The computer a new thread starts on", "host machine remote ssh device default"],
-    ["Model", "The model a new thread starts on", "default model claude gpt opus sonnet codex"],
+  ...entries("threads", msg("New threads"), [
     [
-      "Reasoning",
-      "How hard it thinks, its context window, and fast mode",
-      "effort thinking context window fast mode",
+      msg("Computer"),
+      msg("The computer a new thread starts on"),
+      msg("host machine remote ssh device default"),
     ],
     [
-      "Permissions",
-      "What a new thread may do without asking",
-      "access approve ask sandbox edit yolo full",
+      msg("Model"),
+      msg("The model a new thread starts on"),
+      msg("default model claude gpt opus sonnet codex"),
     ],
-    ["Legacy Plan mode", "List Plan in the Access picker", "plan access picker"],
+    [
+      msg("Reasoning"),
+      msg("How hard it thinks, its context window, and fast mode"),
+      msg("effort thinking context window fast mode"),
+    ],
+    [
+      msg("Permissions"),
+      msg("What a new thread may do without asking"),
+      msg("access approve ask sandbox edit yolo full"),
+    ],
+    [msg("Legacy Plan mode"), msg("List Plan in the Access picker"), msg("plan access picker")],
   ]),
-  ...entries("threads", "Text generation", [
-    ["Naming model", "Names a new thread and its branch", "title rename branch name auto"],
+  ...entries("threads", msg("Text generation"), [
     [
-      "Thread title instructions",
-      "Added to the prompt that names a new thread",
-      "title naming prompt custom rules rename",
+      msg("Naming model"),
+      msg("Names a new thread and its branch"),
+      msg("title rename branch name auto"),
     ],
     [
-      "Response streaming",
-      "When a reply's text appears while the agent writes it",
-      "stream paragraphs wait full response typing live text",
-    ],
-  ]),
-  ...entries("threads", "Resuming threads", [
-    [
-      "Resume after a usage limit",
-      "Continue once the limit resets",
-      "rate limit auto resume quota retry",
+      msg("Thread title instructions"),
+      msg("Added to the prompt that names a new thread"),
+      msg("title naming prompt custom rules rename"),
     ],
     [
-      "Continue threads after restarts",
-      "Continue after plxd restarts",
-      "restart plxd update crash interrupted",
+      msg("Response streaming"),
+      msg("When a reply's text appears while the agent writes it"),
+      msg("stream paragraphs wait full response typing live text"),
     ],
   ]),
-  ...entries("threads", "Import", [
+  ...entries("threads", msg("Resuming threads"), [
     [
-      "Import sessions",
-      "Continue Claude, Codex, and Cursor sessions as threads",
-      "import history past migrate desktop app claude codex cursor chats remote control rc",
+      msg("Resume after a usage limit"),
+      msg("Continue once the limit resets"),
+      msg("rate limit auto resume quota retry"),
     ],
     [
-      "Import chats",
-      "Bring in chats from a ChatGPT or Claude export",
-      "import chatgpt openai claude.ai export zip conversations history",
+      msg("Continue threads after restarts"),
+      msg("Continue after plxd restarts"),
+      msg("restart plxd update crash interrupted"),
+    ],
+  ]),
+  ...entries("threads", msg("Import"), [
+    [
+      msg("Import sessions"),
+      msg("Continue Claude, Codex, and Cursor sessions as threads"),
+      msg("import history past migrate desktop app claude codex cursor chats remote control rc"),
+    ],
+    [
+      msg("Import chats"),
+      msg("Bring in chats from a ChatGPT or Claude export"),
+      msg("import chatgpt openai claude.ai export zip conversations history"),
     ],
   ]),
   // Appearance
-  ...entries("appearance", "Theme", [
+  ...entries("appearance", msg("Theme"), [
     [
-      "Color scheme",
-      "Which theme shows. System follows your OS",
-      "dark mode light mode night system theme",
+      msg("Color scheme"),
+      msg("Which theme shows. System follows your OS"),
+      msg("dark mode light mode night system theme"),
     ],
-    ["Light theme", "Shown in light mode", "theme colors vs code"],
-    ["Dark theme", "Shown in dark mode", "theme colors vs code"],
-    ["Installed themes", "VS Code themes from Open VSX", "open vsx vscode extensions add theme"],
+    [msg("Light theme"), msg("Shown in light mode"), msg("theme colors vs code")],
+    [msg("Dark theme"), msg("Shown in dark mode"), msg("theme colors vs code")],
+    [
+      msg("Installed themes"),
+      msg("VS Code themes from Open VSX"),
+      msg("open vsx vscode extensions add theme"),
+    ],
   ]),
   ...entries("appearance", undefined, [
-    ["Colors", "Change the shown theme's colors", "accent palette custom json customize"],
-  ]),
-  ...entries("appearance", "Window", [
     [
-      "Background",
-      "Clear or blurred, where the desktop shows through",
-      "transparent blur vibrancy opaque frosted glass",
-    ],
-    [
-      "Background opacity",
-      "How much of the theme covers what shows through",
-      "transparency translucent",
+      msg("Colors"),
+      msg("Change the shown theme's colors"),
+      msg("accent palette custom json customize"),
     ],
   ]),
-  ...entries("appearance", "Text", [
+  ...entries("appearance", msg("Window"), [
     [
-      "Interface font",
-      "Menus, chat, and everything outside code",
-      "font family size typography ui",
+      msg("Background"),
+      msg("Clear or blurred, where the desktop shows through"),
+      msg("transparent blur vibrancy opaque frosted glass"),
     ],
     [
-      "Code font",
-      "Code blocks, diffs, file previews, and the terminal",
-      "monospace mono font size typography terminal",
-    ],
-    ["Word wrap", "Wrap long lines in code by default", "wrap lines long"],
-  ]),
-  ...entries("appearance", "Chat", [
-    [
-      "Rich text composer",
-      "Format Markdown as you type",
-      "markdown formatting plain prompt box editor bold lists",
-    ],
-    ["Render math", "Typeset LaTeX in messages", "latex katex tex equations formulas"],
-    [
-      "Tool calls",
-      "The commands, edits, and searches a thread shows",
-      "zen hide successful failed thinking activity work steps focus quiet",
+      msg("Background opacity"),
+      msg("How much of the theme covers what shows through"),
+      msg("transparency translucent"),
     ],
   ]),
-  ...entries("appearance", "Sidebar", [
+  ...entries("appearance", msg("Text"), [
     [
-      "Layout",
-      "Inbox, by activity, or Traditional, in a folder per repo",
-      "sidebar inbox traditional classic beta folders repos group nav pinned projects",
+      msg("Interface font"),
+      msg("Menus, chat, and everything outside code"),
+      msg("font family size typography ui"),
     ],
-    ["Projects", "In the sidebar's head, or under More", "sidebar nav pages edit"],
-    ["Pull requests", "In the sidebar's head, or under More", "sidebar nav pages edit prs"],
-    ["Usage", "In the sidebar's head, or under More", "sidebar nav pages edit limits"],
-    ["Working section", "List working threads under Working", "sidebar running active busy list"],
-    ["Archive pages", "Show archived threads a page at a time", "archived show more pagination"],
+    [
+      msg("Code font"),
+      msg("Code blocks, diffs, file previews, and the terminal"),
+      msg("monospace mono font size typography terminal"),
+    ],
+    [msg("Word wrap"), msg("Wrap long lines in code by default"), msg("wrap lines long")],
+  ]),
+  ...entries("appearance", msg("Chat"), [
+    [
+      msg("Rich text composer"),
+      msg("Format Markdown as you type"),
+      msg("markdown formatting plain prompt box editor bold lists"),
+    ],
+    [
+      msg("Render math"),
+      msg("Typeset LaTeX in messages"),
+      msg("latex katex tex equations formulas"),
+    ],
+    [
+      msg("Tool calls"),
+      msg("The commands, edits, and searches a thread shows"),
+      msg("zen hide successful failed thinking activity work steps focus quiet"),
+    ],
+  ]),
+  ...entries("appearance", msg("Sidebar"), [
+    [
+      msg("Layout"),
+      msg("Inbox, by activity, or Traditional, in a folder per repo"),
+      msg("sidebar inbox traditional classic beta folders repos group nav pinned projects"),
+    ],
+    [msg("Projects"), msg("In the sidebar's head, or under More"), msg("sidebar nav pages edit")],
+    [
+      msg("Pull requests"),
+      msg("In the sidebar's head, or under More"),
+      msg("sidebar nav pages edit prs"),
+    ],
+    [
+      msg("Usage"),
+      msg("In the sidebar's head, or under More"),
+      msg("sidebar nav pages edit limits"),
+    ],
+    [
+      msg("Working section"),
+      msg("List working threads under Working"),
+      msg("sidebar running active busy list"),
+    ],
+    [
+      msg("Archive pages"),
+      msg("Show archived threads a page at a time"),
+      msg("archived show more pagination"),
+    ],
   ]),
   // Browser (PLX-974)
-  ...entries("browser", "Appearance", [
-    ["Theme", "Parallax's own colors, or Helium's and Chrome's", "color colour palette dark light"],
-    ["Show bookmarks bar", "Under the toolbar, while there are bookmarks", "favorites"],
-    ["Page size", "Desktop lays a page out as on a monitor", "zoom fit monitor"],
-  ]),
-  ...entries("browser", "Search engine", [
-    ["Search engine", "What the address bar searches with", "google duckduckgo bing brave kagi"],
-  ]),
-  ...entries("browser", "On startup", [
+  ...entries("browser", msg("Appearance"), [
     [
-      "Continue where you left off",
-      "Each side panel opens the browser tabs it had",
-      "restore session tabs",
+      msg("Theme"),
+      msg("Parallax's own colors, or Helium's and Chrome's"),
+      msg("color colour palette dark light"),
+    ],
+    [
+      msg("Show bookmarks bar"),
+      msg("Under the toolbar, while there are bookmarks"),
+      msg("favorites"),
+    ],
+    [msg("Page size"), msg("Desktop lays a page out as on a monitor"), msg("zoom fit monitor")],
+  ]),
+  ...entries("browser", msg("Search engine"), [
+    [
+      msg("Search engine"),
+      msg("What the address bar searches with"),
+      msg("google duckduckgo bing brave kagi"),
     ],
   ]),
-  ...entries("browser", "Home button", [
-    ["Show home button", "In the toolbar, beside Reload", "homepage"],
-    ["Home page", "Empty opens a new tab", "homepage start page url"],
-  ]),
-  ...entries("browser", "Downloads", [
-    ["Location", "Where downloads go", "downloads folder save path"],
+  ...entries("browser", msg("On startup"), [
     [
-      "Ask where to save each file before downloading",
-      "Off, each file goes straight to the location",
-      "downloads save dialog prompt",
+      msg("Continue where you left off"),
+      msg("Each side panel opens the browser tabs it had"),
+      msg("restore session tabs"),
     ],
   ]),
-  ...entries("browser", "Privacy", [
+  ...entries("browser", msg("Home button"), [
+    [msg("Show home button"), msg("In the toolbar, beside Reload"), msg("homepage")],
+    [msg("Home page"), msg("Empty opens a new tab"), msg("homepage start page url")],
+  ]),
+  ...entries("browser", msg("Downloads"), [
+    [msg("Location"), msg("Where downloads go"), msg("downloads folder save path")],
     [
-      "Clear browsing data",
-      "Browsing history, cookies and other site data, cached images and files",
-      "cache cookies history delete privacy",
+      msg("Ask where to save each file before downloading"),
+      msg("Off, each file goes straight to the location"),
+      msg("downloads save dialog prompt"),
+    ],
+  ]),
+  ...entries("browser", msg("Privacy"), [
+    [
+      msg("Clear browsing data"),
+      msg("Browsing history, cookies and other site data, cached images and files"),
+      msg("cache cookies history delete privacy"),
     ],
   ]),
   ...entries("browser", undefined, [
     [
-      "Extensions",
-      "Installed extensions, and Load unpacked",
-      "chrome web store add-ons plugins load unpacked",
+      msg("Extensions"),
+      msg("Installed extensions, and Load unpacked"),
+      msg("chrome web store add-ons plugins load unpacked"),
     ],
   ]),
   // Keybindings
   ...entries("keybinds", undefined, [
-    ["Shortcuts", "Shortcuts for the whole app", "hotkeys keyboard bindings rebind reset"],
+    [
+      msg("Shortcuts"),
+      msg("Shortcuts for the whole app"),
+      msg("hotkeys keyboard bindings rebind reset"),
+    ],
   ]),
   ...commands.map((c): SettingEntry => ({
     section: "keybinds",
     group: c.category,
     title: c.name,
-    keywords: "shortcut keybind hotkey",
+    keywords: msg("shortcut keybind hotkey"),
   })),
-  ...entries("keybinds", "Built in", [
-    ["Open a sidebar row", "The first nine threads in the sidebar", "number jump"],
-    ["Send a message", undefined, "enter submit"],
-    ["Steer an agent now", undefined, "interrupt"],
-    ["Start a new thread and stay here", undefined, "background"],
-    ["New line in a message", undefined, "newline shift enter"],
+  ...entries("keybinds", msg("Built in"), [
+    [msg("Open a sidebar row"), msg("The first nine threads in the sidebar"), msg("number jump")],
+    [msg("Send a message"), undefined, msg("enter submit")],
+    [msg("Steer an agent now"), undefined, msg("interrupt")],
+    [msg("Start a new thread and stay here"), undefined, msg("background")],
+    [msg("New line in a message"), undefined, msg("newline shift enter")],
   ]),
   // Providers
   ...entries("providers", undefined, [
     [
-      "Status",
-      "Sign in to a provider, or re-authenticate",
-      "account sign in login authenticate reauthenticate subscription plan install",
+      msg("Status"),
+      msg("Sign in to a provider, or re-authenticate"),
+      msg("account sign in login authenticate reauthenticate subscription plan install"),
     ],
-    ["Display name", "How threads and model menus name a provider", "rename"],
-    ["Labels", "Tags to tell your providers apart", "tag filter group"],
-    ["Binary path", "The binary a provider runs", "program executable path cli"],
-    ["Launch arguments", "Arguments passed on session start", "args flags cli"],
+    [msg("Display name"), msg("How threads and model menus name a provider"), msg("rename")],
+    [msg("Labels"), msg("Tags to tell your providers apart"), msg("tag filter group")],
+    [msg("Binary path"), msg("The binary a provider runs"), msg("program executable path cli")],
+    [msg("Launch arguments"), msg("Arguments passed on session start"), msg("args flags cli")],
     [
-      "Environment",
-      "API keys, base URLs, and other variables",
-      "env variables api key base url secret",
+      msg("Environment"),
+      msg("API keys, base URLs, and other variables"),
+      msg("env variables api key base url secret"),
     ],
-    ["Models", "The models a provider offers", "custom model add model"],
-    ["Hubs", "Run Claude Code and Codex through a CLIProxyAPI hub", "cliproxyapi proxy accounts"],
+    [msg("Models"), msg("The models a provider offers"), msg("custom model add model")],
     [
-      "Link providers across computers",
-      "Use the same providers on every computer",
-      "sync share same hosts machines",
+      msg("Hubs"),
+      msg("Run Claude Code and Codex through a CLIProxyAPI hub"),
+      msg("cliproxyapi proxy accounts"),
+    ],
+    [
+      msg("Link providers across computers"),
+      msg("Use the same providers on every computer"),
+      msg("sync share same hosts machines"),
     ],
   ]),
   {
     section: "providers",
-    title: "API keys",
-    description: "Keys kept in the host's keychain",
-    keywords: "anthropic openai key",
+    title: msg("API keys"),
+    description: msg("Keys kept in the host's keychain"),
+    keywords: msg("anthropic openai key"),
     // Claude Code's pane is the one shown first.
     anchor: "anthropic-api-keys",
   },
   // Usage, Schedules, Source control
   ...entries("schedules", undefined, [
     [
-      "Scheduled tasks",
-      "Prompts on a timer or webhook",
-      "cron timer webhook recurring automation pause",
+      msg("Scheduled tasks"),
+      msg("Prompts on a timer or webhook"),
+      msg("cron timer webhook recurring automation pause"),
     ],
   ]),
   ...entries("sourceControl", undefined, [
-    ["Hosting", "The GitHub CLI on each host", "github gh cli pull requests sign in git"],
+    [
+      msg("Hosting"),
+      msg("The GitHub CLI on each host"),
+      msg("github gh cli pull requests sign in git"),
+    ],
   ]),
   ...entries("computerUse", undefined, [
     [
-      "Permissions",
-      "Accessibility and Screen Recording for plxd",
-      "accessibility screen recording privacy macos grant",
+      msg("Permissions"),
+      msg("Accessibility and Screen Recording for plxd"),
+      msg("accessibility screen recording privacy macos grant"),
     ],
-    ["Always allowed", "Apps every thread may use without asking", "apps allow remove"],
+    [
+      msg("Always allowed"),
+      msg("Apps every thread may use without asking"),
+      msg("apps allow remove"),
+    ],
   ]),
   ...entries("projects", undefined, [
-    ["Project icon", "The icon the sidebar shows", "image logo glyph color picture upload"],
     [
-      "New thread defaults",
-      "A repository's own model, reasoning, permissions, workspace, and base branch",
-      "per repo model effort permission workspace base branch override",
+      msg("Project icon"),
+      msg("The icon the sidebar shows"),
+      msg("image logo glyph color picture upload"),
     ],
     [
-      "Scripts",
-      "Setup and settle scripts in a thread's worktree",
-      "setup settle worktree commands",
-    ],
-    ["From parallax.json", "Scripts a repository defines", "parallax json import config"],
-    ["Git", "A repository's remote, and its current and default branches", "origin url"],
-    ["Instructions", "What every thread in a Project is told", "project system prompt"],
-  ]),
-  ...entries("worktrees", "New worktrees", [
-    ["Workspace", "Where a thread in a repository works", "checkout current default"],
-    ["Start from", "The branch a new worktree starts from", "base default current origin"],
-  ]),
-  ...entries("worktrees", "Branches", [
-    ["Branch prefix", "What a new thread's branch starts with", "name parallax namespace"],
-  ]),
-  ...entries("worktrees", "Cleanup", [
-    [
-      "Delete worktrees with deleted threads",
-      "Whether deleting a thread deletes its worktree and branch",
-      "remove keep on disk",
+      msg("New thread defaults"),
+      msg("A repository's own model, reasoning, permissions, workspace, and base branch"),
+      msg("per repo model effort permission workspace base branch override"),
     ],
     [
-      "Delete merged worktrees",
-      "Delete a worktree and branch once its pull request merges",
-      "remove clean up",
+      msg("Scripts"),
+      msg("Setup and settle scripts in a thread's worktree"),
+      msg("setup settle worktree commands"),
     ],
     [
-      "Delete inactive worktrees",
-      "Delete a worktree once its thread has had no activity for a number of days",
-      "remove old stale unused idle days retention disk space",
+      msg("From parallax.json"),
+      msg("Scripts a repository defines"),
+      msg("parallax json import config"),
     ],
+    ["Git", msg("A repository's remote, and its current and default branches"), msg("origin url")],
     [
-      "Delete archived worktrees",
-      "Delete an archived thread's worktree folder, keeping the thread and branch",
-      "remove archive days retention disk space",
-    ],
-    [
-      "Delete unchanged worktrees",
-      "Delete a worktree with no commits beyond the default branch",
-      "remove empty untouched advanced",
-    ],
-    [
-      "Keep worktrees with",
-      "Which local files stop a rule from deleting a worktree",
-      "local changes uncommitted untracked ignored env node_modules advanced",
+      msg("Instructions"),
+      msg("What every thread in a Project is told"),
+      msg("project system prompt"),
     ],
   ]),
-  ...entries("sourceControl", "Pull requests", [
+  ...entries("worktrees", msg("New worktrees"), [
     [
-      "Open pull requests in",
-      "Your system browser, or the side panel's",
-      "browser github pr links",
+      msg("Workspace"),
+      msg("Where a thread in a repository works"),
+      msg("checkout current default"),
     ],
-    ["Click a pull request link to", "Open it in Parallax, or on GitHub", "pr link"],
-    ["Merge method", "What the merge box starts on", "squash rebase merge commit"],
-    ["Delete branch on merge", "Whether a merge deletes the branch", "cleanup"],
+    [
+      msg("Start from"),
+      msg("The branch a new worktree starts from"),
+      msg("base default current origin"),
+    ],
   ]),
-  ...entries("orchestrators", "New orchestrators", [
-    ["Full access", "A new orchestrator starts with full access", "bypass permission"],
-    ["Autonomy", "Who answers a new orchestrator's questions", "ask routine full"],
+  ...entries("worktrees", msg("Branches"), [
+    [
+      msg("Branch prefix"),
+      msg("What a new thread's branch starts with"),
+      msg("name parallax namespace"),
+    ],
+  ]),
+  ...entries("worktrees", msg("Cleanup"), [
+    [
+      msg("Delete worktrees with deleted threads"),
+      msg("Whether deleting a thread deletes its worktree and branch"),
+      msg("remove keep on disk"),
+    ],
+    [
+      msg("Delete merged worktrees"),
+      msg("Delete a worktree and branch once its pull request merges"),
+      msg("remove clean up"),
+    ],
+    [
+      msg("Delete inactive worktrees"),
+      msg("Delete a worktree once its thread has had no activity for a number of days"),
+      msg("remove old stale unused idle days retention disk space"),
+    ],
+    [
+      msg("Delete archived worktrees"),
+      msg("Delete an archived thread's worktree folder, keeping the thread and branch"),
+      msg("remove archive days retention disk space"),
+    ],
+    [
+      msg("Delete unchanged worktrees"),
+      msg("Delete a worktree with no commits beyond the default branch"),
+      msg("remove empty untouched advanced"),
+    ],
+    [
+      msg("Keep worktrees with"),
+      msg("Which local files stop a rule from deleting a worktree"),
+      msg("local changes uncommitted untracked ignored env node_modules advanced"),
+    ],
+  ]),
+  ...entries("sourceControl", msg("Pull requests"), [
+    [
+      msg("Open pull requests in"),
+      msg("Your system browser, or the side panel's"),
+      msg("browser github pr links"),
+    ],
+    [msg("Click a pull request link to"), msg("Open it in Parallax, or on GitHub"), msg("pr link")],
+    [msg("Merge method"), msg("What the merge box starts on"), msg("squash rebase merge commit")],
+    [msg("Delete branch on merge"), msg("Whether a merge deletes the branch"), msg("cleanup")],
+  ]),
+  ...entries("orchestrators", msg("New orchestrators"), [
+    [
+      msg("Full access"),
+      msg("A new orchestrator starts with full access"),
+      msg("bypass permission"),
+    ],
+    [msg("Autonomy"), msg("Who answers a new orchestrator's questions"), msg("ask routine full")],
   ]),
   ...entries("orchestrators", undefined, [
-    ["Base branch", "What its integration branch is cut from", "integration target"],
-    ["Land automatically", "Its children land without your approval", "auto land merge"],
-    ["Children at once", "How many of its children run together", "max parallel concurrency"],
-    ["Allow API keys", "Whether its children may run on an API key", "account"],
-    ["Checks", "The command run after each landing", "test ci verify"],
+    [msg("Base branch"), msg("What its integration branch is cut from"), msg("integration target")],
+    [
+      msg("Land automatically"),
+      msg("Its children land without your approval"),
+      msg("auto land merge"),
+    ],
+    [
+      msg("Children at once"),
+      msg("How many of its children run together"),
+      msg("max parallel concurrency"),
+    ],
+    [msg("Allow API keys"), msg("Whether its children may run on an API key"), msg("account")],
+    [msg("Checks"), msg("The command run after each landing"), msg("test ci verify")],
   ]),
   ...entries("devices", undefined, [
-    ["Device hub", "What streams a device to the Device panel", "install setup"],
-    ["Agents can use devices", "Agents open and drive these devices", "tools"],
+    [msg("Device hub"), msg("What streams a device to the Device panel"), msg("install setup")],
+    [msg("Agents can use devices"), msg("Agents open and drive these devices"), msg("tools")],
     [
-      "Local simulators",
-      "Whether this computer can run them",
-      "ios android xcode iphone simctl studio sdk adb avd emulators apple",
+      msg("Local simulators"),
+      msg("Whether this computer can run them"),
+      msg("ios android xcode iphone simctl studio sdk adb avd emulators apple"),
     ],
-    ["Simulators and emulators", "The devices on this computer", "boot start stop power"],
+    [
+      msg("Simulators and emulators"),
+      msg("The devices on this computer"),
+      msg("boot start stop power"),
+    ],
   ]),
   ...entries("about", undefined, [
-    ["Version", "This copy of Parallax, to copy", "about build release number"],
+    [msg("Version"), msg("This copy of Parallax, to copy"), msg("about build release number")],
     [
-      "Check for updates",
-      "Ask now whether a newer Parallax is out",
-      "updater upgrade download install latest new version release",
+      msg("Check for updates"),
+      msg("Ask now whether a newer Parallax is out"),
+      msg("updater upgrade download install latest new version release"),
     ],
     [
-      "Get involved",
-      "Report a bug, share an idea, star the repo, or support on Ko-fi",
-      "feedback issue discussion github kofi donate",
+      msg("Get involved"),
+      msg("Report a bug, share an idea, star the repo, or support on Ko-fi"),
+      msg("feedback issue discussion github kofi donate"),
     ],
-    ["This computer", "The plxd, Electron, and Chromium this copy runs on", "operating system os"],
-    ["Open source", "Parallax's license and source code", "apache repository github"],
     [
-      "Licenses and credits",
-      "The code, fonts, logos, and models Parallax uses",
-      "third party notices legal attribution dependencies",
+      msg("This computer"),
+      msg("The plxd, Electron, and Chromium this copy runs on"),
+      msg("operating system os"),
+    ],
+    [
+      msg("Open source"),
+      msg("Parallax's license and source code"),
+      msg("apache repository github"),
+    ],
+    [
+      msg("Licenses and credits"),
+      msg("The code, fonts, logos, and models Parallax uses"),
+      msg("third party notices legal attribution dependencies"),
     ],
   ]),
-  ...entries("accessibility", "Vision", [
-    ["Contrast", "Stronger text and borders", "high contrast"],
-    ["Interface text size", "How large the app's text is", "font zoom big small"],
-    ["Focus rings", "A thicker outline on what has keyboard focus", "keyboard navigation outline"],
-    ["Underline links", "Links stay underlined", "color"],
-  ]),
-  ...entries("accessibility", "Motion", [
-    ["Reduce motion", "Stops animations", "animation vestibular"],
-  ]),
-  ...entries("accessibility", "Diffs", [
+  ...entries("accessibility", msg("Vision"), [
+    [msg("Contrast"), msg("Stronger text and borders"), msg("high contrast")],
+    [msg("Interface text size"), msg("How large the app's text is"), msg("font zoom big small")],
     [
-      "Diff colors",
-      "What marks added and removed lines",
-      "red green blue orange color blind custom",
+      msg("Focus rings"),
+      msg("A thicker outline on what has keyboard focus"),
+      msg("keyboard navigation outline"),
+    ],
+    [msg("Underline links"), msg("Links stay underlined"), msg("color")],
+  ]),
+  ...entries("accessibility", msg("Motion"), [
+    [msg("Reduce motion"), msg("Stops animations"), msg("animation vestibular")],
+  ]),
+  ...entries("accessibility", msg("Diffs"), [
+    [
+      msg("Diff colors"),
+      msg("What marks added and removed lines"),
+      msg("red green blue orange color blind custom"),
     ],
     [
-      "Line tint",
-      "How strongly a changed line's background shows",
-      "intensity contrast legibility",
+      msg("Line tint"),
+      msg("How strongly a changed line's background shows"),
+      msg("intensity contrast legibility"),
     ],
   ]),
   // Computers (PLX-1492). Titles that aren't on the page any more, such as SSH hosts, still find
   // the card that holds them.
   ...[
     [
-      "Add computer",
-      "With Parallax Connect, on this network, or over SSH",
-      "add computer devices hosts machines new",
+      msg("Add computer"),
+      msg("With Parallax Connect, on this network, or over SSH"),
+      msg("add computer devices hosts machines new"),
     ],
     [
-      "Computers on this network",
-      "Pair a computer with a code",
-      "lan nearby devices pair computer",
-    ],
-    ["SSH hosts", "Machines you reach over SSH", "ssh remote server add host install plxd"],
-    [
-      "Routes",
-      "How this app reaches a computer",
-      "route address order reorder drag relay tailscale network",
+      msg("Computers on this network"),
+      msg("Pair a computer with a code"),
+      msg("lan nearby devices pair computer"),
     ],
     [
-      "Agents can work on a computer",
-      "In each computer's card, opened",
-      "agent work delegate remote peer other computer showing access for",
+      msg("SSH hosts"),
+      msg("Machines you reach over SSH"),
+      msg("ssh remote server add host install plxd"),
+    ],
+    [
+      msg("Routes"),
+      msg("How this app reaches a computer"),
+      msg("route address order reorder drag relay tailscale network"),
+    ],
+    [
+      msg("Agents can work on a computer"),
+      msg("In each computer's card, opened"),
+      msg("agent work delegate remote peer other computer showing access for"),
     ],
   ].map(([title, description, keywords]) => ({
     section: "connections" as const,
@@ -555,70 +740,86 @@ export const settingsIndex: SettingEntry[] = [
   })),
   ...entries("connections", undefined, [
     [
-      "Load Balancer",
-      "Start new threads on the computer with the most room",
-      "auto balance load busy cpu memory new thread computers weight prefer",
+      msg("Load Balancer"),
+      msg("Start new threads on the computer with the most room"),
+      msg("auto balance load busy cpu memory new thread computers weight prefer"),
     ],
   ]),
   // Sharing & access (PLX-1492): how this computer is reached, and the devices that reach it.
   ...entries("sharing", undefined, [
-    ["This computer", "Its name and icon", "rename computer name local icon"],
+    [msg("This computer"), msg("Its name and icon"), msg("rename computer name local icon")],
     [
       "Parallax Connect",
-      "Reach this computer from anywhere",
-      "relay reach from anywhere internet remote account check connection",
+      msg("Reach this computer from anywhere"),
+      msg("relay reach from anywhere internet remote account check connection"),
     ],
     [
-      "Setup code",
-      "A code for another computer that's adding this one",
-      "show setup code add this computer account",
-    ],
-    ["SSH", "How another computer adds this one over SSH", "ssh remote login sshd server"],
-    [
-      "Pair on this network",
-      "With a one-time code, no account needed",
-      "lan pair wifi same network local pair computers",
+      msg("Setup code"),
+      msg("A code for another computer that's adding this one"),
+      msg("show setup code add this computer account"),
     ],
     [
-      "Open in a browser",
-      "Use Parallax from a browser on this network",
-      "web phone mobile certificate",
+      "SSH",
+      msg("How another computer adds this one over SSH"),
+      msg("ssh remote login sshd server"),
     ],
     [
-      "Agents can work here",
-      "Agents on your other computers can run commands on this one",
-      "agent work delegate remote peer",
+      msg("Pair on this network"),
+      msg("With a one-time code, no account needed"),
+      msg("lan pair wifi same network local pair computers"),
     ],
     [
-      "Devices with access",
-      "What's paired with or signed in to this computer",
-      "revoke read-only phone browser paired sessions",
+      msg("Open in a browser"),
+      msg("Use Parallax from a browser on this network"),
+      msg("web phone mobile certificate"),
     ],
-    ["Version", "The installed Parallax version", "daemon status version plxd update"],
+    [
+      msg("Agents can work here"),
+      msg("Agents on your other computers can run commands on this one"),
+      msg("agent work delegate remote peer"),
+    ],
+    [
+      msg("Devices with access"),
+      msg("What's paired with or signed in to this computer"),
+      msg("revoke read-only phone browser paired sessions"),
+    ],
+    [
+      msg("Version"),
+      msg("The installed Parallax version"),
+      msg("daemon status version plxd update"),
+    ],
   ]),
   {
     section: "sharing",
-    title: "Reach from anywhere",
+    title: msg("Reach from anywhere"),
     description: "Parallax Connect",
-    keywords: "relay internet remote",
+    keywords: msg("relay internet remote"),
     anchor: "parallax-connect",
   },
   {
     section: "sharing",
-    title: "Same network",
-    description: "Pair on this network",
-    keywords: "lan local network wifi",
+    title: msg("Same network"),
+    description: msg("Pair on this network"),
+    keywords: msg("lan local network wifi"),
     anchor: "pair-on-this-network",
   },
-  ...entries("sharing", "Devices with access", [
-    ["Pair a device", "With a pairing code", "pairing code phone"],
+  ...entries("sharing", msg("Devices with access"), [
+    [msg("Pair a device"), msg("With a pairing code"), msg("pairing code phone")],
   ]),
   // Storage
   ...entries("storage", undefined, [
-    ["On this computer", "What Parallax keeps, and its size", "disk space size cache logs"],
+    [
+      msg("On this computer"),
+      msg("What Parallax keeps, and its size"),
+      msg("disk space size cache logs"),
+    ],
   ]),
   ...entries("storage", undefined, [
-    ["Archived threads", "Delete a host's archived threads", "delete archived clear history"],
+    [
+      msg("Archived threads"),
+      msg("Delete a host's archived threads"),
+      msg("delete archived clear history"),
+    ],
   ]),
 ];
 
@@ -648,7 +849,8 @@ interface SettingsResult {
 /** A section or setting as search sees it: its result, and its fields with their weights. */
 type Searchable = { result: SettingsResult; fields: [text: string | undefined, weight: number][] };
 
-const wordsOf = (text = "") => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+// Letters and digits in any script, so a search in the app's language finds its words.
+const wordsOf = (text = "") => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 
 /**
  * Whether `a` is within `max` edits of `b`, where swapping two neighbors is one edit
@@ -731,28 +933,43 @@ function byWords(query: string, list: Searchable[]) {
   return exact.length ? exact : ranked(true);
 }
 
+/**
+ * A section as search sees it: its name as shown, then in English, so a search in either language
+ * finds it.
+ */
 const sectionFields = (s: (typeof settingsSections)[number]): Searchable => ({
-  result: { section: s.id, title: s.name },
+  result: { section: s.id, title: t(s.name) },
   fields: [
+    [t(s.name), 10],
     [s.name, 10],
+    [s.keywords && t(s.keywords), 6],
     [s.keywords, 6],
   ],
 });
 
+/**
+ * A setting as search sees it, shown in the app's language. Its title and group are the ones its
+ * page shows, so `t` finds them there. Its anchor stays the English title's.
+ */
 const settingFields = (e: SettingEntry): Searchable => {
   const name = settingsSections.find((s) => s.id === e.section)!.name;
   return {
     result: {
       section: e.section,
-      title: e.title,
-      place: e.group && e.group !== e.title ? `${name} › ${e.group}` : name,
+      title: t(e.title),
+      place: e.group && e.group !== e.title ? `${t(name)} › ${t(e.group)}` : t(name),
       anchor: e.anchor ?? anchorOf(e.title),
     },
     fields: [
+      [t(e.title), 10],
       [e.title, 10],
+      [e.keywords && t(e.keywords), 6],
       [e.keywords, 6],
+      [e.group && t(e.group), 3],
       [e.group, 3],
+      [t(name), 3],
       [name, 3],
+      [e.description && t(e.description), 2],
       [e.description, 2],
     ],
   };

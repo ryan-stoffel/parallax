@@ -1,6 +1,8 @@
 // The transcript's diffs' pure pieces: an edit call's lines, as the desktop's permission request
 // draws them (diffLines.ts), one file's numbered lines out of a turn's unified diff (diffRows), and
 // how many lines they add and remove. Pure, for the test.
+import { t } from "i18next";
+
 import type { JsonValue } from "../../desktop/src/protocol/generated/protocol";
 import { diffLines } from "../../desktop/src/renderer/diffLines";
 import { field, isObject } from "../../desktop/src/renderer/transcript";
@@ -17,7 +19,10 @@ const kinds = { "+": "add", "-": "del", " ": "context" } as const;
 function lines(before: string, after: string): DiffViewRow[] {
   return diffLines(before, after).map((l) =>
     l.op === "gap"
-      ? { kind: "band", text: `⋯ ${l.count} unchanged ${l.count === 1 ? "line" : "lines"}` }
+      ? {
+          kind: "band",
+          text: t("⋯ {{count}} unchanged lines", { count: l.count, defaultValue_one: "⋯ {{count}} unchanged line" }),
+        }
       : { kind: kinds[l.op], text: l.text },
   );
 }

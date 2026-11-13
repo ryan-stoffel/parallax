@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -38,7 +39,7 @@ export function useOrchestratorAgents(
 ): OrchestratorAgentsView {
   const start = useCallback(
     async (runId: string, prompt: string) => {
-      if (!orchestrator) return "No orchestrator is open.";
+      if (!orchestrator) return t("No orchestrator is open.");
       const answer = await window.parallax.request(hostId, "agent/start", {
         runId,
         project: orchestrator,
@@ -96,7 +97,7 @@ export function AgentsPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {shown.length > 0 ? (
-        <ul aria-label="Agents" className="min-h-0 flex-1 overflow-y-auto px-2">
+        <ul aria-label={t("Agents")} className="min-h-0 flex-1 overflow-y-auto px-2">
           {shown.map((run) => (
             <AgentRow
               key={run.id}
@@ -111,9 +112,9 @@ export function AgentsPanel({
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
           <Workflow aria-hidden className="mb-1 size-5 text-faint-foreground" />
-          <p className="text-body font-medium text-foreground">No agents yet</p>
+          <p className="text-body font-medium text-foreground">{t("No agents yet")}</p>
           <p className="text-body text-muted-foreground">
-            Subagents the orchestrator starts show up here.
+            {t("Subagents the orchestrator starts show up here.")}
           </p>
         </div>
       )}
@@ -157,12 +158,12 @@ function AgentRow({
           )}
           <span className="min-w-0 flex-1 truncate text-body">{title}</span>
           <span className="shrink-0 text-meta text-faint-foreground">
-            {run.orchestratorThread ? "by orchestrator" : "by you"}
+            {run.orchestratorThread ? t("by orchestrator") : t("by you")}
           </span>
         </span>
         <span className="flex w-full items-center gap-2 pl-5.5 text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
           {asks > 0 ? (
-            <span className="shrink-0 font-medium text-foreground">Needs approval</span>
+            <span className="shrink-0 font-medium text-foreground">{t("Needs approval")}</span>
           ) : (
             <span className={`shrink-0 ${look.color}`}>{statusLabel(run.status)}</span>
           )}
@@ -211,7 +212,7 @@ function StartAgent({
       return notify({
         key: "start-subagent",
         tone: "error",
-        title: "Couldn't start the subagent",
+        title: t("Couldn't start the subagent"),
         body: failed,
       });
     dismiss("start-subagent");
@@ -229,7 +230,7 @@ function StartAgent({
     >
       <div className="flex items-end gap-1 rounded-xl border border-border bg-surface p-1.5 focus-within:border-ring">
         <textarea
-          aria-label="New subagent's task"
+          aria-label={t("New subagent's task")}
           rows={2}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -238,13 +239,13 @@ function StartAgent({
             e.preventDefault();
             void submit();
           }}
-          placeholder={disabledReason ?? "Start a subagent on a task"}
+          placeholder={disabledReason ?? t("Start a subagent on a task")}
           className="block min-w-0 flex-1 resize-none bg-transparent px-2 py-1 text-body leading-relaxed placeholder:text-faint-foreground focus-visible:outline-none"
         />
         <button
           type="submit"
-          aria-label="Start subagent"
-          title="Start subagent"
+          aria-label={t("Start subagent")}
+          title={t("Start subagent")}
           disabled={!canStart}
           className="send-sky grid size-7 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground [&_svg]:size-4"
         >

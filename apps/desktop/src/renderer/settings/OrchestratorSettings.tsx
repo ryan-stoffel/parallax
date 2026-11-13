@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useState } from "react";
 
 import type { Orchestrator, RepoRef } from "../../protocol/generated/protocol";
@@ -33,11 +34,18 @@ const newOnes = "new";
 const defaultAnchors = ["full-access", "autonomy", "defaults"];
 
 /** The autonomy levels as a Picker's options. */
-const autonomyOptions = autonomyLevels.map((a) => ({
-  value: a.value,
-  label: a.name,
-  description: a.detail,
-}));
+const autonomyOptions = () =>
+  autonomyLevels.map((a) => ({
+    value: a.value,
+    label: t(a.name),
+    description: t(a.detail),
+  }));
+
+/** The line on who answers at `autonomy`, shown under its Row. */
+const autonomyDetail = (autonomy: string) => {
+  const detail = autonomyLevels.find((a) => a.value === autonomy)?.detail;
+  return detail && t(detail);
+};
 
 /**
  * Settings > Orchestrators: on the left, what a new orchestrator starts with and the orchestrators of
@@ -73,7 +81,7 @@ export function OrchestratorSettings({
       list={
         <div
           role="tablist"
-          aria-label="Orchestrators"
+          aria-label={t("Orchestrators")}
           aria-orientation="vertical"
           onKeyDown={moveTab}
         >
@@ -81,16 +89,16 @@ export function OrchestratorSettings({
             <ListItem
               chosen={!current}
               onClick={() => setChosen(newOnes)}
-              title="New orchestrators"
-              detail="What each one starts with"
+              title={t("New orchestrators")}
+              detail={t("What each one starts with")}
             />
           </div>
-          <ListHeading>Orchestrators</ListHeading>
+          <ListHeading>{t("Orchestrators")}</ListHeading>
           {entries.map((e) => {
             const { orchestrator: o } = e;
             const place = o.repoPath
               ? o.repoPath.slice(o.repoPath.lastIndexOf("/") + 1)
-              : "No repository";
+              : t("No repository");
             return (
               <ListItem
                 key={keyOf(e)}
@@ -103,7 +111,7 @@ export function OrchestratorSettings({
             );
           })}
           {entries.length === 0 && (
-            <p className="px-4 py-2 text-meta text-faint-foreground">None yet.</p>
+            <p className="px-4 py-2 text-meta text-faint-foreground">{t("None yet.")}</p>
           )}
         </div>
       }
@@ -129,32 +137,31 @@ function NewOrchestrators() {
   const prefs = orchestratorPrefs.use();
   return (
     <>
-      <PageTitle title="New orchestrators">
-        What a new orchestrator&apos;s form starts with. Its form can change each one.
+      <PageTitle title={t("New orchestrators")}>
+        {t("What a new orchestrator's form starts with. Its form can change each one.")}
       </PageTitle>
-      <Section title="Defaults">
+      <Section title={t("Defaults")}>
         <Row
-          title="Full access"
-          description="It and its children run without asking. Off, they stay in Auto, which asks before risky commands."
+          title={t("Full access")}
+          description={t(
+            "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.",
+          )}
         >
           <Switch
-            label="Full access"
+            label={t("Full access")}
             checked={prefs.fullAccess}
             onChange={(fullAccess) => orchestratorPrefs.set({ ...prefs, fullAccess })}
           />
         </Row>
-        <Row
-          title="Autonomy"
-          description={autonomyLevels.find((a) => a.value === prefs.autonomy)?.detail}
-        >
+        <Row title={t("Autonomy")} description={autonomyDetail(prefs.autonomy)}>
           <Picker
             field
-            label="Autonomy"
+            label={t("Autonomy")}
             value={prefs.autonomy}
             onChange={(value) =>
               orchestratorPrefs.set({ ...prefs, autonomy: value as typeof prefs.autonomy })
             }
-            options={autonomyOptions}
+            options={autonomyOptions()}
             align="end"
             className="w-44"
             panelClassName="w-[24rem]"
@@ -196,7 +203,11 @@ export function OrchestratorPane({
   const save = async (change: Change) => {
     const failed = await view.updateOrchestrator(orchestrator.id, change);
     if (failed)
-      notify({ tone: "error", title: `Couldn't save ${orchestrator.name}`, body: failed });
+      notify({
+        tone: "error",
+        title: t("Couldn't save {{name}}", { name: orchestrator.name }),
+        body: failed,
+      });
   };
   const [name, setName] = useState(orchestrator.name);
   // Asking before the one-way move to Bypass (0042), as the sidebar's Full access does.
@@ -212,14 +223,14 @@ export function OrchestratorPane({
         </span>
         <div className="min-w-0 flex-1">
           <PageTitle title={orchestrator.name}>
-            {orchestrator.repoPath || "An orchestrator with no repository."}
+            {orchestrator.repoPath || t("An orchestrator with no repository.")}
           </PageTitle>
         </div>
       </div>
-      <Section title="General">
-        <Row title="Name" description="How the sidebar names it.">
+      <Section title={t("General")}>
+        <Row title={t("Name")} description={t("How the sidebar names it.")}>
           <input
-            aria-label="Name"
+            aria-label={t("Name")}
             value={name}
             maxLength={128}
             onChange={(e) => setName(e.target.value)}
@@ -236,17 +247,19 @@ export function OrchestratorPane({
         </Row>
         {"orchestratorPermission" in capabilities && (
           <Row
-            title="Permissions"
+            title={t("Permissions")}
             description={
               orchestrator.permission === "bypass"
-                ? "Full access: it and its children run without asking. This can't be turned back."
+                ? t(
+                    "Full access: it and its children run without asking. This can't be turned back.",
+                  )
                 : confirming
-                  ? "It and its children will run without asking. This can't be turned back."
-                  : "Auto: it and its children ask before risky commands."
+                  ? t("It and its children will run without asking. This can't be turned back.")
+                  : t("Auto: it and its children ask before risky commands.")
             }
           >
             {orchestrator.permission === "bypass" ? (
-              <span className="text-body text-muted-foreground">Full access</span>
+              <span className="text-body text-muted-foreground">{t("Full access")}</span>
             ) : (
               <>
                 {confirming ? (
@@ -256,7 +269,7 @@ export function OrchestratorPane({
                       className={dangerButton}
                       onClick={() => void save({ permission: "bypass" })}
                     >
-                      Give full access
+                      {t("Give full access")}
                     </button>
                     <button
                       type="button"
@@ -264,7 +277,7 @@ export function OrchestratorPane({
                       className={quietButton}
                       onClick={() => setConfirming(false)}
                     >
-                      Cancel
+                      {t("Cancel")}
                     </button>
                   </>
                 ) : (
@@ -273,7 +286,7 @@ export function OrchestratorPane({
                     className={outlineButton}
                     onClick={() => setConfirming(true)}
                   >
-                    Give full access
+                    {t("Give full access")}
                   </button>
                 )}
               </>
@@ -282,17 +295,15 @@ export function OrchestratorPane({
         )}
         {"orchestratorAutonomy" in capabilities && (
           <Row
-            title="Autonomy"
-            description={
-              autonomyLevels.find((a) => a.value === (orchestrator.autonomy ?? "routine"))?.detail
-            }
+            title={t("Autonomy")}
+            description={autonomyDetail(orchestrator.autonomy ?? "routine")}
           >
             <Picker
               field
-              label="Autonomy"
+              label={t("Autonomy")}
               value={orchestrator.autonomy ?? "routine"}
               onChange={(value) => void save({ autonomy: value as Orchestrator["autonomy"] })}
-              options={autonomyOptions}
+              options={autonomyOptions()}
               align="end"
               className="w-44"
               panelClassName="w-[24rem]"
@@ -303,13 +314,15 @@ export function OrchestratorPane({
       {"integrationBranch" in capabilities && !!orchestrator.repoPath && (
         <Section title="Git">
           <Row
-            title="Base branch"
-            description="Its integration branch is cut from this, and its pull request targets it. One already cut stays where it is."
+            title={t("Base branch")}
+            description={t(
+              "Its integration branch is cut from this, and its pull request targets it. One already cut stays where it is.",
+            )}
           >
             <Picker
               field
-              label="Base branch"
-              placeholder="Default branch"
+              label={t("Base branch")}
+              placeholder={t("Default branch")}
               value={base ?? ""}
               onChange={(baseBranch) => void save({ baseBranch })}
               options={[
@@ -318,14 +331,14 @@ export function OrchestratorPane({
                   : []),
                 ...(refs ?? []).map((r) => ({ value: r.name, label: r.name })),
               ]}
-              search={(refs?.length ?? 0) > 8 ? "Search branches" : undefined}
+              search={(refs?.length ?? 0) > 8 ? t("Search branches") : undefined}
               align="end"
               className="w-56"
               panelClassName="w-72"
             />
           </Row>
           {orchestrator.integrationBranch && (
-            <Row title="Integration branch" description="Where its children land.">
+            <Row title={t("Integration branch")} description={t("Where its children land.")}>
               <code className="font-mono text-meta text-muted-foreground">
                 {orchestrator.integrationBranch}
               </code>
@@ -333,11 +346,13 @@ export function OrchestratorPane({
           )}
           {"landing" in capabilities && (
             <Row
-              title="Land automatically"
-              description="Its children land without waiting for your approval. Those waiting keep waiting."
+              title={t("Land automatically")}
+              description={t(
+                "Its children land without waiting for your approval. Those waiting keep waiting.",
+              )}
             >
               <Switch
-                label="Land automatically"
+                label={t("Land automatically")}
                 checked={orchestrator.autoLand ?? false}
                 onChange={(autoLand) => void save({ autoLand })}
               />
@@ -346,15 +361,15 @@ export function OrchestratorPane({
         </Section>
       )}
       {"orchestratorPlacement" in capabilities && (
-        <Section title="Children">
+        <Section title={t("Children")}>
           <Row
-            title="Children at once"
-            description="How many run together. Over it, a new child waits in its queue."
+            title={t("Children at once")}
+            description={t("How many run together. Over it, a new child waits in its queue.")}
           >
             <input
               key={orchestrator.maxChildren}
               type="number"
-              aria-label="Children at once"
+              aria-label={t("Children at once")}
               min={1}
               max={100}
               defaultValue={orchestrator.maxChildren}
@@ -371,11 +386,13 @@ export function OrchestratorPane({
             />
           </Row>
           <Row
-            title="Allow API keys"
-            description="Off, a child never starts on an API key account, nor falls back to one at a usage limit."
+            title={t("Allow API keys")}
+            description={t(
+              "Off, a child never starts on an API key account, nor falls back to one at a usage limit.",
+            )}
           >
             <Switch
-              label="Allow API keys"
+              label={t("Allow API keys")}
               checked={orchestrator.allowApiKeys ?? false}
               onChange={(allowApiKeys) => void save({ allowApiKeys })}
             />
@@ -383,16 +400,17 @@ export function OrchestratorPane({
         </Section>
       )}
       {"checks" in capabilities && !!orchestrator.repoPath && (
-        <Section title="Checks">
+        <Section title={t("Checks")}>
           <div data-setting="checks" className="px-4 py-3">
             <span className="block text-meta text-muted-foreground">
-              Runs in the integration worktree after each landing, for up to 30 minutes. Empty means
-              a clean merge is enough.
+              {t(
+                "Runs in the integration worktree after each landing, for up to 30 minutes. Empty means a clean merge is enough.",
+              )}
               {orchestrator.proposedChecks &&
-                ` It proposed: ${orchestrator.proposedChecks}. It never runs until you set it here.`}
+                ` ${t("It proposed: {{checks}}. It never runs until you set it here.", { checks: orchestrator.proposedChecks })}`}
             </span>
             <textarea
-              aria-label="Checks command"
+              aria-label={t("Checks command")}
               rows={2}
               spellCheck={false}
               maxLength={4096}

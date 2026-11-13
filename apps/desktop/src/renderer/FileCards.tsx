@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Download, File } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
@@ -105,15 +106,15 @@ function FileCard({
   const what = isMedia(doc.kind)
     ? ""
     : reading !== undefined
-      ? `Reading ${Math.round(reading * 100)}%`
+      ? t("Reading {{percent}}%", { percent: Math.round(reading * 100) })
       : plain && file.size !== undefined
         ? sizeOf(file.size)
-        : kinds[doc.kind];
+        : t(kinds[doc.kind]);
   return (
     <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
       <button
         type="button"
-        aria-label={`Open ${doc.name}`}
+        aria-label={t("Open {{name}}", { name: doc.name })}
         title={doc.name}
         disabled={!onOpen}
         onClick={() => onOpen?.(doc)}
@@ -161,7 +162,7 @@ function FileCard({
         className="relative flex shrink-0 items-center gap-1.5 rounded-lg bg-selected px-3 py-1.5 text-body text-foreground hover:bg-hover disabled:opacity-50 [&_svg]:size-3.5"
       >
         <Download aria-hidden />
-        Download
+        {t("Download")}
       </button>
     </div>
   );
@@ -228,13 +229,16 @@ function MediaFrame({
   return (
     <div className="relative w-full overflow-hidden rounded-xl border border-border bg-black">
       {!url ? (
-        <div aria-label={`Loading ${doc.name}`} className="aspect-video w-full bg-selected" />
+        <div
+          aria-label={t("Loading {{name}}", { name: doc.name })}
+          className="aspect-video w-full bg-selected"
+        />
       ) : isVideo(doc.kind) ? (
         <video controls src={url} aria-label={doc.name} className="block max-h-[80vh] w-full" />
       ) : (
         <button
           type="button"
-          aria-label={`Open ${doc.name}`}
+          aria-label={t("Open {{name}}", { name: doc.name })}
           onClick={() => setShown(true)}
           className="block w-full cursor-zoom-in"
         >
@@ -251,8 +255,8 @@ function MediaFrame({
       )}
       <button
         type="button"
-        aria-label={`Download ${doc.name}`}
-        title="Download"
+        aria-label={t("Download {{name}}", { name: doc.name })}
+        title={t("Download")}
         disabled={disabled}
         onClick={onDownload}
         className="absolute top-2 right-2 grid size-8 place-items-center rounded-lg bg-black/60 text-white backdrop-blur hover:bg-black/80 disabled:opacity-50 [&_svg]:size-4"
@@ -267,7 +271,7 @@ function MediaFrame({
 export const downloadFailed = (name: string, error: unknown) =>
   notify({
     tone: "error",
-    title: `Couldn't download ${name}`,
+    title: t("Couldn't download {{name}}", { name }),
     body: error instanceof Error ? error.message : String(error),
   });
 
@@ -295,7 +299,7 @@ export function DownloadButton({ name, read }: { name: string; read: () => Promi
         className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-3.5"
       >
         <Download aria-hidden />
-        Download
+        {t("Download")}
       </button>
     </span>
   );

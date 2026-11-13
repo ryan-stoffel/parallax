@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { CircleAlert, Eye, MessageCircleQuestion } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -86,10 +87,18 @@ export function useSeconds(from: string) {
 
 /** "12s", "4m 05s", "1h 02m": how long a turn has gone. */
 export function duration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return t("{{seconds}}s", { seconds });
   const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m}m ${String(seconds % 60).padStart(2, "0")}s`;
-  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+  if (m < 60) {
+    return t("{{minutes}}m {{seconds}}s", {
+      minutes: m,
+      seconds: String(seconds % 60).padStart(2, "0"),
+    });
+  }
+  return t("{{hours}}h {{minutes}}m", {
+    hours: Math.floor(m / 60),
+    minutes: String(m % 60).padStart(2, "0"),
+  });
 }
 
 function Clock({ since }: { since: string }) {
@@ -132,20 +141,24 @@ export function AttentionBadge({
   );
   switch (attention) {
     case "working":
-      return badge("text-working", <WorkingMark />, "Working", since && <Clock since={since} />);
+      return badge("text-working", <WorkingMark />, t("Working"), since && <Clock since={since} />);
     case "monitoring":
     case "waiting":
       return badge(
         "text-working",
         <Eye aria-hidden />,
-        attention === "monitoring" ? "Monitoring" : "Waiting",
+        attention === "monitoring" ? t("Monitoring") : t("Waiting"),
       );
     case "needsYou":
-      return badge("text-warning", <MessageCircleQuestion aria-hidden />, "Needs you");
+      return badge("text-warning", <MessageCircleQuestion aria-hidden />, t("Needs you"));
     case "done":
-      return badge("text-added", <DoneMark animate={animate} />, "Done");
+      return badge(
+        "text-added",
+        <DoneMark animate={animate} />,
+        t("Done", { context: "thread status" }),
+      );
     case "failed":
-      return badge("text-danger", <CircleAlert aria-hidden />, "Failed");
+      return badge("text-danger", <CircleAlert aria-hidden />, t("Failed"));
     default:
       return null;
   }

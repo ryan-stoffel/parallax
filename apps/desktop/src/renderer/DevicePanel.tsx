@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowUpRight,
   Camera,
@@ -130,7 +131,7 @@ export function DevicePanel({
       setState({
         error:
           answer.error.code === -32601
-            ? "Update Parallax on this host to use devices."
+            ? t("Update Parallax on this host to use devices.")
             : answer.error.message,
       });
       return;
@@ -183,7 +184,7 @@ export function DevicePanel({
     else if (error)
       notify({
         tone: "error",
-        title: kind === "stop" ? "Couldn't power off the device" : "Couldn't make the device",
+        title: kind === "stop" ? t("Couldn't power off the device") : t("Couldn't make the device"),
         body: error,
       });
     await refresh();
@@ -232,9 +233,9 @@ export function DevicePanel({
     return (
       <Notice
         icon={<TriangleAlert className="text-warning" />}
-        title="Devices aren't available"
+        title={t("Devices aren't available")}
         detail={state.error}
-        action={<Pill onClick={() => void refresh()}>Try again</Pill>}
+        action={<Pill onClick={() => void refresh()}>{t("Try again")}</Pill>}
       />
     );
   }
@@ -353,17 +354,17 @@ function missingOf(platform: DevicePlatform, why: string) {
   if (platform === "ios") {
     return why.includes("macOS")
       ? {
-          title: "iPhone needs a Mac",
-          detail: "Pair a Mac running Parallax to use its simulators.",
+          title: t("iPhone needs a Mac"),
+          detail: t("Pair a Mac running Parallax to use its simulators."),
         }
       : {
-          title: "Get Xcode for iPhone",
+          title: t("Get Xcode for iPhone"),
           href: "https://apps.apple.com/app/xcode/id497799835",
-          link: "Get Xcode",
+          link: t("Get Xcode"),
         };
   }
   return {
-    title: why.startsWith("Android SDK was not found") ? "Get Android Studio for Android" : why,
+    title: why.startsWith("Android SDK was not found") ? t("Get Android Studio for Android") : why,
     href: "https://developer.android.com/studio",
     link: "Android Studio",
   };
@@ -416,7 +417,7 @@ function Gallery({
       ) : (
         <>
           <ul
-            aria-label="Devices"
+            aria-label={t("Devices")}
             className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2 p-4"
           >
             {state.devices.map((d) => {
@@ -425,7 +426,14 @@ function Gallery({
                 <li key={d.id}>
                   <Card
                     label={named(d)}
-                    title={`${nameOf(d)}, ${d.version}${d.booted ? ", running" : ""}`}
+                    title={
+                      d.booted
+                        ? t("{{name}}, {{version}}, running", {
+                            name: nameOf(d),
+                            version: d.version,
+                          })
+                        : `${nameOf(d)}, ${d.version}`
+                    }
                     running={d.booted}
                     busy={!!busy[d.id]}
                     turned={!!still}
@@ -448,7 +456,7 @@ function Gallery({
             {makes.map((p) => (
               <li key={`new:${p}`}>
                 <Card
-                  label={p === "ios" ? "New iPhone" : "New Pixel"}
+                  label={p === "ios" ? t("New iPhone") : t("New Pixel")}
                   busy={!!busy[`new:${p}`]}
                   onClick={() => onCreate(p)}
                 >
@@ -533,7 +541,7 @@ function Warning({ text }: { text: string }) {
       {command && (
         <button
           type="button"
-          title={`Copy ${command}`}
+          title={t("Copy {{command}}", { command })}
           onClick={() => {
             void navigator.clipboard.writeText(command);
             setCopied(true);
@@ -592,7 +600,7 @@ function Card({
       </div>
       <span className="flex max-w-full items-center gap-1.5 text-body font-medium">
         {running && (
-          <span aria-label="Running" className="size-1.5 shrink-0 rounded-full bg-added" />
+          <span aria-label={t("Running")} className="size-1.5 shrink-0 rounded-full bg-added" />
         )}
         <span className="truncate">{label}</span>
       </span>
@@ -654,7 +662,7 @@ function Art({
       alt=""
       draggable={false}
       src={l.image}
-      title={l.name === "power" && onPower ? "Lock" : undefined}
+      title={l.name === "power" && onPower ? t("Lock") : undefined}
       onClick={l.name === "power" ? onPower : undefined}
       style={
         {
@@ -1183,33 +1191,35 @@ function Viewer({
     overlay = message(
       failure,
       <Pill dark onClick={onRetry}>
-        Try again
+        {t("Try again")}
       </Pill>,
     );
   } else if (!hub.installed && !booting) {
     overlay = hub.installing ? (
-      <LoaderCircle aria-label="Enabling streaming" className="size-5 animate-spin" />
+      <LoaderCircle aria-label={t("Enabling streaming")} className="size-5 animate-spin" />
     ) : why ? (
       message(
         why,
         <Pill dark onClick={onSetUp}>
-          Try again
+          {t("Try again")}
         </Pill>,
       )
     ) : (
       <Pill
         dark
         onClick={onSetUp}
-        title="Installs Expo's device hub with npm into Parallax's tools folder on this host, once."
+        title={t(
+          "Installs Expo's device hub with npm into Parallax's tools folder on this host, once.",
+        )}
       >
-        Enable streaming
+        {t("Enable streaming")}
       </Pill>
     );
   } else if (booting || (streaming && status.status === "connecting")) {
-    overlay = <LoaderCircle aria-label="Connecting" className="size-5 animate-spin" />;
+    overlay = <LoaderCircle aria-label={t("Connecting")} className="size-5 animate-spin" />;
   } else if (status.status === "error") {
     overlay = message(
-      status.detail ?? "The stream stopped.",
+      status.detail ?? t("The stream stopped."),
       <Pill
         dark
         onClick={() => {
@@ -1217,7 +1227,7 @@ function Viewer({
           setAttempt((n) => n + 1);
         }}
       >
-        Reconnect
+        {t("Reconnect")}
       </Pill>,
     );
   }
@@ -1226,7 +1236,7 @@ function Viewer({
   const keyboard = {
     tabIndex: 0,
     role: "application",
-    "aria-label": `${nameOf(device)} screen`,
+    "aria-label": t("{{name}} screen", { name: nameOf(device) }),
     onKeyDown: (event: React.KeyboardEvent) => {
       // ⌘V and Ctrl+V paste; other shortcuts stay the app's.
       if (event.metaKey || (event.ctrlKey && event.key.toLowerCase() === "v")) return;
@@ -1341,7 +1351,7 @@ function Viewer({
       <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
         <div
           role="toolbar"
-          aria-label="Device controls"
+          aria-label={t("Device controls")}
           className="pointer-events-auto flex max-w-full items-center gap-0.5 rounded-full border border-border bg-surface/90 p-1 shadow-[0_10px_30px_-12px_rgb(0_0_0/0.35)] backdrop-blur-xl"
         >
           <button
@@ -1355,7 +1365,7 @@ function Viewer({
             <span className="max-w-32 truncate">{nameOf(device)}</span>
             <ChevronDown aria-hidden className="text-faint-foreground" />
           </button>
-          <Menu id={menuId} label="Devices" align="center" className="mb-2 w-56 p-1">
+          <Menu id={menuId} label={t("Devices")} align="center" className="mb-2 w-56 p-1">
             {devices.map((d) => (
               <button
                 key={d.id}
@@ -1370,10 +1380,10 @@ function Viewer({
                 <PlatformMark platform={d.platform} />
                 <span className="min-w-0 flex-1 truncate">{nameOf(d)}</span>
                 {d.id === device.id ? (
-                  <Check aria-label="Showing" />
+                  <Check aria-label={t("Showing")} />
                 ) : (
                   d.booted && (
-                    <span aria-label="Running" className="size-1.5 rounded-full bg-added" />
+                    <span aria-label={t("Running")} className="size-1.5 rounded-full bg-added" />
                   )
                 )}
               </button>
@@ -1389,7 +1399,7 @@ function Viewer({
               }}
             >
               <LayoutGrid aria-hidden />
-              All devices
+              {t("All devices")}
             </button>
             {!device.physical && (
               <button
@@ -1403,16 +1413,16 @@ function Viewer({
                 }}
               >
                 <Power aria-hidden />
-                Power off
+                {t("Power off")}
               </button>
             )}
           </Menu>
           <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
           {ios ? (
             <>
-              {control("Home", <House />, () => press("home"))}
-              {control("App switcher", <LayoutGrid />, () => press("appSwitcher"))}
-              {control("Rotate", <RotateCw />, () => {
+              {control(t("Home"), <House />, () => press("home"))}
+              {control(t("App switcher"), <LayoutGrid />, () => press("appSwitcher"))}
+              {control(t("Rotate"), <RotateCw />, () => {
                 const next =
                   ORIENTATIONS[(ORIENTATIONS.indexOf(facing) + 1) % ORIENTATIONS.length]!;
                 setFacing(next);
@@ -1422,8 +1432,8 @@ function Viewer({
                 <>
                   <button
                     type="button"
-                    aria-label="Fold"
-                    title="Fold"
+                    aria-label={t("Fold")}
+                    title={t("Fold")}
                     disabled={!ready}
                     popoverTarget={foldMenuId}
                     className="grid size-8 place-items-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-90 disabled:opacity-35 [&_svg]:size-4"
@@ -1432,16 +1442,16 @@ function Viewer({
                   </button>
                   <Menu
                     id={foldMenuId}
-                    label="Fold"
+                    label={t("Fold")}
                     align="center"
                     focus='[aria-checked="true"]'
                     className="mb-2 w-36 p-1"
                   >
                     {(
                       [
-                        ["closed", "Closed", fold.angle === 0],
-                        ["book", "Book", fold.angle > 0 && fold.angle < 180],
-                        ["open", "Open", fold.angle === 180],
+                        ["closed", t("Closed", { context: "fold" }), fold.angle === 0],
+                        ["book", t("Book"), fold.angle > 0 && fold.angle < 180],
+                        ["open", t("Open", { context: "fold" }), fold.angle === 180],
                       ] as const
                     ).map(([pose, label, current]) => (
                       <button
@@ -1465,28 +1475,28 @@ function Viewer({
             </>
           ) : (
             <>
-              {control("Back", <Triangle className="-rotate-90" />, () => press("back"))}
-              {control("Home", <Circle />, () => press("home"))}
-              {control("Recents", <LayoutGrid />, () => press("recents"))}
+              {control(t("Back"), <Triangle className="-rotate-90" />, () => press("back"))}
+              {control(t("Home"), <Circle />, () => press("home"))}
+              {control(t("Recents"), <LayoutGrid />, () => press("recents"))}
             </>
           )}
           {control(
-            copied ? "Copied screenshot" : "Copy screenshot",
+            copied ? t("Copied screenshot") : t("Copy screenshot"),
             copied ? <Check /> : <Camera />,
             () => void screenshot(),
             booting || !device.booted,
           )}
           {turned
-            ? control("Face front", <Rotate3d />, faceFront, false)
+            ? control(t("Face front"), <Rotate3d />, faceFront, false)
             : control(
-                "Turn in 3D",
+                t("Turn in 3D"),
                 <Rotate3d />,
                 () => turnTo({ pitch: 12, yaw: Math.round(orbit.yaw / 360) * 360 - 32 }),
                 false,
               )}
           {stopping && (
             <LoaderCircle
-              aria-label="Powering off"
+              aria-label={t("Powering off")}
               className="mx-2 size-4 animate-spin text-muted-foreground"
             />
           )}

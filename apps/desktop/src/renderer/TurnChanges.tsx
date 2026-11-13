@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, File, FileDiff, Folder } from "lucide-react";
 import { createContext, useContext, type ReactNode } from "react";
 
@@ -142,20 +143,23 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
 
   return (
     <section
-      aria-label={`Turn ${ordinal}'s changed files`}
+      aria-label={t("Turn {{ordinal}}'s changed files", { ordinal })}
       className="mt-1 overflow-hidden rounded-xl border border-border bg-surface"
     >
       <header className="flex h-10 items-center gap-2 border-b border-border pr-1.5 pl-3.5 text-body">
         <span className="font-medium text-foreground">
-          {files.length} changed {files.length === 1 ? "file" : "files"}
+          {t("{{count}} changed files", {
+            count: files.length,
+            defaultValue_one: "{{count}} changed file",
+          })}
         </span>
         <DiffStat added={added} removed={removed} />
         <span className="flex-1" />
         {dirs.length > 0 && (
           <button
             type="button"
-            aria-label={anyOpen ? "Fold all folders" : "Open all folders"}
-            title={anyOpen ? "Fold all folders" : "Open all folders"}
+            aria-label={anyOpen ? t("Fold all folders") : t("Open all folders")}
+            title={anyOpen ? t("Fold all folders") : t("Open all folders")}
             onClick={() => setFolds(Object.fromEntries(dirs.map((d) => [key(d), !anyOpen])))}
             className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
           >
@@ -169,7 +173,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
             className="flex h-7 items-center gap-1.5 rounded-md px-2 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
           >
             <FileDiff aria-hidden className="size-3.5" />
-            Open diff
+            {t("Open diff")}
           </button>
         )}
       </header>

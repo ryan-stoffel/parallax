@@ -5,6 +5,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Brain,
@@ -55,7 +56,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
   if (!state || !thread)
     return (
       <T muted style={{ padding: 24 }}>
-        This thread isn't loaded.
+        {t("This thread isn't loaded.")}
       </T>
     );
   const group = groupOf(state, thread);
@@ -86,6 +87,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
   const offer = offers.find((o) => o.id === run?.backend);
   const mark = <ProviderLogo kind={offer?.kind ?? run?.backend} size={17} />;
   const modelName = offer?.models.find((m) => m.id === run?.model)?.name ?? run?.model;
+  const effort = effortLevels.find((l) => l.value === run?.effort);
   const diff = run?.diff;
   const project = computer && threadProject(thread, computer.view, computers);
   return (
@@ -94,41 +96,49 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
       contentContainerStyle={{ padding: 16, gap: 22, paddingBottom: insets.bottom + 40 }}
     >
       <T medium style={{ fontSize: 20, lineHeight: 26, fontWeight: "600", paddingHorizontal: 4 }}>
-        {state.titles[runId] ?? "Thread"}
+        {state.titles[runId] ?? t("Thread")}
       </T>
-      <Section title="Workspace">
-        {row(<DeviceIcon name={computer?.machine.name ?? ""} size={17} color={c.mutedForeground} />, "Computer", computer?.machine.name)}
-        {row(FolderGit2, "Repository", repo?.name ?? "No repo")}
+      <Section title={t("Workspace")}>
+        {row(<DeviceIcon name={computer?.machine.name ?? ""} size={17} color={c.mutedForeground} />, t("Computer"), computer?.machine.name)}
+        {row(FolderGit2, t("Repository"), repo?.name ?? t("No repo"))}
         {project && (
           <Row
             icon={project.current ? undefined : MessagesSquare}
             leading={project.current && <RepoIcon repo={project.current} />}
-            title="Project"
-            detail={project.current?.name ?? "Add to Project"}
+            title={t("Project")}
+            detail={project.current?.name ?? t("Add to Project")}
             chevron={!!project.choose}
             onPress={project.choose}
           />
         )}
-        {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? "Worktree" : "Folder", run?.worktreePath ?? repo?.path, false, true)}
-        {row(GitBranch, "Branch", run?.branch, true)}
+        {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? t("Worktree") : t("Folder"), run?.worktreePath ?? repo?.path, false, true)}
+        {row(GitBranch, t("Branch"), run?.branch, true)}
       </Section>
-      <Section title="Agent">
-        {row(mark, "Provider", offer?.name ?? run?.backend)}
-        {row(mark, "Model", modelName ?? "Default model")}
-        {row(Brain, "Reasoning", effortLevels.find((l) => l.value === run?.effort)?.name)}
-        {row(run?.permission ? accessIcons[run.permission] : LockOpen, "Access", run?.permission && accessLevels[run.permission].label)}
-        {row(Hash, "Status", run && statusLabel(run.status), true)}
+      <Section title={t("Agent")}>
+        {row(mark, t("Provider"), offer?.name ?? run?.backend)}
+        {row(mark, t("Model"), modelName ?? t("Default model"))}
+        {row(Brain, t("Reasoning"), effort && t(effort.name))}
+        {row(run?.permission ? accessIcons[run.permission] : LockOpen, t("Access"), run?.permission && t(accessLevels[run.permission].label))}
+        {row(Hash, t("Status"), run && statusLabel(run.status), true)}
       </Section>
       {(diff?.files || run?.pullRequests?.length) && (
-        <Section title="Changes">
+        <Section title={t("Changes")}>
           {diff?.files
-            ? row(FileDiff, "Changes", `${diff.files} files · +${diff.insertions} −${diff.deletions}`)
+            ? row(
+                FileDiff,
+                t("Changes"),
+                t("{{count}} files · +{{insertions}} −{{deletions}}", {
+                  count: diff.files,
+                  insertions: diff.insertions,
+                  deletions: diff.deletions,
+                }),
+              )
             : null}
           {(run?.pullRequests ?? []).map((url, i, all) => (
             <Row
               key={url}
               icon={GitPullRequest}
-              title={`Pull request #${url.split("/").pop()}`}
+              title={t("Pull request #{{number}}", { number: url.split("/").pop() })}
               detail={url.replace("https://github.com/", "")}
               chevron
               last={i === all.length - 1}
@@ -137,13 +147,13 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
           ))}
         </Section>
       )}
-      <Section title="History">
-        {row(CalendarPlus, "Started", when(thread.createdAt))}
-        {row(CalendarClock, "Last prompt", when(thread.lastPromptAt))}
-        {row(Hash, "Thread id", runId, true)}
+      <Section title={t("History")}>
+        {row(CalendarPlus, t("Started"), when(thread.createdAt))}
+        {row(CalendarClock, t("Last prompt"), when(thread.lastPromptAt))}
+        {row(Hash, t("Thread id"), runId, true)}
       </Section>
       <T faint style={{ fontSize: 12, paddingHorizontal: 16 }}>
-        Tap a row to copy it.
+        {t("Tap a row to copy it.")}
       </T>
     </ScrollView>
   );

@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import type { RpcError } from "../preload/bridge";
 
 /**
@@ -9,13 +11,15 @@ import type { RpcError } from "../preload/bridge";
 export function describeError(error: RpcError): string {
   switch (error.data?.kind) {
     case "noDefaultAccount":
-      return "Choose an account to run threads on this host.";
+      return t("Choose an account to run threads on this host.");
     case "accountNotFound":
-      return "The account for this thread isn't on this host anymore.";
+      return t("The account for this thread isn't on this host anymore.");
     case "keychainUnavailable":
-      return "Parallax couldn't read the account's API key. Unlock your keychain, then try again.";
+      return t(
+        "Parallax couldn't read the account's API key. Unlock your keychain, then try again.",
+      );
     case "repoNotFound":
-      return "That repository isn't in Parallax anymore. Choose another one.";
+      return t("That repository isn't in Parallax anymore. Choose another one.");
     default:
       return error.message;
   }
@@ -29,22 +33,22 @@ export function githubProblem(error?: RpcError): string | undefined {
   if (error?.data?.kind !== "ghUnavailable") return undefined;
   // ponytail: reads plxd's wording; give the error's data a reason if that wording changes.
   return error.message.includes("isn't installed")
-    ? "GitHub isn't installed on this host."
-    : "GitHub isn't signed in on this host.";
+    ? t("GitHub isn't installed on this host.")
+    : t("GitHub isn't signed in on this host.");
 }
 
 /** plxd's refusal of `thread/fork` (0050), for people. `running` is whether the thread runs now. */
 export function forkError(error: RpcError, running: boolean): string {
   switch (error.data?.kind) {
     case "threadNotFound":
-      return "This thread isn't on this host anymore.";
+      return t("This thread isn't on this host anymore.");
     case "idConflict":
-      return "That fork's id was already taken. Try again.";
+      return t("That fork's id was already taken. Try again.");
   }
   // invalidParams: a turn that hasn't ended, or one a fork copied from the thread it forked.
   if (error.code === -32602)
     return running
-      ? "This turn is still running. Fork it once it finishes."
-      : "This turn was copied from another thread. Fork it from that thread.";
+      ? t("This turn is still running. Fork it once it finishes.")
+      : t("This turn was copied from another thread. Fork it from that thread.");
   return describeError(error);
 }

@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 /**
  * The OS's locale, for every date, time, number, and name sort the app shows in the user's own
  * format. The app ships only Chromium's en-US locale (PLX-613), which makes Chromium's default
@@ -17,9 +19,9 @@ export function dayLabel(
 ): string {
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
-  if (at >= today.getTime()) return "Today";
+  if (at >= today.getTime()) return t("Today");
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  if (at >= yesterday.getTime()) return "Yesterday";
+  if (at >= yesterday.getTime()) return t("Yesterday");
   return new Date(at).toLocaleDateString(locale(), date);
 }

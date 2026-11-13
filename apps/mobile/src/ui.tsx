@@ -3,6 +3,7 @@
 // marks, grouped lists as iOS Settings draws them, and Markdown, drawn natively by Enriched
 // Markdown with its code, tables, LaTeX, links with their site's icon, and images that open in the
 // lightbox, as the desktop's transcript renders it.
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Bot,
@@ -442,10 +443,10 @@ function DoneMark() {
 
 /** "12s", "4m 05s", "1h 02m": how long a turn has gone, as the desktop says it. */
 export function duration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return t("{{seconds}}s", { seconds });
   const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m}m ${String(seconds % 60).padStart(2, "0")}s`;
-  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+  if (m < 60) return t("{{minutes}}m {{seconds}}s", { minutes: m, seconds: String(seconds % 60).padStart(2, "0") });
+  return t("{{hours}}h {{minutes}}m", { hours: Math.floor(m / 60), minutes: String(m % 60).padStart(2, "0") });
 }
 
 /** Whole seconds since `from`, ticking every second. */
@@ -459,7 +460,7 @@ export function useSeconds(from?: string) {
 }
 
 function WorkingFor({ since }: { since: string }) {
-  return <>Working {duration(useSeconds(since))}</>;
+  return <>{t("Working {{duration}}", { duration: duration(useSeconds(since)) })}</>;
 }
 
 /**
@@ -476,27 +477,27 @@ export function AttentionBadge({ attention, since }: { attention: Attention; sin
   );
   switch (attention) {
     case "working":
-      return look(c.accent, <WorkingMark />, since ? <WorkingFor since={since} /> : "Working");
+      return look(c.accent, <WorkingMark />, since ? <WorkingFor since={since} /> : t("Working"));
     case "monitoring":
     case "waiting":
       return look(
         c.accent,
         <Icon icon={Eye} size={14} color={c.accent} />,
-        attention === "monitoring" ? "Monitoring" : "Waiting",
+        attention === "monitoring" ? t("Monitoring") : t("Waiting"),
       );
     case "needsYou":
       return look(
         c.warning,
         <Icon icon={MessageCircleQuestion} size={14} color={c.warning} />,
-        "Needs you",
+        t("Needs you"),
       );
     case "done":
-      return look(c.added, <DoneMark />, "Done");
+      return look(c.added, <DoneMark />, t("Done"));
     case "failed":
       return look(
         c.danger,
         <Icon icon={CircleAlert} size={14} color={c.danger} />,
-        "Failed",
+        t("Failed"),
       );
     default:
       return null;

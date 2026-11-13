@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useId, useRef } from "react";
 
 import type { GoogleAccount } from "../preload/bridge";
@@ -55,13 +56,13 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
   return (
     <>
       <IconButton
-        label={signedIn ? "Google account" : "Profile"}
+        label={signedIn ? t("Google account") : t("Profile")}
         popoverTarget={id}
         aria-haspopup="menu"
       >
         {signedIn ? <Avatar of={signedIn} className="size-5 text-meta" /> : <AccountCircle />}
       </IconButton>
-      <Menu ref={menu} id={id} label="Profile" align="end" className="w-72 p-1.5">
+      <Menu ref={menu} id={id} label={t("Profile")} align="end" className="w-72 p-1.5">
         <div className="mb-1 flex flex-col items-center gap-1 rounded-lg bg-selected px-3 pt-5 pb-4 text-center">
           {signedIn ? (
             <Avatar of={signedIn} className="mb-1.5 size-14 text-display" />
@@ -71,35 +72,35 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
             </span>
           )}
           <p className="max-w-full truncate text-reading font-medium">
-            {signedIn ? signedIn.name : "You"}
+            {signedIn ? signedIn.name : t("You")}
           </p>
           <p className="max-w-full truncate text-body text-muted-foreground">
-            {signedIn ? signedIn.email : "Not signed in to Google"}
+            {signedIn ? signedIn.email : t("Not signed in to Google")}
           </p>
         </div>
         {signedIn ? (
           <>
             <ToolbarMenuRow
               icon={<ManageAccounts aria-hidden />}
-              label="Manage your Google Account"
+              label={t("Manage your Google Account")}
               onClick={go(google.manage)}
             />
             <hr className={toolbarMenuDivider} />
             <ToolbarMenuRow
               icon={<PersonAdd aria-hidden />}
-              label="Add another account"
+              label={t("Add another account")}
               onClick={go(google.add)}
             />
             <ToolbarMenuRow
               icon={<Logout aria-hidden />}
-              label="Sign out of Google"
+              label={t("Sign out of Google")}
               onClick={go(google.signOut)}
             />
           </>
         ) : (
           <ToolbarMenuRow
             icon={<PersonAdd aria-hidden />}
-            label="Sign in to Google"
+            label={t("Sign in to Google")}
             onClick={go(google.signIn)}
           />
         )}

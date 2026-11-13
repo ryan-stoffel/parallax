@@ -1,10 +1,12 @@
+import { t } from "i18next";
+
 import type { VoiceCapture } from "./voiceSession";
 import workletUrl from "./voiceCapture.worklet.js?url&no-inline";
 
 /** Capture and meter the same microphone stream. Nothing is sent off the device. */
 export async function captureVoice(signal: AbortSignal): Promise<VoiceCapture> {
   if (!navigator.mediaDevices?.getUserMedia || !globalThis.AudioContext)
-    throw new Error("Voice input needs a microphone and a secure app or browser connection.");
+    throw new Error(t("Voice input needs a microphone and a secure app or browser connection."));
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     video: false,
@@ -40,7 +42,8 @@ export async function captureVoice(signal: AbortSignal): Promise<VoiceCapture> {
   try {
     signal.throwIfAborted();
     context = new AudioContext({ sampleRate: 16000 });
-    if (context.sampleRate !== 16000) throw new Error("The microphone could not use 16 kHz audio.");
+    if (context.sampleRate !== 16000)
+      throw new Error(t("The microphone could not use 16 kHz audio."));
     await context.audioWorklet.addModule(workletUrl);
     signal.throwIfAborted();
     const source = context.createMediaStreamSource(stream);
@@ -55,13 +58,13 @@ export async function captureVoice(signal: AbortSignal): Promise<VoiceCapture> {
       wake?.();
     };
     node.onprocessorerror = () => {
-      failure = new Error("The microphone stopped responding. Try voice input again.");
+      failure = new Error(t("The microphone stopped responding. Try voice input again."));
       end();
     };
     for (const track of stream.getAudioTracks()) {
       track.onended = () => {
         if (closed) return;
-        failure = new Error("The microphone disconnected.");
+        failure = new Error(t("The microphone disconnected."));
         end();
       };
     }
@@ -93,7 +96,7 @@ export async function captureVoice(signal: AbortSignal): Promise<VoiceCapture> {
         stream.getTracks().forEach((track) => track.stop());
         node!.port.postMessage("finish");
         timer = setTimeout(() => {
-          failure = new Error("The microphone could not finish recording. Try again.");
+          failure = new Error(t("The microphone could not finish recording. Try again."));
           end();
         }, 1500);
       },

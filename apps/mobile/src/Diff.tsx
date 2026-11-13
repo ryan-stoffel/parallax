@@ -2,6 +2,7 @@
 // removed ones tinted in the theme's colors with their sign, numbered when the diff says where they
 // are, scrolling sideways; and a turn's changed files card (the desktop's TurnChanges.tsx) under its
 // last reply, each file opening to its lines in the turn's diff (`orchestration/getTurnDiff`).
+import { t } from "i18next";
 import { ChevronRight, FileText } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
@@ -43,7 +44,7 @@ export function DiffView({ rows }: { rows: readonly DiffViewRow[] }) {
               return (
                 <View
                   key={i}
-                  accessibilityLabel={`${r.kind === "add" ? "Added: " : r.kind === "del" ? "Removed: " : ""}${r.text}`}
+                  accessibilityLabel={r.kind === "add" ? t("Added: {{text}}", { text: r.text }) : r.kind === "del" ? t("Removed: {{text}}", { text: r.text }) : r.text}
                   style={[styles.row, look.row]}
                 >
                   {numbered && <T style={{ ...styles.code, ...styles.number, color: c.faintForeground }}>{r.line ?? ""}</T>}
@@ -58,7 +59,7 @@ export function DiffView({ rows }: { rows: readonly DiffViewRow[] }) {
       {rows.length > shownLines && (
         <Pressable accessibilityRole="button" hitSlop={6} onPress={() => setAll(!all)}>
           <T muted style={{ fontSize: 12.5 }}>
-            {all ? "Show less" : `Show all ${rows.length} lines`}
+            {all ? t("Show less") : t("Show all {{count}} lines", { count: rows.length, defaultValue_one: "Show all {{count}} line" })}
           </T>
         </Pressable>
       )}
@@ -102,14 +103,14 @@ function FileDiff({ hostId, threadId, ordinal, path }: { hostId: string; threadI
     };
   }, [hostId, threadId, ordinal]);
   const rows = useMemo(() => (typeof diff === "string" ? fileRows(diff, path) : []), [diff, path]);
-  if (diff === undefined) return <T faint style={{ fontSize: 12.5, paddingVertical: 4 }}>Loading…</T>;
+  if (diff === undefined) return <T faint style={{ fontSize: 12.5, paddingVertical: 4 }}>{t("Loading…")}</T>;
   if (typeof diff !== "string")
     return (
       <T alert style={{ fontSize: 12.5, color: c.danger }}>
         {diff.error}
       </T>
     );
-  if (rows.length === 0) return <T faint style={{ fontSize: 12.5 }}>No lines to show, as for a binary file.</T>;
+  if (rows.length === 0) return <T faint style={{ fontSize: 12.5 }}>{t("No lines to show, as for a binary file.")}</T>;
   return <DiffView rows={rows} />;
 }
 
@@ -153,7 +154,7 @@ export function TurnChanges({
         style={styles.header}
       >
         <T medium style={{ fontSize: 14 }}>
-          {files.length} changed {files.length === 1 ? "file" : "files"}
+          {t("{{count}} changed files", { count: files.length, defaultValue_one: "{{count}} changed file" })}
         </T>
         <DiffStats additions={added} deletions={removed} />
         <View style={{ flex: 1 }} />

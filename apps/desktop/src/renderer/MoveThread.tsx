@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { CircleCheck, CircleX, MonitorUp, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -78,22 +79,27 @@ export function MoveThread({
     const where = target.name;
     const doing = (what: string) => show({ kind: "moving", where, what });
     try {
-      doing("Reading the thread");
+      doing(t("Reading the thread"));
       const thread = await call(hostId, "thread/export", { runId });
       let place: { repo: string; base: string } | undefined;
       if (repo && !repo.scratch) {
         const status = await call(hostId, "agent/gitStatus", { runId });
         if (status.changes)
-          throw new Error("It has uncommitted changes. Commit or discard them, then move it.");
-        if (!status.branch) throw new Error("Its folder has no branch checked out to move.");
+          throw new Error(t("It has uncommitted changes. Commit or discard them, then move it."));
+        if (!status.branch) throw new Error(t("Its folder has no branch checked out to move."));
         const { url } = await call(hostId, "repo/remote", { repo: repo.id });
-        if (!url) throw new Error(`${repo.name} has no origin to move through.`);
+        if (!url)
+          throw new Error(t("{{repo}} has no origin to move through.", { repo: repo.name }));
         // Found before anything is pushed, so a refusal leaves nothing behind.
-        doing(`Finding the repository on ${where}`);
+        doing(t("Finding the repository on {{computer}}", { computer: where }));
         const found = (await call(target.id, "repo/match", { origin: url })).repo;
         if (!found)
-          throw new Error(`${where} doesn't have this repository. Clone it there, then move it.`);
-        doing("Pushing its branch");
+          throw new Error(
+            t("{{computer}} doesn't have this repository. Clone it there, then move it.", {
+              computer: where,
+            }),
+          );
+        doing(t("Pushing its branch"));
         await call(hostId, "agent/push", { runId });
         // The commit it pushed, to check the other computer fetched it and not an older one.
         const { commit } = await call(hostId, "repo/fetchBase", {
@@ -104,13 +110,16 @@ export function MoveThread({
         const fetched = await call(target.id, "repo/fetchBase", { repo: found.id, base });
         if (fetched.commit !== commit)
           throw new Error(
-            `${where} couldn't fetch ${status.branch}. Check it's online, then try again.`,
+            t("{{computer}} couldn't fetch {{branch}}. Check it's online, then try again.", {
+              computer: where,
+              branch: status.branch,
+            }),
           );
         place = { repo: found.id, base };
       }
-      doing("Moving the conversation");
+      doing(t("Moving the conversation"));
       const moved = await call(target.id, "thread/receive", { thread, ...place });
-      doing("Archiving it here");
+      doing(t("Archiving it here"));
       await call(hostId, "thread/archive", { runId, archived: true });
       show({ kind: "done", hostId: target.id, threadId: moved.thread.id, where });
     } catch (error) {
@@ -119,10 +128,19 @@ export function MoveThread({
   };
 
   const heading: Record<Step["kind"], [string, string]> = {
-    pick: ["Move to another computer", `${title} continues on the computer you pick.`],
-    moving: [step.kind === "moving" ? `Moving to ${step.where}` : "", "Then it continues there."],
-    done: [step.kind === "done" ? `Moved to ${step.where}` : "", "It's archived here."],
-    failed: ["Couldn't move it", "Try again picks up where it stopped."],
+    pick: [
+      t("Move to another computer"),
+      t("{{title}} continues on the computer you pick.", { title }),
+    ],
+    moving: [
+      step.kind === "moving" ? t("Moving to {{computer}}", { computer: step.where }) : "",
+      t("Then it continues there."),
+    ],
+    done: [
+      step.kind === "done" ? t("Moved to {{computer}}", { computer: step.where }) : "",
+      t("It's archived here."),
+    ],
+    failed: [t("Couldn't move it"), t("Try again picks up where it stopped.")],
   };
   const [heading1, line] = heading[step.kind];
 
@@ -146,7 +164,7 @@ export function MoveThread({
             </h2>
             <p className="mt-0.5 truncate text-body text-muted-foreground">{line}</p>
           </div>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label={t("Close")} onClick={close}>
             <X aria-hidden />
           </IconButton>
         </header>
@@ -154,7 +172,7 @@ export function MoveThread({
         {step.kind === "pick" &&
           (hosts.length ? (
             <ul
-              aria-label="Your computers"
+              aria-label={t("Your computers")}
               className="mx-6 mb-5 min-h-0 overflow-y-auto rounded-xl border border-border bg-surface p-1"
             >
               {hosts.map((host, i) => {
@@ -163,11 +181,11 @@ export function MoveThread({
                 const status =
                   state?.status === "connected"
                     ? ready
-                      ? "Connected"
-                      : "Update Parallax there to move threads to it"
+                      ? t("Connected")
+                      : t("Update Parallax there to move threads to it")
                     : state
                       ? statusLabel(state)
-                      : "Connecting…";
+                      : t("Connecting…");
                 return (
                   <li key={host.id} className="flex items-center gap-3 rounded-lg px-2.5 py-2">
                     <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background">
@@ -188,7 +206,7 @@ export function MoveThread({
                       className={primaryButton}
                       onClick={() => void move(host)}
                     >
-                      Move here
+                      {t("Move here")}
                     </button>
                   </li>
                 );
@@ -196,7 +214,7 @@ export function MoveThread({
             </ul>
           ) : (
             <p className="mx-6 mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
-              No other computers yet. Add one in Settings &gt; Computers.
+              {t("No other computers yet. Add one in Settings > Computers.")}
             </p>
           ))}
 
@@ -212,7 +230,7 @@ export function MoveThread({
                 close();
               }}
             >
-              Open thread
+              {t("Open thread")}
             </button>
           </Footer>
         )}
@@ -228,14 +246,14 @@ export function MoveThread({
             </p>
             <Footer>
               <button type="button" className={quietButton} onClick={close}>
-                Close
+                {t("Close")}
               </button>
               <button
                 type="button"
                 className={primaryButton}
                 onClick={() => show({ kind: "pick" })}
               >
-                Try again
+                {t("Try again")}
               </button>
             </Footer>
           </>

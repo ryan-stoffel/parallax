@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ChartNoAxesColumn,
   CircleUser,
@@ -50,7 +51,7 @@ export function ProfileButton({
   const latest = useRef(0);
   const signIn = async (create: boolean) => {
     const n = ++latest.current;
-    setNote("Finish signing in in your browser.");
+    setNote(t("Finish signing in in your browser."));
     const answer = await window.parallax.signIn(create);
     if (n === latest.current) setNote(answer);
   };
@@ -67,10 +68,10 @@ export function ProfileButton({
 
   return (
     <>
-      <IconButton label={profile?.name || "Profile"} popoverTarget={id} aria-haspopup="menu">
+      <IconButton label={profile?.name || t("Profile")} popoverTarget={id} aria-haspopup="menu">
         {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
       </IconButton>
-      <Menu ref={menu} id={id} label="Account" className="w-64 p-1">
+      <Menu ref={menu} id={id} label={t("Account")} className="w-64 p-1">
         {profile !== undefined && (
           <>
             <div className="flex items-center gap-2.5 px-2 py-2">
@@ -83,11 +84,11 @@ export function ProfileButton({
               )}
               <div className="min-w-0">
                 <p className="truncate text-body font-medium">
-                  {profile ? profile.name || profile.email : "Sign in to Parallax"}
+                  {profile ? profile.name || profile.email : t("Sign in to Parallax")}
                 </p>
                 {(profile?.name || !profile) && (
                   <p role="status" className="truncate text-meta text-muted-foreground">
-                    {profile ? profile.email : (note ?? "With GitHub, Google, Apple, or email.")}
+                    {profile ? profile.email : (note ?? t("With GitHub, Google, Apple, or email."))}
                   </p>
                 )}
               </div>
@@ -99,12 +100,12 @@ export function ProfileButton({
           <>
             {item(
               GitPullRequest,
-              "Pull requests",
+              t("Pull requests"),
               closing(() => onOpenPage("pullRequests")),
             )}
             {item(
               ChartNoAxesColumn,
-              "Usage",
+              t("Usage"),
               closing(() => onOpenPage("usage")),
             )}
           </>
@@ -116,7 +117,7 @@ export function ProfileButton({
           className={menuItem}
         >
           <Settings aria-hidden className="text-muted-foreground" />
-          Settings
+          {t("Settings")}
           {settingsKeys && (
             <span className="ml-auto text-meta text-faint-foreground">{settingsKeys}</span>
           )}
@@ -127,19 +128,19 @@ export function ProfileButton({
               <>
                 {item(
                   UserCog,
-                  "Manage account",
+                  t("Manage account"),
                   closing(() => setManaging(true)),
                 )}
                 {item(
                   LogOut,
-                  "Sign out",
+                  t("Sign out"),
                   closing(() => void window.parallax.signOut()),
                 )}
               </>
             ) : (
               <>
-                {item(LogIn, "Sign in", () => void signIn(false))}
-                {item(UserPlus, "Create an account", () => void signIn(true))}
+                {item(LogIn, t("Sign in"), () => void signIn(false))}
+                {item(UserPlus, t("Create an account"), () => void signIn(true))}
               </>
             )}
           </>

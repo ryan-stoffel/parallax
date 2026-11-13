@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ClipboardList, FolderGit2, FolderOpen } from "lucide-react";
 import {
   useId,
@@ -108,7 +109,7 @@ export function useThreadDetails(key: string, share = 1) {
 export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
     <IconButton
-      label="Thread details"
+      label={t("Thread details")}
       aria-pressed={open}
       aria-controls={THREAD_DETAILS_ID}
       onClick={onToggle}
@@ -182,7 +183,7 @@ export function ThreadDetails({
     <IconButton
       ref={customize}
       size="sm"
-      label="Customize Thread details"
+      label={t("Customize Thread details")}
       popoverTarget={menuId}
       aria-haspopup="menu"
     >
@@ -192,13 +193,13 @@ export function ThreadDetails({
   // This computer's or the thread's computer's folder, apps, and actions.
   const workspace = (
     <section
-      aria-label="Workspace"
+      aria-label={t("Workspace")}
       hidden={!WORKSPACE_ITEMS.some(shows)}
       className={`${detailsCard} p-1`}
     >
       <div
         hidden={!shows("environment")}
-        title={folder ?? "No folder yet"}
+        title={folder ?? t("No folder yet")}
         className="group flex items-center gap-0.5 py-0.5 pr-1 pl-2 text-body"
       >
         <span aria-hidden className="shrink-0 text-muted-foreground">
@@ -214,7 +215,7 @@ export function ThreadDetails({
           <IconButton
             reveal
             size="sm"
-            label={copied ? "Copied" : "Copy folder path"}
+            label={copied ? t("Copied") : t("Copy folder path")}
             onClick={copyFolder}
           >
             {copied ? <icons.done /> : <icons.copy />}
@@ -240,7 +241,7 @@ export function ThreadDetails({
   return (
     <aside
       id={THREAD_DETAILS_ID}
-      aria-label="Thread details"
+      aria-label={t("Thread details")}
       hidden={mode === "hidden"}
       data-mode={mode}
       // Inside the thread's card, below its tabs' row. Docked, it takes room beside the thread;
@@ -265,7 +266,7 @@ export function ThreadDetails({
         {remoteControl
           ? project &&
             shows("project") && (
-              <section aria-label="Project" className={`${detailsCard} p-1`}>
+              <section aria-label={t("Project")} className={`${detailsCard} p-1`}>
                 <ThreadProjectMenu {...project} />
               </section>
             )
@@ -282,7 +283,7 @@ export function ThreadDetails({
         {prs && linked > 0 && (
           <DetailsCard
             id="prs"
-            title="Pull requests"
+            title={t("Pull requests")}
             summary={linked > 1 ? linked : undefined}
             hidden={!shows("prs")}
           >
@@ -292,7 +293,7 @@ export function ThreadDetails({
         {usage?.summary && (
           <DetailsCard
             id="context"
-            title="Context"
+            title={t("Context")}
             summary={usage.context}
             hidden={!shows("context")}
           >
@@ -311,13 +312,13 @@ export function ThreadDetails({
             {customizeButton}
           </div>
         )}
-        <Menu id={menuId} label="Show in Thread details" align="end" className="w-60 p-1">
-          <GroupHeading>Show in Thread details</GroupHeading>
+        <Menu id={menuId} label={t("Show in Thread details")} align="end" className="w-60 p-1">
+          <GroupHeading>{t("Show in Thread details")}</GroupHeading>
           {THREAD_DETAILS_ITEMS.map((item) => (
             <MenuOption
               key={item.id}
               role="menuitemcheckbox"
-              option={{ value: item.id, label: item.label }}
+              option={{ value: item.id, label: t(item.label) }}
               checked={shows(item.id)}
               onClick={() => toggleItem(item.id)}
             />
@@ -330,7 +331,7 @@ export function ThreadDetails({
             onClick={resetThreadDetails}
             className={`${menuItem} disabled:opacity-50 disabled:hover:bg-transparent`}
           >
-            Reset to default
+            {t("Reset to default")}
           </button>
         </Menu>
       </div>

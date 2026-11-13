@@ -8,6 +8,7 @@ import {
   MessagesSquare,
   Search,
 } from "lucide-react";
+import { t } from "i18next";
 import {
   useEffect,
   useId,
@@ -21,6 +22,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
+import { msg } from "../i18n";
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
 import type { Orchestrator, Repo } from "../protocol/generated/protocol";
 import { cloneOn, type CloneAsk } from "./clone";
@@ -107,7 +109,9 @@ export function AddDialog({
   // Back on Create orchestrator, from its own Workspace's step or on opening there: its name.
   useEffect(() => {
     if (step.kind === "orchestrator")
-      dialog.current?.querySelector<HTMLInputElement>('input[aria-label="Name"]')?.focus();
+      dialog.current
+        ?.querySelector<HTMLInputElement>(`input[aria-label=${JSON.stringify(t("Name"))}]`)
+        ?.focus();
   }, [step.kind]);
 
   const push = (next: Step) => setStack((all) => [...all, next]);
@@ -124,7 +128,7 @@ export function AddDialog({
   return (
     <dialog
       ref={dialog}
-      aria-label="New project"
+      aria-label={t("New project")}
       onClose={() => {
         setStack([{ kind: "menu" }]);
         setWorkspace(undefined);
@@ -237,7 +241,7 @@ export function CloneDialog({
   return (
     <dialog
       ref={dialog}
-      aria-label={`Clone ${ask.name} on ${hostName}`}
+      aria-label={t("Clone {{name}} on {{host}}", { name: ask.name, host: hostName })}
       onClose={() => finish()}
       onMouseDown={closeOnBackdrop}
       className={palette}
@@ -269,26 +273,26 @@ const menu: {
 }[] = [
   {
     kind: "project",
-    name: "New Project",
-    detail: "Threads that share your instructions and files, with no repository",
+    name: msg("New Project"),
+    detail: msg("Threads that share your instructions and files, with no repository"),
     icon: <MessagesSquare />,
   },
   {
     kind: "create",
-    name: "New repository",
-    detail: "Start an empty repository in ~/.parallax/projects",
+    name: msg("New repository"),
+    detail: msg("Start an empty repository in ~/.parallax/projects"),
     icon: <FolderGit2 />,
   },
   {
     kind: "browse",
-    name: "Local folder",
-    detail: "Add a repository that's already on this computer",
+    name: msg("Local folder"),
+    detail: msg("Add a repository that's already on this computer"),
     icon: <FolderOpen />,
   },
   {
     kind: "clone",
-    name: "Clone from GitHub",
-    detail: "Clone a repository by its owner/name or link",
+    name: msg("Clone from GitHub"),
+    detail: msg("Clone a repository by its owner/name or link"),
     icon: <GitHubLogo />,
   },
 ];
@@ -312,11 +316,14 @@ function MenuStep({
   const q = query.trim().toLowerCase();
   const shown = menu
     .filter((m) => projects || m.kind !== "project")
-    .map((m) =>
-      computers && m.kind === "browse"
-        ? { ...m, detail: "Add a repository that's already on one of your computers" }
-        : m,
-    )
+    .map((m) => ({
+      ...m,
+      name: t(m.name),
+      detail:
+        computers && m.kind === "browse"
+          ? t("Add a repository that's already on one of your computers")
+          : t(m.detail),
+    }))
     .filter((m) => `${m.name} ${m.detail}`.toLowerCase().includes(q));
   const list = useList(shown.length, active, setActive);
   return (
@@ -326,8 +333,8 @@ function MenuStep({
         <input
           ref={autofocus}
           {...list.input}
-          aria-label="Search"
-          placeholder="Search…"
+          aria-label={t("Search")}
+          placeholder={t("Search…")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -347,13 +354,13 @@ function MenuStep({
       <Body>
         <Options
           list={list}
-          label="Add"
+          label={t("Add")}
           options={shown.map((m) => ({ id: m.kind, ...m }))}
           onPick={(o) => onPick(o.id as MenuKind)}
         />
-        {shown.length === 0 && <Note>Nothing matches</Note>}
+        {shown.length === 0 && <Note>{t("Nothing matches")}</Note>}
       </Body>
-      <Footer keys={[navigate, ["Enter", "Pick"], close]} />
+      <Footer keys={[navigate, ["Enter", t("Pick")], close]} />
     </>
   );
 }
@@ -386,8 +393,8 @@ function ComputerStep({
         <input
           ref={autofocus}
           {...list.input}
-          aria-label="Computer"
-          placeholder="Which computer?"
+          aria-label={t("Computer")}
+          placeholder={t("Which computer?")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -403,10 +410,10 @@ function ComputerStep({
         />
       </Header>
       <Body>
-        <Heading>Computers</Heading>
+        <Heading>{t("Computers")}</Heading>
         <Options
           list={list}
-          label="Computers"
+          label={t("Computers")}
           options={shown.map((h) => ({
             id: h.id,
             name: h.name,
@@ -416,9 +423,9 @@ function ComputerStep({
           }))}
           onPick={(o) => pick(hosts.find((h) => h.id === o.id))}
         />
-        {shown.length === 0 && <Note>No computers match</Note>}
+        {shown.length === 0 && <Note>{t("No computers match")}</Note>}
       </Body>
-      <Footer keys={[navigate, ["Enter", "Pick"], close]} />
+      <Footer keys={[navigate, ["Enter", t("Pick")], close]} />
     </>
   );
 }
@@ -437,7 +444,7 @@ function CreateStep({ onBack, onAdded }: StepProps) {
         onBack={onBack}
         action={
           <Action
-            label={add.busy ? "Creating…" : "Create"}
+            label={add.busy ? t("Creating…") : t("Create")}
             keys="Enter"
             disabled={!valid || add.busy}
             onClick={submit}
@@ -446,8 +453,8 @@ function CreateStep({ onBack, onAdded }: StepProps) {
       >
         <input
           ref={autofocus}
-          aria-label="Repository name"
-          placeholder="Repository name"
+          aria-label={t("Repository name")}
+          placeholder={t("Repository name")}
           value={name}
           spellCheck={false}
           autoComplete="off"
@@ -463,12 +470,14 @@ function CreateStep({ onBack, onAdded }: StepProps) {
       <Body>
         <Note>
           {trimmed && !valid
-            ? "Use letters, digits, ., _, and - only."
-            : `Creates ~/.parallax/projects/${trimmed || "<name>"} as a git repository, ready for threads.`}
+            ? t("Use letters, digits, ., _, and - only.")
+            : t("Creates {{path}} as a git repository, ready for threads.", {
+                path: `~/.parallax/projects/${trimmed || "<name>"}`,
+              })}
         </Note>
         <Problem error={add.error} />
       </Body>
-      <Footer keys={[["Enter", "Create"], close]} />
+      <Footer keys={[["Enter", t("Create")], close]} />
     </>
   );
 }
@@ -482,14 +491,19 @@ function CloneStep({ onBack, onNext }: { onBack: () => void; onNext: (slug: stri
       <Header
         onBack={onBack}
         action={
-          <Action label="Next" keys="Enter" disabled={!slug} onClick={() => slug && onNext(slug)} />
+          <Action
+            label={t("Next")}
+            keys="Enter"
+            disabled={!slug}
+            onClick={() => slug && onNext(slug)}
+          />
         }
       >
         <GitHubLogo className="size-4 shrink-0 text-faint-foreground" />
         <input
           ref={autofocus}
-          aria-label="Repository"
-          placeholder="owner/name or a GitHub link"
+          aria-label={t("Repository")}
+          placeholder={t("owner/name or a GitHub link")}
           value={text}
           spellCheck={false}
           autoComplete="off"
@@ -506,10 +520,10 @@ function CloneStep({ onBack, onNext }: { onBack: () => void; onNext: (slug: stri
         {slug ? (
           <GithubRepo slug={slug} />
         ) : (
-          <Note>Type a GitHub repository as owner/name, or paste a link to it.</Note>
+          <Note>{t("Type a GitHub repository as owner/name, or paste a link to it.")}</Note>
         )}
       </Body>
-      <Footer keys={[["Enter", "Next"], close]} />
+      <Footer keys={[["Enter", t("Next")], close]} />
     </>
   );
 }
@@ -581,7 +595,7 @@ function FolderStep({
       });
     } else void add.run(`add:${target}`, async () => ({ path: target }));
   };
-  const busyLabel = clone ? "Cloning…" : "Adding…";
+  const busyLabel = clone ? t("Cloning…") : t("Adding…");
 
   return (
     <>
@@ -589,7 +603,7 @@ function FolderStep({
         onBack={onBack}
         action={
           <Action
-            label={add.busy ? busyLabel : clone ? "Clone" : "Add"}
+            label={add.busy ? busyLabel : clone ? t("Clone") : t("Add")}
             keys={`${mod()} Enter`}
             disabled={!target || add.busy}
             onClick={submit}
@@ -599,7 +613,7 @@ function FolderStep({
         <input
           ref={autofocus}
           {...list.input}
-          aria-label={clone ? "Clone into" : "Folder"}
+          aria-label={clone ? t("Clone into") : t("Folder")}
           value={text}
           spellCheck={false}
           autoComplete="off"
@@ -625,7 +639,7 @@ function FolderStep({
       <Body>
         {clone && (
           <>
-            <Heading>Repository</Heading>
+            <Heading>{t("Repository")}</Heading>
             {clone.slug ? (
               <GithubRepo slug={clone.slug} />
             ) : (
@@ -633,7 +647,10 @@ function FolderStep({
             )}
             {add.busy && (
               <div className="px-2.5 pt-1 pb-2">
-                <CloneProgress title={`Cloning ${clone.name}`} line={progress} />
+                <CloneProgress
+                  title={t("Cloning {{name}}", { name: clone.name })}
+                  line={progress}
+                />
               </div>
             )}
           </>
@@ -643,24 +660,24 @@ function FolderStep({
         <Heading>
           {clone
             ? hostName
-              ? `Select where to clone on ${hostName}`
-              : "Select where to clone"
+              ? t("Select where to clone on {{host}}", { host: hostName })
+              : t("Select where to clone")
             : hostName
-              ? `Folders on ${hostName}`
-              : "Folders"}
+              ? t("Folders on {{host}}", { host: hostName })
+              : t("Folders")}
         </Heading>
         <Options
           list={list}
-          label="Folders"
+          label={t("Folders")}
           options={folders.map((f) => ({ id: f.path, name: f.name, icon: <Folder /> }))}
           onPick={(o) => go(`${dir}${o.name}/${clone ? leaf : ""}`)}
         />
         {current && "error" in current && <Note>{current.error}</Note>}
         {current && "folders" in current && folders.length === 0 && (
-          <Note>{filter ? "No folders match" : "No folders here"}</Note>
+          <Note>{filter ? t("No folders match") : t("No folders here")}</Note>
         )}
       </Body>
-      <Footer keys={[navigate, ["Enter", "Open"], ["Backspace", "Back"], close]}>
+      <Footer keys={[navigate, ["Enter", t("Open")], ["Backspace", t("Back")], close]}>
         {hostId === localId && (
           <button
             type="button"
@@ -851,7 +868,7 @@ function Header({
     <div className="flex items-center gap-3 px-4 py-3.5">
       <button
         type="button"
-        aria-label="Back"
+        aria-label={t("Back")}
         onClick={onBack}
         className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
       >
@@ -919,18 +936,21 @@ export const navigate: [ReactNode, string] = [
       <ArrowDown className="size-3" />
     </kbd>
   </>,
-  "Navigate",
+  msg("Navigate"),
 ];
-export const close: [ReactNode, string] = ["Esc", "Close"];
+export const close: [ReactNode, string] = ["Esc", msg("Close")];
 
-/** A palette's key hints along its bottom, as `[key, what it does]`. */
+/**
+ * A palette's key hints along its bottom, as `[key, what it does]`. Each label goes through `t`, so
+ * `navigate` and `close`, built at load, show translated.
+ */
 export function Footer({ keys, children }: { keys: [ReactNode, string][]; children?: ReactNode }) {
   return (
     <div className="flex items-center gap-4 border-t border-border bg-background/40 px-4 py-2.5 text-body text-muted-foreground">
       {keys.map(([key, label]) => (
         <span key={label} className="flex items-center gap-1.5">
           {typeof key === "string" ? <kbd className={kbd}>{key}</kbd> : key}
-          {label}
+          {t(label)}
         </span>
       ))}
       {children}
@@ -944,8 +964,8 @@ const field =
 const mod = () => (window.parallax.platform === "darwin" ? "⌘" : "Ctrl");
 
 const chooseInFiles = () =>
-  ({ darwin: "Choose in Finder", win32: "Choose in Explorer" })[window.parallax.platform] ??
-  "Choose in Files";
+  ({ darwin: t("Choose in Finder"), win32: t("Choose in Explorer") })[window.parallax.platform] ??
+  t("Choose in Files");
 
 /** Focuses a step's field: now, or, while the dialog is closed, when showModal opens it. */
 function autofocus(el: HTMLInputElement | null) {

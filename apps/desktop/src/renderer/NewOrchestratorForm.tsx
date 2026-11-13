@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ArrowLeft, LockOpen } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
@@ -81,6 +82,7 @@ export function NewOrchestratorForm({
   const permission: OrchestratorPermission | undefined =
     "orchestratorPermission" in capabilities ? (fullAccess ? "bypass" : "auto") : undefined;
   const autonomy = "orchestratorAutonomy" in capabilities ? chosenAutonomy : undefined;
+  const detail = autonomyLevels.find((l) => l.value === autonomy)?.detail;
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   // The last try's params, whose id a retry with the same host, name, path, icon, mode, and
@@ -143,14 +145,14 @@ export function NewOrchestratorForm({
       >
         <div className="flex items-center gap-3 px-4 py-3.5">
           {/* A plain button, so Enter in the name creates rather than goes back. */}
-          <IconButton label="Back" onClick={onBack}>
+          <IconButton label={t("Back")} onClick={onBack}>
             <ArrowLeft />
           </IconButton>
           <h2 id="new-orchestrator-title" className="text-reading font-medium">
-            Create orchestrator
+            {t("Create orchestrator")}
           </h2>
           <p className="truncate text-body text-muted-foreground">
-            A focused chat where agents coordinate work.
+            {t("A focused chat where agents coordinate work.")}
           </p>
         </div>
         <div className="flex flex-col items-center gap-3 px-5 pt-2 pb-5">
@@ -159,8 +161,8 @@ export function NewOrchestratorForm({
               type="button"
               popoverTarget={pickerId}
               aria-haspopup="dialog"
-              aria-label="Choose icon"
-              title="Choose icon"
+              aria-label={t("Choose icon")}
+              title={t("Choose icon")}
               className={`${iconTile} hover:bg-hover`}
             >
               <ProjectIcon icon={icon} className="size-8" />
@@ -173,8 +175,8 @@ export function NewOrchestratorForm({
           <input
             // The native attribute, so showModal focuses the name when the palette opens here.
             ref={(el) => el?.setAttribute("autofocus", "")}
-            aria-label="Name"
-            placeholder="New orchestrator"
+            aria-label={t("Name")}
+            placeholder={t("New orchestrator")}
             value={typed ?? workspace?.repo.name ?? ""}
             onChange={(e) => setTyped(e.target.value)}
             spellCheck={false}
@@ -184,7 +186,7 @@ export function NewOrchestratorForm({
         </div>
         <div className="mx-5 mb-3 flex items-center justify-between gap-4 rounded-lg border border-border py-1.5 pr-1.5 pl-3">
           <span aria-hidden className="shrink-0 text-body">
-            Workspace
+            {t("Workspace")}
           </span>
           <WorkspaceMenu
             hosts={hosts}
@@ -200,27 +202,25 @@ export function NewOrchestratorForm({
           <div className="mx-5 mb-3 rounded-lg border border-border px-3 py-2.5">
             <div className="flex items-center justify-between gap-4">
               <span aria-hidden className="text-body">
-                Autonomy
+                {t("Autonomy")}
               </span>
               <Segmented
-                label="Autonomy"
-                options={autonomyLevels}
+                label={t("Autonomy")}
+                options={autonomyLevels.map((l) => ({ ...l, name: t(l.name) }))}
                 value={autonomy}
                 onChange={setAutonomy}
               />
             </div>
-            <p className="mt-1.5 text-meta text-muted-foreground">
-              {autonomyLevels.find((l) => l.value === autonomy)?.detail}
-            </p>
+            <p className="mt-1.5 text-meta text-muted-foreground">{detail && t(detail)}</p>
           </div>
         )}
         {permission && (
           <label className="mx-5 mb-5 flex items-start gap-3 rounded-lg bg-selected px-3 py-2.5">
             <LockOpen aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <span className="flex-1">
-              <span className="block text-body font-medium">Full access</span>
+              <span className="block text-body font-medium">{t("Full access")}</span>
               <span className="block text-meta text-muted-foreground">
-                Agents in this orchestrator run commands and edit files without asking.
+                {t("Agents in this orchestrator run commands and edit files without asking.")}
               </span>
             </span>
             <input
@@ -243,7 +243,7 @@ export function NewOrchestratorForm({
             disabled={!workspace || !name || creating}
             className="ml-auto shrink-0 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            {creating ? "Creating…" : "Create orchestrator"}
+            {creating ? t("Creating…") : t("Create orchestrator")}
           </button>
         </div>
       </form>

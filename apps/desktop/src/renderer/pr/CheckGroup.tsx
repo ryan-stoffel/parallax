@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useState, type ReactNode } from "react";
 
 import type { PrFailureLog } from "../../protocol/generated/protocol";
@@ -67,7 +68,7 @@ export function CheckGroup({
         {actions.onRerunFailed && failedRun && (
           <Button size="sm" onClick={() => actions.onRerunFailed!(failedRun)}>
             <icons.refresh aria-hidden />
-            Re-run failed
+            {t("Re-run failed")}
           </Button>
         )}
       </div>
@@ -114,7 +115,7 @@ export function CheckRow({
       <span className="min-w-0 truncate" title={check.name}>
         {check.name}
       </span>
-      {check.required && <Badge>Required</Badge>}
+      {check.required && <Badge>{t("Required")}</Badge>}
       {failed && (
         <icons.next
           aria-hidden
@@ -141,7 +142,11 @@ export function CheckRow({
         {/* How long it ran, the icon already saying how it ended, until its actions take the place. */}
         <span className="relative flex h-6 min-w-16 shrink-0 items-center justify-end">
           <span
-            title={`${checkStatus(check)}${time ? ` in ${time}` : ""}`}
+            title={
+              time
+                ? t("{{status}} in {{time}}", { status: checkStatus(check), time })
+                : checkStatus(check)
+            }
             className={`truncate pr-1 text-meta text-faint-foreground tabular-nums ${canAct ? "transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" : ""}`}
           >
             {time ?? checkStatus(check)}
@@ -152,7 +157,7 @@ export function CheckRow({
                 <IconButton
                   size="sm"
                   reveal
-                  label={`Re-run ${check.name}`}
+                  label={t("Re-run {{name}}", { name: check.name })}
                   onClick={() => actions.onRerun!(check)}
                 >
                   <icons.refresh aria-hidden />
@@ -162,7 +167,7 @@ export function CheckRow({
                 <IconButton
                   size="sm"
                   reveal
-                  label={`Open ${check.name} on GitHub`}
+                  label={t("Open {{name}} on GitHub", { name: check.name })}
                   onClick={() => actions.onOpen(check.url!)}
                 >
                   <icons.external aria-hidden />
@@ -177,11 +182,11 @@ export function CheckRow({
           <div className="mx-2 mt-1 mb-2 overflow-hidden rounded-lg border border-border">
             {!actions.log ? (
               <p className="px-3 py-2 text-meta text-faint-foreground">
-                This host's plxd can't read check logs. Open it on GitHub.
+                {t("This host's plxd can't read check logs. Open it on GitHub.")}
               </p>
             ) : !log ? (
               <p className="flex items-center gap-2 px-3 py-2 text-meta text-faint-foreground">
-                <Spinner /> Reading the log…
+                <Spinner /> {t("Reading the log…")}
               </p>
             ) : log.error ? (
               <p role="alert" className="px-3 py-2 text-meta text-danger">
@@ -189,21 +194,21 @@ export function CheckRow({
               </p>
             ) : (
               <pre
-                aria-label={`${check.name}'s log`}
+                aria-label={t("{{name}}'s log", { name: check.name })}
                 className="code-scroll code-lines max-h-72 overflow-auto bg-code px-3 py-2 font-mono text-meta leading-5 whitespace-pre"
               >
-                {log.result?.log.trim() || "The log has no error lines."}
+                {log.result?.log.trim() || t("The log has no error lines.")}
               </pre>
             )}
             <div className="flex items-center gap-1 border-t border-border px-1.5 py-1">
               <Button size="sm" onClick={() => actions.onFix(check)}>
                 <icons.agent aria-hidden />
-                Fix in this thread
+                {t("Fix in this thread")}
               </Button>
               {check.url && (
                 <Button size="sm" onClick={() => actions.onOpen(check.url!)}>
                   <icons.external aria-hidden />
-                  Open on GitHub
+                  {t("Open on GitHub")}
                 </Button>
               )}
             </div>

@@ -1,4 +1,5 @@
 import { app, ipcMain, net, powerMonitor, type WebContents } from "electron";
+import { t } from "i18next";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -235,7 +236,10 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       (await connections
         .get(hostId)
         ?.request("host/update", { version, ...(now && { now }) }, UPDATE_TIMEOUT_MS)) ?? {
-        error: { code: ErrorCodes.InternalError, message: "That host isn't in Parallax anymore." },
+        error: {
+          code: ErrorCodes.InternalError,
+          message: t("That host isn't in Parallax anymore."),
+        },
       },
     runningAgents: async (hostId) => {
       const answer = await connections.get(hostId)?.request("host/health", {});
@@ -262,7 +266,10 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   try {
     settings = readSettings(settingsFile());
   } catch (error) {
-    settingsError = `Parallax can't use ${settingsFile()}, so it won't save over it: ${(error as Error).message.replace(/\.$/, "")}. Fix or remove the file, then restart Parallax.`;
+    settingsError = t(
+      "Parallax can't use {{file}}, so it won't save over it: {{why}}. Fix or remove the file, then restart Parallax.",
+      { file: settingsFile(), why: (error as Error).message.replace(/\.$/, "") },
+    );
     console.error(settingsError);
   }
   for (const host of settings.hosts) addSshConnection(host, host.plxdInstalled);
@@ -484,7 +491,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
         )
           return "invalid terminal";
         const host = connections.get(hostId);
-        if (!host) return "That host isn't in Parallax anymore.";
+        if (!host) return t("That host isn't in Parallax anymore.");
         const params = {
           threadId: threadId ?? "",
           terminalId: terminalId ?? id,
@@ -516,7 +523,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       // and exit never reach it.
       const { file: program, args, env = {} } = command;
       const runner = runsOnHost(hostId) ? connections.get(hostId) : connection("local");
-      if (!runner) return "That host isn't in Parallax anymore.";
+      if (!runner) return t("That host isn't in Parallax anymore.");
       return openTerminal(event.sender, id, runner, {
         threadId: "",
         terminalId: `${id}:${randomUUID()}`,
@@ -535,7 +542,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     )
       return "invalid install";
     // runInstall runs here; another computer's install opens in a terminal on its own plxd.
-    if (runsOnHost(hostId)) return "On another computer, agents install in a terminal there.";
+    if (runsOnHost(hostId)) return t("On another computer, agents install in a terminal there.");
     return runInstall(await installOn(hostId, kind));
   });
   ipcMain.on("parallax:terminalInput", (event, id: unknown, data: unknown) => {
@@ -552,7 +559,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:openDeviceStream", (event, hostId: unknown, params: unknown) => {
     if (typeof hostId !== "string" || !isDeviceStreamParams(params)) return "invalid stream";
     const host = connections.get(hostId);
-    if (!host) return "That host isn't in Parallax anymore.";
+    if (!host) return t("That host isn't in Parallax anymore.");
     return openDeviceStream(event.sender, host, params);
   });
   ipcMain.on("parallax:sendDeviceStream", (event, id: unknown, data: unknown) => {
@@ -588,13 +595,15 @@ function sshOf(hostId: string): SshTarget | undefined {
 async function installOn(hostId: string, kind: string): Promise<Command | string> {
   // A host that's gone has no ssh target, and mustn't install here instead.
   const host = connections.get(hostId);
-  if (!host) return "That host isn't in Parallax anymore.";
+  if (!host) return t("That host isn't in Parallax anymore.");
   const ssh = sshOf(hostId);
   // A remote host's OS decides its shell; this computer's is known.
   const remote = ssh || runsOnHost(hostId);
   const version = remote ? await host.request("host/version", {}) : undefined;
   if (version && "error" in version)
-    return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
+    return t("Parallax couldn't ask the host which OS it runs: {{why}}", {
+      why: version.error.message,
+    });
   const os = version && "result" in version ? version.result.os : undefined;
   // Another computer runs it on its own plxd, as if local there, with its own shell.
   if (runsOnHost(hostId)) return installCommand(kind, undefined, platformOf(os), {});
@@ -607,14 +616,16 @@ async function installOn(hostId: string, kind: string): Promise<Command | string
  */
 async function signInCommand(hostId: string, cli: CliKind): Promise<Command | string> {
   const host = connections.get(hostId);
-  if (!host) return "That host isn't in Parallax anymore.";
+  if (!host) return t("That host isn't in Parallax anymore.");
   // Decided before asking, so a remote host's path can never run on this computer.
   const ssh = sshOf(hostId);
   const answer = await host.request("accounts/list", {});
   if ("error" in answer)
-    return `Parallax couldn't ask the host where the CLI is: ${answer.error.message}`;
+    return t("Parallax couldn't ask the host where the CLI is: {{why}}", {
+      why: answer.error.message,
+    });
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
-  if (!path) return "That CLI isn't installed on this host anymore.";
+  if (!path) return t("That CLI isn't installed on this host anymore.");
   return loginCommand(cli, path, ssh, await hostPlatform(hostId));
 }
 
@@ -626,15 +637,17 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
  */
 async function providerSignInCommand(hostId: string, id: string): Promise<Command | string> {
   const host = connections.get(hostId);
-  if (!host) return "That host isn't in Parallax anymore.";
+  if (!host) return t("That host isn't in Parallax anymore.");
   const ssh = sshOf(hostId);
   const answer = await host.request("providers/list", { refresh: false });
   if ("error" in answer)
-    return `Parallax couldn't ask the host how to sign in: ${answer.error.message}`;
+    return t("Parallax couldn't ask the host how to sign in: {{why}}", {
+      why: answer.error.message,
+    });
   const found = answer.result.providers.find((p) => p.instance.id === id);
-  if (!found) return "That provider isn't on this host anymore.";
+  if (!found) return t("That provider isn't on this host anymore.");
   const [program, ...args] = found.login ?? [];
-  if (!program) return "That provider has no sign-in on this host.";
+  if (!program) return t("That provider has no sign-in on this host.");
   const { kind, home } = found.instance;
   const homeVar = HOME_VARS[kind];
   const env = {
@@ -703,14 +716,14 @@ export async function renderPage(url: string): Promise<Response> {
       ? await host.request("agent/image", { runId, imageId }).catch(() => undefined)
       : undefined;
   if (!page || "error" in page)
-    return new Response("That page isn't on this host.", { status: 404 });
+    return new Response(t("That page isn't on this host."), { status: 404 });
   const { mediaType, data } = page.result;
   const body = Buffer.from(data, "base64");
   // A browser recording (PLX-639) is only a video.
   if (mediaType === "video/webm")
     return new Response(body, { headers: { "Content-Type": "video/webm" } });
   if (mediaType !== "text/html")
-    return new Response("That page isn't on this host.", { status: 404 });
+    return new Response(t("That page isn't on this host."), { status: 404 });
   return new Response(body, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
@@ -763,16 +776,16 @@ export async function streamFile(url: string, range: string | null): Promise<Res
   const parts = pathParts(url);
   const [, hostId, runId, filePath] = parts;
   if (parts.length !== 4 || !hostId || !runId || !filePath)
-    return refuse(400, "That isn't a file's address.");
+    return refuse(400, t("That isn't a file's address."));
   const host = connections.get(hostId);
   const chunkBytes =
     host?.state.status === "connected"
       ? host.state.capabilities["fileChunks"]?.["chunkBytes"]
       : undefined;
   if (!host || typeof chunkBytes !== "number" || chunkBytes < 1)
-    return refuse(404, "That host can't stream files.");
+    return refuse(404, t("That host can't stream files."));
   const asked = byteRange(range);
-  if (asked === "invalid") return refuse(416, "Parallax reads one byte range at a time.");
+  if (asked === "invalid") return refuse(416, t("Parallax reads one byte range at a time."));
 
   // One read of the file: its size and the bytes asked for, or the refusal to answer with. plxd
   // refuses a path its rules don't serve as invalid params, and a run it doesn't have as its own.
@@ -780,7 +793,7 @@ export async function streamFile(url: string, range: string | null): Promise<Res
     const answer = await host
       .request("agent/file", { runId, path: filePath, side: "working", ...more })
       .catch(() => undefined);
-    if (!answer) return refuse(502, "The host didn't answer.");
+    if (!answer) return refuse(502, t("The host didn't answer."));
     if ("error" in answer) {
       const { code, message } = answer.error;
       const status =
@@ -788,7 +801,7 @@ export async function streamFile(url: string, range: string | null): Promise<Res
       return refuse(status, message);
     }
     const { exists, size, content } = answer.result;
-    if (!exists || size === undefined) return refuse(404, "That file isn't on this host.");
+    if (!exists || size === undefined) return refuse(404, t("That file isn't on this host."));
     return { size, bytes: Buffer.from(content ?? "", "base64") };
   };
 
@@ -1003,7 +1016,7 @@ function addSshConnection({ id, destination }: SshHost, locate?: boolean): void 
  */
 async function installPlxdOn(id: unknown): Promise<string | undefined> {
   const host = typeof id === "string" ? savedHost(id) : undefined;
-  if (!host) return "That host isn't in Parallax anymore.";
+  if (!host) return t("That host isn't in Parallax anymore.");
   const error = await installPlxd(host.destination, app.getVersion(), settings.ssh);
   // Removed or edited meanwhile: its connection isn't this one's to restart.
   const now = savedHost(host.id);
@@ -1023,7 +1036,7 @@ function saveHost(input: unknown, id: unknown): string | undefined {
   const checked = checkHost({ name: input["name"], destination: input["destination"] });
   if (typeof checked === "string") return checked;
   const old = settings.hosts.find((h) => h.id === id);
-  if (id !== undefined && !old) return "That host isn't in Parallax anymore.";
+  if (id !== undefined && !old) return t("That host isn't in Parallax anymore.");
   const host: SshHost = {
     id: old?.id ?? randomUUID(),
     ...checked,
@@ -1067,7 +1080,7 @@ function saveSettings(next: Settings): string | undefined {
   try {
     writeSettings(settingsFile(), next);
   } catch (error) {
-    return `Parallax couldn't save its settings: ${(error as Error).message}`;
+    return t("Parallax couldn't save its settings: {{why}}", { why: (error as Error).message });
   }
   settings = next;
   broadcast("parallax:hosts", listedHosts(next));
@@ -1176,7 +1189,7 @@ export async function sshDestinationOf(
  * to an error for people.
  */
 export function setSshDestination(hostId: string, destination: string): string | undefined {
-  if (!isRemoteHost(hostId)) return "That computer isn't in Parallax anymore.";
+  if (!isRemoteHost(hostId)) return t("That computer isn't in Parallax anymore.");
   const { [hostId]: _old, ...others } = settings.sshDestinations ?? {};
   if (!destination.trim()) return saveSettings({ ...settings, sshDestinations: others });
   const checked = checkHost({ name: "", destination });
@@ -1212,8 +1225,8 @@ function relayEnv(): Record<string, string> | undefined {
 /** Why there's no token for the account, for people. */
 const noToken = () =>
   account?.clerkUnreachable()
-    ? "Parallax can't reach Clerk, its sign-in service. Try again once it's back."
-    : "Sign in to Parallax from Profile in the sidebar first.";
+    ? t("Parallax can't reach Clerk, its sign-in service. Try again once it's back.")
+    : t("Sign in to Parallax from Profile in the sidebar first.");
 
 /**
  * `window.parallax.relayHosts` and `removeRelayHost`: the signed-in account's hosts on Parallax
@@ -1228,7 +1241,7 @@ async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
   const token = await account?.accessToken();
   if (!token) return noToken();
   const answer = await connections.get("local")?.request("relay/hosts", { token });
-  if (!answer) return "Parallax isn't connected to this computer's plxd.";
+  if (!answer) return t("Parallax isn't connected to this computer's plxd.");
   return "error" in answer ? answer.error.message : answer.result.hosts;
 }
 
@@ -1241,7 +1254,7 @@ async function checkRelay(): Promise<RelayCheckResult | string> {
   if (!token) return noToken();
   // Six steps of up to 10 s each, on a relay slow at every one, and a 5 s wait to connect.
   const answer = await connections.get("local")?.request("relay/check", { token }, 70_000);
-  if (!answer) return "Parallax isn't connected to this computer's plxd.";
+  if (!answer) return t("Parallax isn't connected to this computer's plxd.");
   return "error" in answer ? answer.error.message : answer.result;
 }
 
@@ -1253,7 +1266,7 @@ async function registerRelay(): Promise<string | undefined> {
   const token = await account?.accessToken();
   if (!token) return noToken();
   const answer = await connections.get("local")?.request("relay/register", { token });
-  if (!answer) return "Parallax isn't connected to this computer's plxd.";
+  if (!answer) return t("Parallax isn't connected to this computer's plxd.");
   if ("error" in answer) return answer.error.message;
   const own = await connections.get("local")?.request("relay/id", {});
   const user = tokenSubject(token);
@@ -1339,12 +1352,14 @@ let found = new Map<string, { name: string; routes: string[] }>();
  */
 async function discoverLan(): Promise<{ id: string; name: string }[] | string> {
   const plxd = localPlxd();
-  if (!plxd) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  if (!plxd) return t("plxd wasn't found. Set PLXD_PATH to the plxd binary.");
   let stdout: string;
   try {
     ({ stdout } = await runPlxd(plxd, "dial", "--discover"));
   } catch (error) {
-    return `Parallax couldn't look for computers: ${(error as { stderr?: string }).stderr?.trim() || "plxd failed"}`;
+    return t("Parallax couldn't look for computers: {{why}}", {
+      why: (error as { stderr?: string }).stderr?.trim() || t("plxd failed"),
+    });
   }
   const hosts = JSON.parse(stdout) as { name?: unknown; routes?: unknown }[];
   found = new Map();
@@ -1374,10 +1389,10 @@ async function pairLan(target: unknown, code: unknown): Promise<string | undefin
       : typeof address === "string" && isRoute(address.trim())
         ? [address.trim()]
         : undefined;
-  if (!routes) return "Pick a computer, or enter its address, such as 192.168.1.20.";
-  if (!isCode(code)) return "Enter the code the other computer shows.";
+  if (!routes) return t("Pick a computer, or enter its address, such as 192.168.1.20.");
+  if (!isCode(code)) return t("Enter the code the other computer shows.");
   const plxd = localPlxd();
-  if (!plxd) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  if (!plxd) return t("plxd wasn't found. Set PLXD_PATH to the plxd binary.");
   let stdout: string;
   try {
     const running = runPlxd(plxd, "dial", "--pair", `--name=${localName()}`, "--", ...routes);
@@ -1386,16 +1401,22 @@ async function pairLan(target: unknown, code: unknown): Promise<string | undefin
   } catch (error) {
     const exit = (error as { code?: unknown }).code;
     if (exit === 5)
-      return "That code is wrong, used, or expired. Check it, or make a new one on the other computer.";
+      return t(
+        "That code is wrong, used, or expired. Check it, or make a new one on the other computer.",
+      );
     if (exit === 4)
-      return "Couldn't reach the other computer. Check that it's on this network and still showing its code.";
-    return `Parallax couldn't pair: ${(error as { stderr?: string }).stderr?.trim() || "plxd failed"}`;
+      return t(
+        "Couldn't reach the other computer. Check that it's on this network and still showing its code.",
+      );
+    return t("Parallax couldn't pair: {{why}}", {
+      why: (error as { stderr?: string }).stderr?.trim() || t("plxd failed"),
+    });
   }
   const paired = JSON.parse(stdout) as { fingerprint?: unknown; name?: unknown; routes?: unknown };
   const { fingerprint, name } = paired;
   const kept = Array.isArray(paired.routes) ? paired.routes.filter(isRoute) : [];
   if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint) || !kept.length)
-    return "plxd answered without the computer's fingerprint and routes.";
+    return t("plxd answered without the computer's fingerprint and routes.");
   const computer: SavedLan = {
     fingerprint,
     name: (typeof name === "string" && name) || routeHost(kept[0]!),
@@ -1692,11 +1713,13 @@ async function readLook(hostId: string, announce = true): Promise<void> {
 async function setConnect(on: boolean): Promise<string | undefined> {
   const answer = await connections.get("local")?.request("host/settings/set", { connect: on });
   if (!answer || "error" in answer) {
-    const why = answer && "error" in answer ? answer.error.message : "plxd isn't connected";
-    return `Parallax couldn't turn Connect ${on ? "on" : "off"}: ${why}`;
+    const why = answer && "error" in answer ? answer.error.message : t("plxd isn't connected");
+    return on
+      ? t("Parallax couldn't turn Connect on: {{why}}", { why })
+      : t("Parallax couldn't turn Connect off: {{why}}", { why });
   }
   if (answer.result.connect === undefined)
-    return "This computer's plxd doesn't have Parallax Connect yet. Update Parallax.";
+    return t("This computer's plxd doesn't have Parallax Connect yet. Update Parallax.");
   followConnect(answer.result.connect, answer.result.deviceIcon);
   return undefined;
 }
@@ -1712,12 +1735,13 @@ async function saveDevice(hostId: unknown, look: unknown): Promise<string | unde
     !host ||
     (hostId !== "local" && !hostId.startsWith("tailnet:") && !hostId.startsWith("account:"))
   )
-    return "That device isn't in Parallax anymore.";
+    return t("That device isn't in Parallax anymore.");
   const answer = await host.request("host/settings/set", {
     ...(name !== undefined && { deviceName: name }),
     ...(icon !== undefined && { deviceIcon: icon }),
   });
-  if ("error" in answer) return `Parallax couldn't save it on that device: ${answer.error.message}`;
+  if ("error" in answer)
+    return t("Parallax couldn't save it on that device: {{why}}", { why: answer.error.message });
   if (hostId !== "local") {
     await readLook(hostId);
     return undefined;
@@ -1796,10 +1820,12 @@ async function removeFromAccount(relayId: string): Promise<string | undefined> {
   if (!token) return noToken();
   const local = connections.get("local");
   if (local?.state.status !== "connected")
-    return "Parallax isn't connected to this computer's plxd.";
+    return t("Parallax isn't connected to this computer's plxd.");
   const own = await local.request("relay/id", {});
   if ("result" in own && own.result.hostId === relayId)
-    return "This is the computer you're on. Remove it from another one, or turn off Reach from anywhere.";
+    return t(
+      "This is the computer you're on. Remove it from another one, or turn off Reach from anywhere.",
+    );
   const answer = await local.request("relay/remove", { token, hostId: relayId });
   if ("error" in answer) return answer.error.message;
   // After the removal, so a refused one changes nothing there. Over a relay route this can fail, as
@@ -1919,8 +1945,8 @@ function addAccountConnection(saved: SavedAccount): void {
  */
 function editAccountRoutes(hostId: unknown, edit: unknown): string | undefined {
   const saved = accountOf(hostId);
-  if (!saved) return "That computer isn't on your account anymore.";
-  if (!isRouteEdit(edit)) return "That isn't a change to a route.";
+  if (!saved) return t("That computer isn't on your account anymore.");
+  if (!isRouteEdit(edit)) return t("That isn't a change to a route.");
   const next = editRoutes(saved.hostId, saved, edit);
   if ("error" in next) return next.error;
   updateAccount(saved.hostId, (each) => ({ ...each, ...next }));
@@ -2267,7 +2293,7 @@ async function beginAccess(id: string): Promise<void> {
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
   if (!vouched.has(relayId) || allowing.has(id)) return askForCode(id);
   if (signedIn.has(id) && step !== "offline")
-    return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
+    return setAccess(id, { step: "ask", why: t("It hasn't let this computer in. Ask again.") });
   await signIn(id);
 }
 
@@ -2404,7 +2430,7 @@ async function compareCodes(id: string): Promise<void> {
   child.stdin.end();
   if (!allowed || exit !== 0) {
     const why =
-      request && !denied ? "That request ended. Type the code it shows instead." : undefined;
+      request && !denied ? t("That request ended. Type the code it shows instead.") : undefined;
     typeInstead(why);
     return done?.(why);
   }
@@ -2422,7 +2448,7 @@ async function compareCodes(id: string): Promise<void> {
 async function answerCompare(hostId: string, allow: boolean): Promise<string | undefined> {
   const answer = comparing.get(hostId);
   const relayId = relayIdOf(hostId);
-  const gone = "That request isn't waiting anymore.";
+  const gone = t("That request isn't waiting anymore.");
   if (!answer || !relayId) return gone;
   if (allow) {
     allowing.add(hostId);
@@ -2430,7 +2456,9 @@ async function answerCompare(hostId: string, allow: boolean): Promise<string | u
     // It ended while saving, or the user denied it, whose answer is already on its way.
     if (comparing.get(hostId) !== answer || compareDone.has(hostId)) return gone;
     if (!saved) {
-      const why = "Parallax couldn't record this here, so it isn't allowed. Type the code instead.";
+      const why = t(
+        "Parallax couldn't record this here, so it isn't allowed. Type the code instead.",
+      );
       endCompare(hostId);
       setAccess(hostId, { step: "needsCode", error: why });
       return why;
@@ -2513,7 +2541,7 @@ async function startOver(): Promise<string | undefined> {
   const local = connections.get("local");
   if (startingOver || !keyStanding()) return undefined;
   if (!plxd || local?.state.status !== "connected")
-    return "Parallax isn't connected to this computer's plxd.";
+    return t("Parallax isn't connected to this computer's plxd.");
   startingOver = true;
   const stop = (why: string) => {
     startingOver = false;
@@ -2521,7 +2549,7 @@ async function startOver(): Promise<string | undefined> {
   };
   const proof = await verifiedHosts();
   const old = await deviceKey();
-  if (!proof || !old) return stop("Parallax couldn't read this computer's key or lists.");
+  if (!proof || !old) return stop(t("Parallax couldn't read this computer's key or lists."));
   const marked = await local.request("access/remove", { thumbprint: old });
   if ("error" in marked) return stop(marked.error.message);
   // A sign-in under way would save a session with the old key, or start one with the new.
@@ -2534,7 +2562,7 @@ async function startOver(): Promise<string | undefined> {
   } catch (error) {
     const why = (error as { stderr?: string }).stderr?.replace(/^plxd dial: /gm, "").trim();
     for (const id of accountRoutes.keys()) setAccess(id, undefined);
-    return stop(`Parallax couldn't make a new key: ${why || "plxd failed"}`);
+    return stop(t("Parallax couldn't make a new key: {{why}}", { why: why || t("plxd failed") }));
   }
   ownKey = undefined;
   keyMarks.clear();
@@ -2651,12 +2679,16 @@ async function signIn(id: string): Promise<number | null | undefined> {
   setAccess(id, {
     step: "ask",
     why: removed
-      ? "It removed this computer. Start over with a new key above."
+      ? t("It removed this computer. Start over with a new key above.")
       : code === EXIT_REMOVED
-        ? "It says it removed this computer, but it was added with Allow alone, so Parallax doesn't act on that."
+        ? t(
+            "It says it removed this computer, but it was added with Allow alone, so Parallax doesn't act on that.",
+          )
         : code === 5
-          ? "It didn't let this computer in: the request was denied or lapsed."
-          : `Parallax couldn't sign in there: ${stderr.replace(/^plxd dial: /gm, "").trim() || "plxd failed"}`,
+          ? t("It didn't let this computer in: the request was denied or lapsed.")
+          : t("Parallax couldn't sign in there: {{why}}", {
+              why: stderr.replace(/^plxd dial: /gm, "").trim() || t("plxd failed"),
+            }),
   });
   return code;
 }
@@ -2679,16 +2711,16 @@ function learn(relayId: string, name: string, routes: string[]): void {
  */
 async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | undefined> {
   const saved = accountOf(hostId);
-  if (!saved) return "That computer isn't on your account anymore.";
+  if (!saved) return t("That computer isn't on your account anymore.");
   const id = accountId(saved.hostId);
   const digits = typeof code === "string" ? code.replace(/\s/g, "") : "";
-  if (!/^\d{6}$/.test(digits)) return "Enter the 6 digits it shows.";
+  if (!/^\d{6}$/.test(digits)) return t("Enter the 6 digits it shows.");
   const plxd = localPlxd();
   const routes = accountRoutes.get(id);
-  if (!plxd || !routes) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  if (!plxd || !routes) return t("plxd wasn't found. Set PLXD_PATH to the plxd binary.");
   const runs = countPairRun(saved.pairRuns, Date.now());
   const fail = (why: string) => (setAccess(id, { step: "needsCode", error: why }), why);
-  if (!runs) return fail("That's 5 tries with this computer this hour. Try again later.");
+  if (!runs) return fail(t("That's 5 tries with this computer this hour. Try again later."));
   updateAccount(saved.hostId, (each) => ({ ...each, pairRuns: runs }));
   // Typing takes over from comparing, so a slot this app's request holds doesn't keep waiting.
   endCompare(id);
@@ -2702,11 +2734,11 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   } catch (error) {
     const exit = (error as { code?: unknown }).code;
     if (exit === 5)
-      return fail("That code is wrong, used, or expired. Check it, then type it again.");
+      return fail(t("That code is wrong, used, or expired. Check it, then type it again."));
     if (exit === 4)
-      return fail("Couldn't reach it. Check that it's on and still showing its code.");
+      return fail(t("Couldn't reach it. Check that it's on and still showing its code."));
     const why = (error as { stderr?: string }).stderr?.replace(/^plxd dial: /gm, "").trim();
-    return fail(`Parallax couldn't pair: ${why || "plxd failed"}`);
+    return fail(t("Parallax couldn't pair: {{why}}", { why: why || t("plxd failed") }));
   }
   const paired = JSON.parse(stdout) as { name?: unknown; routes?: unknown };
   learn(
@@ -2737,7 +2769,7 @@ let setupCodeShown = false;
 async function showSetupCode(): Promise<SetupCode | string> {
   const local = connections.get("local");
   if (local?.state.status !== "connected")
-    return "Parallax isn't connected to this computer's plxd.";
+    return t("Parallax isn't connected to this computer's plxd.");
   const registered = await registerRelay();
   if (registered) return registered;
   const on = await local.request("host/settings/set", { relay: true, remote: true });
@@ -2897,8 +2929,8 @@ function showRequest(hostId: string, pending: AccessRequest | undefined): void {
  */
 async function answerAccess(id: string, allow: boolean): Promise<string | undefined> {
   const shown = prompts.get(id);
-  if (!shown) return "That request isn't waiting anymore.";
-  let why = "Parallax isn't connected to that computer.";
+  if (!shown) return t("That request isn't waiting anymore.");
+  let why = t("Parallax isn't connected to that computer.");
   for (const hostId of shown.hosts) {
     const method = allow ? "access/approve" : "access/deny";
     const answer = await connections.get(hostId)?.request(method, { request: id });
@@ -2910,7 +2942,9 @@ async function answerAccess(id: string, allow: boolean): Promise<string | undefi
     if (allow) void syncAccess();
     return undefined;
   }
-  return `Parallax couldn't ${allow ? "allow" : "deny"} it: ${why}`;
+  return allow
+    ? t("Parallax couldn't allow it: {{why}}", { why })
+    : t("Parallax couldn't deny it: {{why}}", { why });
 }
 
 /**
@@ -2961,11 +2995,12 @@ async function turnOnReach(hostId: unknown): Promise<string | undefined> {
     typeof hostId === "string" && hostId.startsWith("tailnet:")
       ? connections.get(hostId)
       : undefined;
-  if (host?.state.status !== "connected") return "Parallax can't reach that computer right now.";
+  if (host?.state.status !== "connected") return t("Parallax can't reach that computer right now.");
   if (!(await account?.accessToken())) return noToken();
   await joinRelay(hostId as string);
   const answer = await host.request("host/settings/set", { relay: true, remote: true });
-  if ("error" in answer) return `Parallax couldn't turn it on there: ${answer.error.message}`;
+  if ("error" in answer)
+    return t("Parallax couldn't turn it on there: {{why}}", { why: answer.error.message });
   void discoverAccounts();
   return undefined;
 }
@@ -2989,7 +3024,7 @@ async function revokeDevice(id: unknown): Promise<RemoteSessionsResult | string>
   if (typeof id !== "string") return "invalid session";
   const local = connections.get("local");
   if (local?.state.status !== "connected")
-    return "Parallax isn't connected to this computer's plxd.";
+    return t("Parallax isn't connected to this computer's plxd.");
   const before = await removedKeys(local);
   const answer = await local.request("remote/revoke", { id });
   if ("error" in answer) return answer.error.message;
@@ -3012,7 +3047,7 @@ async function makeDeviceReadOnly(id: unknown): Promise<RemoteSessionsResult | s
   if (typeof id !== "string") return "invalid session";
   const local = connections.get("local");
   if (local?.state.status !== "connected")
-    return "Parallax isn't connected to this computer's plxd.";
+    return t("Parallax isn't connected to this computer's plxd.");
   const answer = await local.request("access/setReadOnly", { id });
   if ("error" in answer) return answer.error.message;
   void syncAccess();

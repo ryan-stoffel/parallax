@@ -3,6 +3,7 @@
 // their own window, as a Modal from here can't show over a native form sheet such as Settings. On
 // Android a form sheet is in the app's own view tree, under this last view at its root.
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { Check, CircleAlert } from "lucide-react-native";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { AccessibilityInfo, Keyboard, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -90,7 +91,7 @@ function Scrim({ onPress, opacity }: { onPress?: () => void; opacity: number }) 
       exiting={FadeOut.duration(140)}
       style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(0, 0, 0, ${opacity})` }]}
     >
-      <Pressable style={{ flex: 1 }} onPress={onPress} accessibilityLabel={onPress ? "Close" : undefined} />
+      <Pressable style={{ flex: 1 }} onPress={onPress} accessibilityLabel={onPress ? t("Close") : undefined} />
     </Animated.View>
   );
 }
@@ -255,7 +256,7 @@ function Banner({ notice }: { notice: Notice }) {
       <Animated.View entering={FadeInUp.springify().damping(22).stiffness(280)} exiting={FadeOutUp.duration(160)}>
         <Pressable
           accessibilityRole="alert"
-          accessibilityHint="Tap to dismiss"
+          accessibilityHint={t("Tap to dismiss")}
           onPress={() => clearNotice(notice.id)}
           style={[styles.banner, { backgroundColor: c.surface, borderColor: c.border }]}
         >

@@ -1,5 +1,9 @@
+import { t } from "i18next";
 import { Braces, Plus, RotateCcw, Search, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Trans } from "react-i18next";
+
+import { msg } from "../../i18n";
 
 import {
   applyBindingsJson,
@@ -28,6 +32,7 @@ import { IconButton, Picker, rowShortcut, searchField, shortcut } from "../ui";
 import { field, outlineButton, PageTitle, primaryButton, quietButton, Section } from "./parts";
 import { anchorOf } from "./search";
 
+/** A command's name in English, as its `data-setting` takes it. Show it with `t`. */
 const nameOf = (command: Command) => commands.find((c) => c.id === command)!.name;
 
 /** One key, as a keycap. */
@@ -59,11 +64,16 @@ function readPress(
   const key = keybindingOf(e);
   if (!key)
     return {
-      refused: `Hold ${window.parallax.platform === "darwin" ? "⌘ or ⌃" : "Ctrl"} with a key.`,
+      refused:
+        window.parallax.platform === "darwin"
+          ? t("Hold ⌘ or ⌃ with a key.")
+          : t("Hold {{key}} with a key.", { key: "Ctrl" }),
     };
   const shown = formatKeybinding(key);
-  if (rowShortcut(e) !== undefined) return { refused: `${shown} opens a sidebar row.` };
-  if (editingKeys.includes(e.code)) return { refused: `${shown} is an editing shortcut.` };
+  if (rowShortcut(e) !== undefined)
+    return { refused: t("{{keys}} opens a sidebar row.", { keys: shown }) };
+  if (editingKeys.includes(e.code))
+    return { refused: t("{{keys}} is an editing shortcut.", { keys: shown }) };
   const taken = commandOf(key);
   if (taken && taken !== command) return { taken, key };
   return { key };
@@ -97,7 +107,11 @@ function Recorder({
   return (
     <button
       type="button"
-      aria-label={recording ? `Press the keys for ${label}` : `Change the keys for ${label}`}
+      aria-label={
+        recording
+          ? t("Press the keys for {{name}}", { name: label })
+          : t("Change the keys for {{name}}", { name: label })
+      }
       onClick={() => setRecording(!recording)}
       onBlur={() => recording && stop()}
       onKeyDown={(e) => {
@@ -117,11 +131,11 @@ function Recorder({
       className={`flex h-9 items-center rounded-lg border px-1 ${wide ? "w-full" : "justify-end"} ${recording ? "border-accent ring-2 ring-accent/40" : "border-transparent hover:border-border"} ${!value && !recording ? "text-faint-foreground" : ""}`}
     >
       {recording ? (
-        <span className="px-2 text-body text-muted-foreground">Press keys…</span>
+        <span className="px-2 text-body text-muted-foreground">{t("Press keys…")}</span>
       ) : value ? (
         <Keys keys={keysOf(value)} />
       ) : (
-        <span className="px-2 font-mono text-body">Unassigned</span>
+        <span className="px-2 font-mono text-body">{t("Unassigned")}</span>
       )}
     </button>
   );
@@ -139,15 +153,15 @@ function WhenPicker({
 }) {
   return (
     <span className="flex items-center gap-2 text-meta">
-      <span className="text-faint-foreground">When</span>
+      <span className="text-faint-foreground">{t("When")}</span>
       <Picker
         label={label}
         value={value}
         onChange={(next) => onChange(next as When)}
         options={whenOptions.map((w) => ({
           value: w.value,
-          label: w.label,
-          description: w.detail,
+          label: t(w.label),
+          description: t(w.detail),
         }))}
         panelClassName="w-80"
         className="-ml-1 font-mono text-meta text-muted-foreground"
@@ -182,16 +196,19 @@ function CommandRow({ command }: { command: Command }) {
       className="group flex items-center justify-between gap-4 border-border/40 px-4 py-2.5 not-last:border-b"
     >
       <div className="min-w-0">
-        <span className="block text-body font-medium">{name}</span>
+        <span className="block text-body font-medium">{t(name)}</span>
         <WhenPicker
-          label={`When ${name} applies`}
+          label={t("When {{name}} applies", { name: t(name) })}
           value={whenOf(command)}
           onChange={(when) => setWhen(command, when)}
         />
         {refused && <Problem>{refused}</Problem>}
         {conflict && (
           <Problem>
-            {formatKeybinding(conflict.key)} already runs {nameOf(conflict.taken)}.
+            {t("{{keys}} already runs {{name}}.", {
+              keys: formatKeybinding(conflict.key),
+              name: t(nameOf(conflict.taken)),
+            })}
             <button
               type="button"
               className="font-medium underline"
@@ -201,10 +218,10 @@ function CommandRow({ command }: { command: Command }) {
                 clear();
               }}
             >
-              Replace it
+              {t("Replace it")}
             </button>
             <button type="button" className="underline" onClick={clear}>
-              Keep it
+              {t("Keep it")}
             </button>
           </Problem>
         )}
@@ -213,7 +230,7 @@ function CommandRow({ command }: { command: Command }) {
         {!isDefault(command) && (
           <IconButton
             reveal
-            label={`Reset ${name}`}
+            label={t("Reset {{name}}", { name: t(name) })}
             onClick={() => {
               resetBinding(command);
               clear();
@@ -225,7 +242,7 @@ function CommandRow({ command }: { command: Command }) {
         {binding && (
           <IconButton
             reveal
-            label={`Remove the keys for ${name}`}
+            label={t("Remove the keys for {{name}}", { name: t(name) })}
             onClick={() => {
               setBinding(command, null);
               clear();
@@ -235,7 +252,7 @@ function CommandRow({ command }: { command: Command }) {
           </IconButton>
         )}
         <Recorder
-          label={name}
+          label={t(name)}
           value={binding}
           onClear={() => setBinding(command, null)}
           onCancel={() => setRefused(undefined)}
@@ -276,25 +293,25 @@ function NewBinding({ onClose }: { onClose: () => void }) {
   return (
     <div
       role="group"
-      aria-label="New keybinding"
+      aria-label={t("New keybinding")}
       className="mb-10 rounded-xl border border-border/40 bg-(--pane-card) px-4 py-3.5"
     >
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <span className="block text-body font-medium">New keybinding</span>
-          <WhenPicker label="When it applies" value={when} onChange={setChosenWhen} />
+          <span className="block text-body font-medium">{t("New keybinding")}</span>
+          <WhenPicker label={t("When it applies")} value={when} onChange={setChosenWhen} />
         </div>
         <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
           <Picker
             field
-            label="Command"
-            placeholder="Command"
+            label={t("Command")}
+            placeholder={t("Command")}
             value={command ?? ""}
             onChange={(next) => setCommand(next as Command)}
-            options={[...commands]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((c) => ({ value: c.id, label: c.name }))}
-            search="Search commands"
+            options={commands
+              .map((c) => ({ value: c.id, label: t(c.name) }))
+              .sort((a, b) => a.label.localeCompare(b.label))}
+            search={t("Search commands")}
             align="start"
             className="w-72"
             panelClassName="w-80"
@@ -302,7 +319,7 @@ function NewBinding({ onClose }: { onClose: () => void }) {
           <span className="w-44 shrink-0 rounded-lg border border-border bg-background">
             <Recorder
               wide
-              label="the new keybinding"
+              label={t("the new keybinding")}
               value={key}
               onPress={(e) => {
                 const press = readPress(e, command);
@@ -328,9 +345,9 @@ function NewBinding({ onClose }: { onClose: () => void }) {
               onClose();
             }}
           >
-            Save
+            {t("Save")}
           </button>
-          <IconButton label="Cancel the new keybinding" onClick={onClose}>
+          <IconButton label={t("Cancel the new keybinding")} onClick={onClose}>
             <X aria-hidden />
           </IconButton>
         </div>
@@ -342,9 +359,12 @@ function NewBinding({ onClose }: { onClose: () => void }) {
               {refused}
             </span>
           ) : taken ? (
-            `Moves ${formatKeybinding(key!)} from ${nameOf(taken)}.`
+            t("Moves {{keys}} from {{name}}.", {
+              keys: formatKeybinding(key!),
+              name: t(nameOf(taken)),
+            })
           ) : (
-            `Replaces ${formatKeybinding(had!)}. A command has one shortcut.`
+            t("Replaces {{keys}}. A command has one shortcut.", { keys: formatKeybinding(had!) })
           )}
         </p>
       )}
@@ -359,13 +379,15 @@ function JsonEditor({ onClose }: { onClose: () => void }) {
   return (
     <div className="mb-10 flex flex-col gap-2 rounded-xl border border-border/40 bg-(--pane-card) px-4 py-3.5">
       <p className="text-meta text-muted-foreground">
-        Each command by id, with <code className="font-mono">key</code> as{" "}
-        <code className="font-mono">Mod+KeyK</code>, or <code className="font-mono">null</code> for
-        none, and <code className="font-mono">when</code> as one of{" "}
-        <code className="font-mono">{whenOptions.map((w) => w.value).join(", ")}</code>.
+        <Trans values={{ whens: whenOptions.map((w) => w.value).join(", ") }}>
+          Each command by id, with <code className="font-mono">key</code> as{" "}
+          <code className="font-mono">Mod+KeyK</code>, or <code className="font-mono">null</code>{" "}
+          for none, and <code className="font-mono">when</code> as one of{" "}
+          <code className="font-mono">{"{{whens}}"}</code>.
+        </Trans>
       </p>
       <textarea
-        aria-label="Keybindings as JSON"
+        aria-label={t("Keybindings as JSON")}
         spellCheck={false}
         rows={14}
         value={text}
@@ -381,7 +403,7 @@ function JsonEditor({ onClose }: { onClose: () => void }) {
       )}
       <span className="flex justify-end gap-2">
         <button type="button" className={quietButton} onClick={onClose}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           type="button"
@@ -392,14 +414,17 @@ function JsonEditor({ onClose }: { onClose: () => void }) {
             if (problems.length === 0) onClose();
           }}
         >
-          Apply
+          {t("Apply")}
         </button>
       </span>
     </div>
   );
 }
 
-/** A shortcut that can't be changed: its name and what it does, and its keys. */
+/**
+ * A shortcut that can't be changed: its name and what it does, and its keys. `title` and
+ * `description` are English, shown with `t`, and `title` is its `data-setting`.
+ */
 function BuiltIn({
   title,
   description,
@@ -415,9 +440,9 @@ function BuiltIn({
       className="flex items-center justify-between gap-4 border-border/40 px-4 py-2.5 not-last:border-b"
     >
       <div className="min-w-0">
-        <span className="block text-body font-medium">{title}</span>
+        <span className="block text-body font-medium">{t(title)}</span>
         {description && (
-          <span className="block text-meta text-muted-foreground">{description}</span>
+          <span className="block text-meta text-muted-foreground">{t(description)}</span>
         )}
       </div>
       <span className="pr-1">
@@ -447,33 +472,33 @@ export function KeybindSettings() {
   const found = commands.filter((c) => {
     const binding = bindingOf(c.id);
     const text =
-      `${c.name} ${c.category} ${whenOf(c.id)} ${binding ? `${formatKeybinding(binding)} ${binding}` : "unassigned"}`.toLowerCase();
+      `${c.name} ${t(c.name)} ${c.category} ${t(c.category)} ${whenOf(c.id)} ${binding ? `${formatKeybinding(binding)} ${binding}` : `unassigned ${t("Unassigned")}`}`.toLowerCase();
     return words.every((word) => text.includes(word));
   });
   const builtIn = (mod: (keys: string) => string) => [
     {
-      title: "Open a sidebar row",
-      description: "The first nine threads in the sidebar.",
+      title: msg("Open a sidebar row"),
+      description: msg("The first nine threads in the sidebar."),
       keys: [mod("1"), "–", mod("9")],
     },
     {
-      title: "Send a message",
-      description: "While an agent runs, Enter queues the message for its next turn.",
+      title: msg("Send a message"),
+      description: msg("While an agent runs, Enter queues the message for its next turn."),
       keys: ["Enter"],
     },
     {
-      title: "Steer an agent now",
-      description: "In an active thread, send into the current turn.",
+      title: msg("Steer an agent now"),
+      description: msg("In an active thread, send into the current turn."),
       keys: [mod("Enter")],
     },
-    { title: "Start a new thread and stay here", keys: [mod("Enter")] },
-    { title: "New line in a message", keys: [mac ? "⇧ Enter" : "Shift+Enter"] },
+    { title: msg("Start a new thread and stay here"), keys: [mod("Enter")] },
+    { title: msg("New line in a message"), keys: [mac ? "⇧ Enter" : "Shift+Enter"] },
   ];
 
   return (
     <>
       <PageTitle
-        title="Keybindings"
+        title={t("Keybindings")}
         action={
           <button
             type="button"
@@ -481,12 +506,13 @@ export function KeybindSettings() {
             disabled={commands.every((c) => isDefault(c.id))}
             onClick={resetBindings}
           >
-            Reset all
+            {t("Reset all")}
           </button>
         }
       >
-        Shortcuts for the whole app. Each command has one. Click its keys to change them, then
-        Backspace to remove them. Repository actions keep their own.
+        {t(
+          "Shortcuts for the whole app. Each command has one. Click its keys to change them, then Backspace to remove them. Repository actions keep their own.",
+        )}
       </PageTitle>
       <div className="mb-10 flex items-center gap-2 rounded-xl border border-border/40 bg-(--pane-card) p-3">
         <label className={`${searchField} flex min-w-0 flex-1 items-center gap-2`}>
@@ -494,8 +520,8 @@ export function KeybindSettings() {
           <input
             ref={box}
             type="search"
-            aria-label="Search keybindings"
-            placeholder="Search keybindings"
+            aria-label={t("Search keybindings")}
+            placeholder={t("Search keybindings")}
             value={query}
             spellCheck={false}
             onChange={(e) => setQuery(e.target.value)}
@@ -517,11 +543,11 @@ export function KeybindSettings() {
           }}
         >
           <Plus aria-hidden />
-          Add keybinding
+          {t("Add keybinding")}
         </button>
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-border">
           <IconButton
-            label="Edit keybindings as JSON"
+            label={t("Edit keybindings as JSON")}
             onClick={() => {
               setJson(!json);
               setAdding(false);
@@ -537,7 +563,7 @@ export function KeybindSettings() {
         const rows = found.filter((c) => c.category === category);
         return (
           rows.length > 0 && (
-            <Section key={category} title={category}>
+            <Section key={category} title={t(category)}>
               {rows.map((c) => (
                 <CommandRow key={c.id} command={c.id} />
               ))}
@@ -547,11 +573,11 @@ export function KeybindSettings() {
       })}
       {found.length === 0 && (
         <p className="mb-10 py-6 text-center text-body text-faint-foreground">
-          No keybindings match “{query.trim()}”
+          {t("No keybindings match “{{query}}”", { query: query.trim() })}
         </p>
       )}
       {!query && (
-        <Section title="Built in">
+        <Section title={t("Built in")}>
           {builtIn(shortcut).map((b) => (
             <BuiltIn key={b.title} {...b} />
           ))}

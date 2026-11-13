@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import {
@@ -262,7 +263,10 @@ async function asAdministrator(command: string): Promise<void> {
   } catch (error) {
     // -128: the user cancelled the dialog.
     const cancelled = /-128/.test(String((error as { stderr?: unknown }).stderr ?? error));
-    throw new Error(cancelled ? "Cancelled." : `macOS couldn't do it: ${String(error)}`);
+    // "Cancelled." stays English: callers compare it.
+    throw new Error(
+      cancelled ? "Cancelled." : t("macOS couldn't do it: {{why}}", { why: String(error) }),
+    );
   }
 }
 

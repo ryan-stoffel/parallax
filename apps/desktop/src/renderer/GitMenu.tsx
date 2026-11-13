@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   Check,
   ChevronDown,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { msg } from "../i18n";
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, GitStatus, RepoId } from "../protocol/generated/protocol";
 import { useConnectedNow, useShownConnection } from "./ConnectionStatus";
@@ -27,9 +29,14 @@ import { Menu, menuItem } from "./ui";
 type GitAction = "commit" | "push" | "pr";
 
 const actions: { action: GitAction; label: string; busy: string; Icon: LucideIcon }[] = [
-  { action: "commit", label: "Commit", busy: "Committing…", Icon: GitCommitHorizontal },
-  { action: "push", label: "Push", busy: "Pushing…", Icon: CloudUpload },
-  { action: "pr", label: "Create PR", busy: "Creating PR…", Icon: GitPullRequestArrow },
+  {
+    action: "commit",
+    label: msg("Commit"),
+    busy: msg("Committing…"),
+    Icon: GitCommitHorizontal,
+  },
+  { action: "push", label: msg("Push"), busy: msg("Pushing…"), Icon: CloudUpload },
+  { action: "pr", label: msg("Create PR"), busy: msg("Creating PR…"), Icon: GitPullRequestArrow },
 ];
 
 /**
@@ -44,19 +51,19 @@ export function gitActions(
   hasPr = false,
 ): { why: Partial<Record<GitAction, string>>; main: GitAction } {
   const all = (reason: string) => ({ commit: reason, push: reason, pr: reason });
-  if (isRunning(run.status)) return { why: all("Wait for the turn to end"), main: "commit" };
-  if (!status) return { why: all("Loading…"), main: "commit" };
+  if (isRunning(run.status)) return { why: all(t("Wait for the turn to end")), main: "commit" };
+  if (!status) return { why: all(t("Loading…")), main: "commit" };
   const why: Partial<Record<GitAction, string>> = {};
-  if (status.changes === 0) why.commit = "No changes";
-  if (!status.origin) why.push = why.pr = "No origin remote";
+  if (status.changes === 0) why.commit = t("No changes");
+  if (!status.origin) why.push = why.pr = t("No origin remote");
   // The branch row says Detached HEAD, so this says what to do about it.
-  else if (!status.branch) why.push = why.pr = "Check out a branch";
+  else if (!status.branch) why.push = why.pr = t("Check out a branch");
   else {
-    if (status.ahead === 0) why.push = "Nothing to push";
-    if (hasPr) why.pr = "A pull request is already open";
-    else if (!canOpenPr) why.pr = "This host's plxd can't open pull requests";
+    if (status.ahead === 0) why.push = t("Nothing to push");
+    if (hasPr) why.pr = t("A pull request is already open");
+    else if (!canOpenPr) why.pr = t("This host's plxd can't open pull requests");
     // A worktree's pull request is of the run's commits.
-    else if (!run.checkout && !run.diff) why.pr = "No commits yet";
+    else if (!run.checkout && !run.diff) why.pr = t("No commits yet");
   }
   const main = !why.commit ? "commit" : !why.push ? "push" : "pr";
   return { why, main };
@@ -64,18 +71,24 @@ export function gitActions(
 
 /** Where `status` stands, in a few words: uncommitted files, commits to push, and the upstream. */
 export function syncText(status: GitStatus): string {
-  const files = status.changes === 1 ? "1 uncommitted file" : `${status.changes} uncommitted files`;
-  const commits = status.ahead === 1 ? "1 commit to push" : `${status.ahead} commits to push`;
+  const files = t("{{count}} uncommitted files", {
+    count: status.changes,
+    defaultValue_one: "{{count}} uncommitted file",
+  });
+  const commits = t("{{count}} commits to push", {
+    count: status.ahead,
+    defaultValue_one: "{{count}} commit to push",
+  });
   const remote = !status.origin
-    ? "No origin remote"
+    ? t("No origin remote")
     : !status.branch
       ? undefined
       : status.ahead
         ? commits
         : !status.upstream
-          ? "Not pushed yet"
-          : `Up to date with ${status.upstream}`;
-  return [status.changes ? files : !status.ahead && "No uncommitted changes", remote]
+          ? t("Not pushed yet")
+          : t("Up to date with {{upstream}}", { upstream: status.upstream });
+  return [status.changes ? files : !status.ahead && t("No uncommitted changes"), remote]
     .filter(Boolean)
     .join(" · ");
 }
@@ -83,17 +96,20 @@ export function syncText(status: GitStatus): string {
 /** `syncText` short enough to sit beside the branch on its row. */
 export function syncBrief(status: GitStatus): string {
   const remote = !status.origin
-    ? "No origin"
+    ? t("No origin")
     : !status.branch
       ? undefined
       : status.ahead
-        ? `${status.ahead} to push`
+        ? t("{{count}} to push", { count: status.ahead })
         : !status.upstream
-          ? "Not pushed"
+          ? t("Not pushed")
           : undefined;
-  const brief = [status.changes && `${status.changes} uncommitted`, remote].filter(Boolean);
+  const brief = [
+    status.changes && t("{{count}} uncommitted", { count: status.changes }),
+    remote,
+  ].filter(Boolean);
   // A detached HEAD has nothing to be in sync with.
-  return brief.length ? brief.join(" · ") : status.branch ? "Synced" : "Clean";
+  return brief.length ? brief.join(" · ") : status.branch ? t("Synced") : t("Clean");
 }
 
 /**
@@ -165,8 +181,8 @@ export function GitMenu({
         setDiagnostic(describeError(answer.error));
         setError(
           answer.error.data?.kind === "worktreeMissing"
-            ? "Worktree no longer exists"
-            : "Git status unavailable",
+            ? t("Worktree no longer exists")
+            : t("Git status unavailable"),
         );
       } else {
         setStatus(answer.result);
@@ -197,9 +213,9 @@ export function GitMenu({
     ? gitActions(run, status, "openPr" in capabilities!, hasPr)
     : {
         why: {
-          commit: "Start the thread to commit",
-          push: "Start the thread to push",
-          pr: "Start the thread to open a PR",
+          commit: t("Start the thread to commit"),
+          push: t("Start the thread to push"),
+          pr: t("Start the thread to open a PR"),
         },
         main: "commit" as const,
       };
@@ -224,9 +240,9 @@ export function GitMenu({
         else window.open(url, "_blank");
         done = {
           tone: "success",
-          title: "Pull request opened",
+          title: t("Pull request opened"),
           body: prTitle,
-          action: { label: "View on GitHub", href: url },
+          action: { label: t("View on GitHub"), href: url },
         };
         await load();
       }
@@ -240,8 +256,8 @@ export function GitMenu({
         setStatus(answer.result);
         done =
           action === "commit"
-            ? { tone: "success", title: "Committed", body: message.trim().split("\n")[0] }
-            : { tone: "success", title: "Pushed", body: answer.result.branch ?? undefined };
+            ? { tone: "success", title: t("Committed"), body: message.trim().split("\n")[0] }
+            : { tone: "success", title: t("Pushed"), body: answer.result.branch ?? undefined };
       }
     }
     setBusy(undefined);
@@ -249,15 +265,15 @@ export function GitMenu({
     if (done) notify({ ...done, key });
     if (action === "commit" && !failed) dialog.current?.close();
     else if (action === "commit" && failed)
-      notify({ key, tone: "error", title: "Couldn't commit", body: describeError(failed) });
+      notify({ key, tone: "error", title: t("Couldn't commit"), body: describeError(failed) });
     else if (failed) {
       const short = onSetUpGithub && githubProblem(failed);
       notify({
         key,
         tone: "error",
-        title: action === "push" ? "Push failed" : "Couldn't create the pull request",
+        title: action === "push" ? t("Push failed") : t("Couldn't create the pull request"),
         body: short || describeError(failed),
-        action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
+        action: short ? { label: t("Set up GitHub"), run: onSetUpGithub } : undefined,
       });
     }
   };
@@ -283,14 +299,14 @@ export function GitMenu({
       <div
         hidden={!branch}
         role={status || !error ? undefined : "alert"}
-        title={status ? `${status.branch ?? "Detached HEAD"}\n${syncText(status)}` : diagnostic}
+        title={status ? `${status.branch ?? t("Detached HEAD")}\n${syncText(status)}` : diagnostic}
         className="group/branch flex items-center gap-2 rounded-md px-2 py-1.5"
       >
         <GitBranch aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <span
           className={`min-w-0 flex-1 truncate text-body ${!status && error ? "text-danger" : ""}`}
         >
-          {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
+          {status ? (status.branch ?? t("Detached HEAD")) : (error ?? t("Loading branch…"))}
         </span>
         {status && (
           <span className="shrink-0 text-meta text-faint-foreground">{syncBrief(status)}</span>
@@ -299,8 +315,8 @@ export function GitMenu({
           <button
             type="button"
             onClick={copyBranch}
-            aria-label={copied ? "Copied" : "Copy branch name"}
-            title={copied ? "Copied" : "Copy branch name"}
+            aria-label={copied ? t("Copied") : t("Copy branch name")}
+            title={copied ? t("Copied") : t("Copy branch name")}
             className="-my-0.5 grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/branch:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5!"
           >
             {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
@@ -315,15 +331,15 @@ export function GitMenu({
         className={`${menuItem} disabled:opacity-50 [&_svg]:size-4`}
       >
         <FileDiff aria-hidden className="text-muted-foreground" />
-        <span className="flex-1">Changes</span>
+        <span className="flex-1">{t("Changes")}</span>
         <span className="text-meta text-muted-foreground">
           {status
             ? lines > 0 && (
                 <DiffStat added={status.insertions ?? 0} removed={status.deletions ?? 0} />
               )
             : error
-              ? "Unavailable"
-              : "Loading…"}
+              ? t("Unavailable")
+              : t("Loading…")}
         </span>
         <ChevronRight aria-hidden className="text-faint-foreground" />
       </button>
@@ -345,17 +361,17 @@ export function GitMenu({
           )}
           <span className="truncate">
             {busy
-              ? actions.find((a) => a.action === busy)!.busy
+              ? t(actions.find((a) => a.action === busy)!.busy)
               : settled
-                ? "Nothing to commit or push"
-                : primary.label}
+                ? t("Nothing to commit or push")
+                : t(primary.label)}
           </span>
         </button>
         <button
           type="button"
           popoverTarget={id}
           aria-haspopup="menu"
-          aria-label="Git actions"
+          aria-label={t("Git actions")}
           className="grid w-8 shrink-0 place-items-center rounded-r-lg border-l border-border text-muted-foreground hover:bg-hover [&_svg]:size-4"
         >
           <ChevronDown aria-hidden />
@@ -375,7 +391,7 @@ export function GitMenu({
             className={`${menuItem} disabled:opacity-50 disabled:hover:bg-transparent [&_svg]:size-4`}
           >
             <Icon aria-hidden />
-            <span className="flex-1">{label}</span>
+            <span className="flex-1">{t(label)}</span>
             {why[action] && <span className="text-meta text-faint-foreground">{why[action]}</span>}
           </button>
         ))}
@@ -393,15 +409,17 @@ export function GitMenu({
         >
           <div className="px-5 pt-4 pb-3">
             <h2 id={`${id}-commit`} className="text-reading font-semibold">
-              Commit changes
+              {t("Commit changes")}
             </h2>
             <p className="mt-0.5 text-body text-muted-foreground">
-              Stages every change on {status?.branch ?? "the detached HEAD"} and commits it.
+              {status?.branch
+                ? t("Stages every change on {{branch}} and commits it.", { branch: status.branch })
+                : t("Stages every change on the detached HEAD and commits it.")}
             </p>
           </div>
           <div className="px-5 pb-4">
             <textarea
-              aria-label="Commit message"
+              aria-label={t("Commit message")}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               rows={3}
@@ -415,14 +433,14 @@ export function GitMenu({
               onClick={() => dialog.current?.close()}
               className="ml-auto shrink-0 rounded-md px-3 py-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
             >
-              Cancel
+              {t("Cancel")}
             </button>
             <button
               type="submit"
               disabled={!message.trim() || !!busy}
               className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
             >
-              {busy === "commit" ? "Committing…" : "Commit"}
+              {busy === "commit" ? t("Committing…") : t("Commit")}
             </button>
           </div>
         </form>

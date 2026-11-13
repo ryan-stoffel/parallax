@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   Check,
   ChevronDown,
@@ -12,6 +13,7 @@ import {
 
 import { useId, useState } from "react";
 
+import { msg } from "../i18n";
 import { useShownConnection } from "./ConnectionStatus";
 
 import { DeviceIcon } from "./DeviceIcon";
@@ -21,18 +23,19 @@ import { Menu, MenuOption, menuButton, menuHeading, menuItem, type PickerOption 
 /** Where a new thread works: a worktree of its own, or the repository's own checkout. */
 export type Workspace = "worktree" | "checkout";
 
+/** Its `label` and `description` are English, marked with `msg`; show them with `t`. */
 export const workspaces: (PickerOption & { value: Workspace })[] = [
   {
     value: "worktree",
-    label: "New worktree",
+    label: msg("New worktree"),
     icon: <FolderGit2 />,
-    description: "A fresh branch and folder, so your checkout stays as it is.",
+    description: msg("A fresh branch and folder, so your checkout stays as it is."),
   },
   {
     value: "checkout",
-    label: "Local checkout",
+    label: msg("Local checkout"),
     icon: <Folder />,
-    description: "Right in the repository, on the branch you have out.",
+    description: msg("Right in the repository, on the branch you have out."),
   },
 ];
 
@@ -52,11 +55,11 @@ export const hostIcon = (host: Host) =>
 /** How a computer is reached, under its name. */
 export const connection = (host: Host) =>
   host.id === localId
-    ? "This computer"
+    ? t("This computer")
     : host.destination
-      ? `SSH · ${host.destination}`
+      ? t("SSH · {{destination}}", { destination: host.destination })
       : host.routes
-        ? "Same network"
+        ? t("Same network")
         : "Parallax Connect";
 
 /** Past this many computers, the menu adds a search box. */
@@ -66,11 +69,11 @@ const searchFrom = 7;
 function Picked() {
   return (
     <span
-      title="Picked by the Load Balancer"
+      title={t("Picked by the Load Balancer")}
       className="inline-flex shrink-0 text-faint-foreground"
     >
       <Scale aria-hidden className="size-3.5!" />
-      <span className="sr-only">, picked by the Load Balancer</span>
+      <span className="sr-only">{t(", picked by the Load Balancer")}</span>
     </span>
   );
 }
@@ -98,7 +101,7 @@ function HostOption({
   const status = useShownConnection(host.id)?.status;
   const offline = status === "failed";
   const note = offline
-    ? "Offline"
+    ? t("Offline")
     : (why ??
       (host.id === localId || host.destination || host.routes ? connection(host) : undefined));
   return (
@@ -126,10 +129,10 @@ function HostOption({
       </span>
       {missing && (
         <span
-          title={`Picking it clones ${missing} there`}
+          title={t("Picking it clones {{repo}} there", { repo: missing })}
           className="shrink-0 text-meta text-faint-foreground"
         >
-          Clones {missing}
+          {t("Clones {{repo}}", { repo: missing })}
         </span>
       )}
       <span className={`grid h-5 place-items-center ${checked ? "" : "invisible"}`}>
@@ -192,26 +195,34 @@ export function RunTargetMenu({
   const shown = q ? hosts.filter((h) => h.name.toLowerCase().includes(q)) : hosts;
   // While it has no pick, the bar says so, not the computer the draft is on.
   const chosen = balancer?.checking
-    ? "Choosing a computer…"
+    ? t("Choosing a computer…")
     : balancer?.none
-      ? "Pick a computer"
+      ? t("Pick a computer")
       : host.name;
   const picked = !!balancer?.on && !balancer.checking && !balancer.none;
+  const where = { computer: chosen, workspace: workspace && t(workspace.label) };
+  const runsOn = picked
+    ? workspace
+      ? t("Runs on: {{computer}}, picked by the Load Balancer, {{workspace}}", where)
+      : t("Runs on: {{computer}}, picked by the Load Balancer", where)
+    : workspace
+      ? t("Runs on: {{computer}}, {{workspace}}", where)
+      : t("Runs on: {{computer}}", where);
   return (
     <>
       <button
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={`Runs on: ${chosen}${picked ? ", picked by the Load Balancer" : ""}${workspace ? `, ${workspace.label}` : ""}`}
+        aria-label={runsOn}
         aria-busy={busy}
         title={
           balancer?.checking
-            ? "The Load Balancer is choosing a computer"
+            ? t("The Load Balancer is choosing a computer")
             : balancer?.none
               ? balancer.problem
               : picked
-                ? `${host.name}, picked by the Load Balancer`
+                ? t("{{computer}}, picked by the Load Balancer", { computer: host.name })
                 : host.name
         }
         className={`${menuButton} min-w-0`}
@@ -229,14 +240,14 @@ export function RunTargetMenu({
         {workspace && (
           <span className="ml-2.5 flex shrink-0 items-center gap-1.5">
             {workspace.icon}
-            <span className="composer-detail">{workspace.label}</span>
+            <span className="composer-detail">{t(workspace.label)}</span>
           </span>
         )}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <Menu
         id={id}
-        label="Runs on"
+        label={t("Runs on")}
         className="w-80 overflow-hidden p-0"
         focus={searchable ? "input" : '[aria-checked="true"]'}
         onClose={() => setQuery("")}
@@ -246,8 +257,8 @@ export function RunTargetMenu({
             <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
             <input
               type="search"
-              aria-label="Search computers"
-              placeholder="Search computers..."
+              aria-label={t("Search computers")}
+              placeholder={t("Search computers...")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -257,9 +268,9 @@ export function RunTargetMenu({
             />
           </label>
         )}
-        <div role="group" aria-label="Computer" className="p-1">
+        <div role="group" aria-label={t("Computer")} className="p-1">
           <p aria-hidden className={menuHeading}>
-            Computer
+            {t("Computer")}
           </p>
           <div className="max-h-72 overflow-y-auto">
             {shown.map((h) => (
@@ -284,12 +295,12 @@ export function RunTargetMenu({
               <span className="grid h-5 place-items-center">
                 <Scale aria-hidden />
               </span>
-              Let the Load Balancer choose
+              {t("Let the Load Balancer choose")}
             </button>
           )}
           {(balancer?.checking || balancer?.problem) && (
             <p className="px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
-              {balancer.checking ? "Choosing a computer…" : balancer.problem}
+              {balancer.checking ? t("Choosing a computer…") : balancer.problem}
               {balancer.onSettings && (
                 <>
                   {" "}
@@ -298,30 +309,30 @@ export function RunTargetMenu({
                     onClick={balancer.onSettings}
                     className="rounded-sm text-accent hover:underline"
                   >
-                    Choose computers
+                    {t("Choose computers")}
                   </button>
                 </>
               )}
             </p>
           )}
           {shown.length === 0 && (
-            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">{t("No matches")}</p>
           )}
           {hosts.length === 1 && (
             <p className="px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
-              Computers you add under Hosts show up here.
+              {t("Computers you add under Hosts show up here.")}
             </p>
           )}
         </div>
         {workspace && (
-          <div role="group" aria-label="Workspace" className="border-t border-border p-1">
+          <div role="group" aria-label={t("Workspace")} className="border-t border-border p-1">
             <p aria-hidden className={menuHeading}>
-              Workspace
+              {t("Workspace")}
             </p>
             {workspaces.map((w) => (
               <MenuOption
                 key={w.value}
-                option={{ value: w.value, label: w.label, icon: w.icon }}
+                option={{ value: w.value, label: t(w.label), icon: w.icon }}
                 checked={w === workspace}
                 disabled={w.value === "checkout" && !!checkoutUnavailable}
                 onClick={() => onWorkspaceChange?.(w.value)}
@@ -329,7 +340,7 @@ export function RunTargetMenu({
             ))}
             {checkoutUnavailable && (
               <p className="px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
-                Local checkout {checkoutUnavailable}.
+                {t("Local checkout {{reason}}.", { reason: checkoutUnavailable })}
               </p>
             )}
           </div>

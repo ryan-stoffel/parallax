@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
@@ -366,7 +367,7 @@ export function titleOf(run: AgentRun): string {
       .trim()
       .split("\n")[0]
       ?.replace(/@"([^"]*)"/g, "$1") ||
-      "Image")
+      t("Image"))
   );
 }
 
@@ -406,7 +407,7 @@ export interface ThreadGroup {
 export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
   return [
     ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, project: r.project })),
-    { id: noRepo, name: "No repo" },
+    { id: noRepo, name: t("No repo") },
   ];
 }
 
@@ -575,7 +576,12 @@ async function copyProject(view: ThreadsView, source: Repo): Promise<Repo | stri
   if (!failed) return made;
   // It's empty, and a retry would find it by name and skip the instructions.
   const stuck = await view.removeProject(made.id);
-  return stuck ? `${source.name} is there now, but without its instructions: ${failed}` : failed;
+  return stuck
+    ? t("{{name}} is there now, but without its instructions: {{error}}", {
+        name: source.name,
+        error: failed,
+      })
+    : failed;
 }
 
 // Copies under way, by computer and name, so threads added at once share one Project: plxd only
@@ -1211,7 +1217,7 @@ export function useThreads(
   );
 }
 
-const notConnected = "Not connected to this host.";
+const notConnected = () => t("Not connected to this host.");
 /** A disconnected host's capabilities: one shared object, so a view without them stays equal. */
 const noCapabilities: Capabilities = {};
 
@@ -1221,18 +1227,18 @@ export const idleThreads: ThreadsView = {
   state: emptyThreads,
   capabilities: noCapabilities,
   retry: () => {},
-  addRepo: async () => notConnected,
-  start: async () => ({ code: -32000, message: notConnected }),
-  fork: async () => ({ code: -32000, message: notConnected }),
-  archive: async () => notConnected,
-  remove: async () => notConnected,
-  createOrchestrator: async () => notConnected,
-  updateOrchestrator: async () => notConnected,
-  removeOrchestrator: async () => notConnected,
-  startOrchestrator: async () => ({ code: -32000, message: notConnected }),
-  update: async () => notConnected,
-  updateRepo: async () => notConnected,
-  createProject: async () => notConnected,
-  removeProject: async () => notConnected,
-  setProject: async () => notConnected,
+  addRepo: async () => notConnected(),
+  start: async () => ({ code: -32000, message: notConnected() }),
+  fork: async () => ({ code: -32000, message: notConnected() }),
+  archive: async () => notConnected(),
+  remove: async () => notConnected(),
+  createOrchestrator: async () => notConnected(),
+  updateOrchestrator: async () => notConnected(),
+  removeOrchestrator: async () => notConnected(),
+  startOrchestrator: async () => ({ code: -32000, message: notConnected() }),
+  update: async () => notConnected(),
+  updateRepo: async () => notConnected(),
+  createProject: async () => notConnected(),
+  removeProject: async () => notConnected(),
+  setProject: async () => notConnected(),
 };

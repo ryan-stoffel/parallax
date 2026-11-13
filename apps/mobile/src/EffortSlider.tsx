@@ -2,6 +2,7 @@
 // thumb that springs from stop to stop with a tick, and each level's name under its stop. A drag
 // or a tap picks the nearest stop. At Max the thumb pops.
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -103,8 +104,8 @@ export function EffortSlider({
         <View
           accessible
           accessibilityRole="adjustable"
-          accessibilityLabel="Reasoning effort"
-          accessibilityValue={{ text: effortLevels[level]?.name ?? "Default" }}
+          accessibilityLabel={t("Reasoning effort")}
+          accessibilityValue={{ text: t(effortLevels[level]?.name ?? "Default") }}
           accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
           onAccessibilityAction={(e) => {
             const i = Math.min(Math.max(level + (e.nativeEvent.actionName === "increment" ? 1 : -1), 0), last);
@@ -147,7 +148,7 @@ export function EffortSlider({
               numberOfLines={1}
               style={{ ...styles.name, left: at(i, width) - NAME / 2, ...(i === level && { color: c.accent }) }}
             >
-              {l.name}
+              {t(l.name)}
             </T>
           ))}
       </View>

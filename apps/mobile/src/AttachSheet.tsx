@@ -5,6 +5,7 @@
 // first is done.
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { Asset, AssetField, MediaType, Query, requestPermissionsAsync, type AssetMetadata } from "expo-media-library";
 import { Camera, Check, FileText, X } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
@@ -96,8 +97,8 @@ export function AttachSheet({
       }}
       head={
         <View style={styles.head}>
-          <T style={sheetTitle}>Add to thread</T>
-          <GlassButton label="Close" size={40} onPress={onClose}>
+          <T style={sheetTitle}>{t("Add to thread")}</T>
+          <GlassButton label={t("Close")} size={40} onPress={onClose}>
             <Icon icon={X} size={20} color={c.foreground} />
           </GlassButton>
           <GlassView isInteractive style={[styles.pill, !glass && { backgroundColor: c.surface }]}>
@@ -107,7 +108,7 @@ export function AttachSheet({
               style={[styles.center, { paddingHorizontal: 16 }]}
             >
               <T medium style={{ fontSize: 16 }}>
-                Photos
+                {t("Photos")}
               </T>
             </Pressable>
           </GlassView>
@@ -121,7 +122,7 @@ export function AttachSheet({
           style={({ pressed }) => [styles.tile, styles.camera, { backgroundColor: pressed ? c.hover : c.surface }]}
         >
           <Icon icon={Camera} size={26} color={c.foreground} />
-          <T style={{ fontSize: 14 }}>Camera</T>
+          <T style={{ fontSize: 14 }}>{t("Camera")}</T>
         </Pressable>
         {allowed &&
           recent.map((p) => {
@@ -130,7 +131,7 @@ export function AttachSheet({
               <Pressable
                 key={p.id}
                 accessibilityRole="button"
-                accessibilityLabel="Photo"
+                accessibilityLabel={t("Photo")}
                 accessibilityState={{ selected: on }}
                 onPress={() => toggle(p)}
               >
@@ -151,11 +152,11 @@ export function AttachSheet({
       {allowed === false && (
         <View style={styles.denied}>
           <T muted style={{ fontSize: 14, flex: 1 }}>
-            Allow access to your photos to see recent ones here.
+            {t("Allow access to your photos to see recent ones here.")}
           </T>
           <Pressable accessibilityRole="button" hitSlop={8} onPress={() => void Linking.openSettings()}>
             <T medium style={{ fontSize: 14, color: c.accent }}>
-              Open Settings
+              {t("Open Settings")}
             </T>
           </Pressable>
         </View>
@@ -167,7 +168,7 @@ export function AttachSheet({
       >
         <Icon icon={FileText} size={20} color={c.foreground} />
         <T medium style={{ fontSize: 16 }}>
-          Add files
+          {t("Add files")}
         </T>
       </Pressable>
     </Sheet>

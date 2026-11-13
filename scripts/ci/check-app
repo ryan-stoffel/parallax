@@ -8,6 +8,8 @@ node --version
 pnpm --version
 pnpm install --frozen-lockfile
 pnpm check
+# en.json holds every string the desktop and phone code shows, and no others (0105).
+pnpm exec i18next-cli extract --ci
 pnpm test
 pnpm build
 

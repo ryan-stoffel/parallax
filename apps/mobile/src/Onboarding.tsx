@@ -2,6 +2,7 @@
 // stands, as this phone asks to use them on its own, so one Allow on another device connects them
 // all (0091), or how to add one when there are none, then notifications. Nothing here needs a tap
 // to connect. Settings › Add computer shows how to add one too.
+import { t } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
@@ -29,7 +30,7 @@ const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop
 const connectCommands = (device?: string) => {
   const flags = `--channel nightly${device ? ` --device=${device}` : ""}`;
   return [
-    { os: "macOS or Linux", command: `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- ${flags}` },
+    { os: t("macOS or Linux"), command: `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- ${flags}` },
     { os: "Windows", command: `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax ${flags}"` },
   ];
 };
@@ -79,7 +80,7 @@ export function AddInstructions({ device }: { device?: string }) {
       {connectCommands(device).map(({ os, command }) => (
         <View key={os} style={{ gap: 4 }}>
           <T muted style={{ fontSize: 14 }}>
-            On {os}, run
+            {t("On {{os}}, run", { os })}
           </T>
           <T selectable style={{ fontFamily: font.mono, fontSize: 13, color: c.foreground }}>
             {command}
@@ -87,7 +88,7 @@ export function AddInstructions({ device }: { device?: string }) {
         </View>
       ))}
       <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-        It signs in to your Parallax account, then shows a 6-digit code. Parallax here shows the same one to allow.
+        {t("It signs in to your Parallax account, then shows a 6-digit code. Parallax here shows the same one to allow.")}
       </T>
     </View>
   );
@@ -165,7 +166,7 @@ export function Onboarding({
       setGates((g) => ({ ...g, [hostId]: { kind: "waiting", code } }));
       if (shownCode.current === code) return;
       shownCode.current = code;
-      showWaiting(hosts.find((h) => h.hostId === hostId)?.name ?? "your computers", code, allow);
+      showWaiting(hosts.find((h) => h.hostId === hostId)?.name ?? t("your computers"), code, allow);
     });
     asking.current = false;
     setStopped(accounts.askingStopped);
@@ -259,8 +260,8 @@ export function Onboarding({
     return (
       <Step
         index={0}
-        title="Your computers"
-        subtitle={`The computers on your Parallax account. Allow this ${PHONE} once on one of them, and they all connect.`}
+        title={t("Your computers")}
+        subtitle={t("The computers on your Parallax account. Allow this {{device}} once on one of them, and they all connect.", { device: PHONE })}
       >
         {!listed ? (
           <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
@@ -281,12 +282,11 @@ export function Onboarding({
             {!listed.length && !paired.length && <AddInstructions device={accounts?.thumbprint} />}
             {waiting ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                Open Parallax on one of your computers and allow this {PHONE}. Both show{" "}
-                {formatCode(waiting.code)}.
+                {t("Open Parallax on one of your computers and allow this {{device}}. Both show {{code}}.", { device: PHONE, code: formatCode(waiting.code) })}
               </T>
             ) : !accounts ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                Parallax couldn't read what this {PHONE} saved. Close the app and open it again.
+                {t("Parallax couldn't read what this {{device}} saved. Close the app and open it again.", { device: PHONE })}
               </T>
             ) : stopped ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
@@ -294,29 +294,29 @@ export function Onboarding({
               </T>
             ) : unanswered ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                Your computers aren't answering this {PHONE} yet. It keeps trying.
+                {t("Your computers aren't answering this {{device}} yet. It keeps trying.", { device: PHONE })}
               </T>
             ) : (
               listed.length > 0 &&
               !listed.some((l) => l.online) &&
               !accounts?.usesAny && (
                 <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                  None of your computers are online. Turn one on, and this {PHONE} asks it by itself.
+                  {t("None of your computers are online. Turn one on, and this {{device}} asks it by itself.", { device: PHONE })}
                 </T>
               )
             )}
           </View>
         )}
-        {stopped && <Button label="Ask again" onPress={() => void askAgain()} />}
-        <Button label="Continue" primary onPress={() => setStep("notify")} />
-        {listed?.length === 0 && <Button label="Look again" onPress={() => void look()} />}
+        {stopped && <Button label={t("Ask again")} onPress={() => void askAgain()} />}
+        <Button label={t("Continue")} primary onPress={() => setStep("notify")} />
+        {listed?.length === 0 && <Button label={t("Look again")} onPress={() => void look()} />}
         {accounts && notReady.length > 0 && (
           <Pressable accessibilityRole="button" onPress={() => enterCode(notReady)} style={{ alignSelf: "center", padding: 10 }}>
-            <T style={{ fontSize: 14, color: c.accent }}>Enter a code from plx connect</T>
+            <T style={{ fontSize: 14, color: c.accent }}>{t("Enter a code from plx connect")}</T>
           </Pressable>
         )}
         <Pressable accessibilityRole="button" onPress={() => setStep("pair")} style={{ alignSelf: "center", padding: 10 }}>
-          <T style={{ fontSize: 14, color: c.accent }}>Pair a computer on this Wi‑Fi instead</T>
+          <T style={{ fontSize: 14, color: c.accent }}>{t("Pair a computer on this Wi‑Fi instead")}</T>
         </Pressable>
       </Step>
     );
@@ -326,24 +326,24 @@ export function Onboarding({
   return (
     <Step
       index={1}
-      title="Stay in the loop"
-      subtitle="Get a notification when a thread needs your approval, finishes, or fails, on any of your computers."
+      title={t("Stay in the loop")}
+      subtitle={t("Get a notification when a thread needs your approval, finishes, or fails, on any of your computers.")}
     >
       <View style={[styles.status, { backgroundColor: c.surface, borderColor: c.border }]}>
         <Icon icon={BellRing} size={24} color={c.accent} />
         <View style={{ flex: 1 }}>
           <T medium>mac-mini</T>
           <T muted style={{ fontSize: 13 }}>
-            Fix the flaky checkout test · Needs your approval
+            {t("Fix the flaky checkout test · Needs your approval")}
           </T>
         </View>
       </View>
       <Button
-        label="Turn on notifications"
+        label={t("Turn on notifications")}
         primary
         onPress={() => void askForNotifications().finally(finish)}
       />
-      <Button label="Not now" onPress={finish} />
+      <Button label={t("Not now")} onPress={finish} />
     </Step>
   );
 }

@@ -9,6 +9,7 @@
 // changes the Project of, or archives it. Its bottom has the profile picture (Settings), pull
 // requests, and New thread. The drawer keeps it mounted, so the sky never flickers in.
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import {
   AlarmClock,
@@ -44,6 +45,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import * as Lucide from "lucide-react-native";
 
+import { msg } from "../../desktop/src/i18n";
 import type { AgentRun, Orchestrator, ChosenIcon, Repo, Thread } from "../../desktop/src/protocol/generated/protocol";
 import {
   attentionOf,
@@ -104,7 +106,7 @@ export interface Entry {
   repoId: string;
 }
 
-export const when = (t: Thread) => t.lastPromptAt ?? t.createdAt;
+export const when = (thread: Thread) => thread.lastPromptAt ?? thread.createdAt;
 
 /** A Parallax orchestrator (0042) as the list shows it: its orchestrator, computer, and attention. */
 export interface ProjectEntry {
@@ -142,14 +144,14 @@ export function useStartOrchestrator() {
   const show = useShow();
   const [starting, setStarting] = useState<string>();
   const ask = ({ computer, orchestrator }: ProjectEntry) =>
-    showPrompt(`Start ${orchestrator.name}`, "What should it work on?", (text) => {
+    showPrompt(t("Start {{name}}", { name: orchestrator.name }), t("What should it work on?"), (text) => {
       const prompt = text.trim();
       if (!prompt) return;
       const runId = uuidv7();
       setStarting(orchestrator.id);
       void startOrchestrator(computer.view, orchestrator.id, runId, prompt).then((failed) => {
         setStarting(undefined);
-        if (failed) return showAlert(`Couldn't start ${orchestrator.name}`, failed);
+        if (failed) return showAlert(t("Couldn't start {{name}}", { name: orchestrator.name }), failed);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Keyboard.dismiss();
         setStarted(runId, prompt);
@@ -173,13 +175,17 @@ function OrchestratorRow({ entry }: { entry: ProjectEntry }) {
   const hostId = computer.machine.id;
   const orchestratorRun = orchestrator.run;
   const startable = !orchestratorRun && canOrchestrate(computer) && !starting;
-  const unstarted = !orchestratorRun && (starting ? "Starting…" : "Not started");
+  const unstarted = !orchestratorRun && (starting ? t("Starting…") : t("Not started"));
   return (
     <View>
       <View style={styles.orchestrator}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${startable ? "Start " : ""}${orchestrator.name}, on ${computer.machine.name}`}
+          accessibilityLabel={
+            startable
+              ? t("Start {{name}}, on {{computer}}", { name: orchestrator.name, computer: computer.machine.name })
+              : t("{{name}}, on {{computer}}", { name: orchestrator.name, computer: computer.machine.name })
+          }
           disabled={!orchestratorRun && !startable}
           onPress={() =>
             orchestratorRun ? show({ name: "Thread", params: { hostId, runId: orchestratorRun } }) : ask(entry)
@@ -223,7 +229,7 @@ function OrchestratorRow({ entry }: { entry: ProjectEntry }) {
         {children.length > 0 && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`${orchestrator.name}'s threads, ${children.length}`}
+            accessibilityLabel={t("{{name}}'s threads, {{count}}", { name: orchestrator.name, count: children.length })}
             accessibilityState={{ expanded: open }}
             hitSlop={6}
             onPress={() => setOpen(!open)}
@@ -269,7 +275,7 @@ export function entriesOf(computers: Computer[]): Entry[] {
           thread,
           run,
           attention: attentionOf(thread, run, asksOf(state, thread.id), waitingOf(state, thread.id)),
-          title: state.titles[thread.id] ?? "New thread",
+          title: state.titles[thread.id] ?? t("New thread"),
           repo: source?.name,
           source,
           repoId: `${computer.machine.id}/${group}`,
@@ -281,14 +287,14 @@ export function entriesOf(computers: Computer[]): Entry[] {
 /** Whether a thread's agent still works for it, as the desktop's Working drawer holds them. */
 const busy = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
 
-/** "Today", "Yesterday", "Earlier this week", or "Older", as the sidebar groups by day. */
+/** "Today", "Yesterday", "Earlier this week", or "Older", as the sidebar groups by day. Shown with `t`. */
 function dayOf(at: string, now = Date.now()) {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   const day = new Date(at);
   day.setHours(0, 0, 0, 0);
   const days = Math.round((start.getTime() - day.getTime()) / 864e5);
-  return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "Earlier this week" : "Older";
+  return days <= 0 ? msg("Today") : days === 1 ? msg("Yesterday") : days < 7 ? msg("Earlier this week") : msg("Older");
 }
 
 /** When a run waiting out a usage limit resumes: a time today, or a day and time after. */
@@ -402,25 +408,25 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
     const project = threadProject(thread, view, computers);
     showMenu(
       [
-        { label: thread.pinned ? "Unpin" : "Pin", icon: thread.pinned ? PinOff : Pin, onPress: () => void view.update(thread.id, { pinned: !thread.pinned }) },
-        ...snoozeChoices().map(({ label, until }) => ({
-          label: `Snooze ${label.toLowerCase()}`,
+        { label: thread.pinned ? t("Unpin") : t("Pin"), icon: thread.pinned ? PinOff : Pin, onPress: () => void view.update(thread.id, { pinned: !thread.pinned }) },
+        ...snoozeChoices().map(({ snooze, until }) => ({
+          label: snooze,
           icon: AlarmClock,
           onPress: () => void view.update(thread.id, { snoozedUntil: until.toISOString() }),
         })),
         // Waking now ends the snooze, as the desktop's undo does.
         ...(asleep
-          ? [{ label: "Unsnooze", icon: AlarmClockOff, onPress: () => void view.update(thread.id, { snoozedUntil: new Date().toISOString() }) }]
+          ? [{ label: t("Unsnooze"), icon: AlarmClockOff, onPress: () => void view.update(thread.id, { snoozedUntil: new Date().toISOString() }) }]
           : []),
-        ...(unseen ? [{ label: "Mark as read", icon: Check, onPress: () => void view.update(thread.id, { seen: true }) }] : []),
+        ...(unseen ? [{ label: t("Mark as read"), icon: Check, onPress: () => void view.update(thread.id, { seen: true }) }] : []),
         {
-          label: "Rename",
+          label: t("Rename"),
           icon: Pencil,
           onPress: () =>
-            showPrompt("Rename thread", undefined, (next) => void view.update(thread.id, { title: next.trim() }), "plain-text", title),
+            showPrompt(t("Rename thread"), undefined, (next) => void view.update(thread.id, { title: next.trim() }), "plain-text", title),
         },
         ...(project ? [{ label: project.label, icon: Folder, onPress: project.choose ?? (() => {}) }] : []),
-        { label: thread.archived ? "Unarchive" : "Archive", icon: thread.archived ? ArchiveRestore : Archive, onPress: () => void view.archive(thread.id, !thread.archived) },
+        { label: thread.archived ? t("Unarchive") : t("Archive"), icon: thread.archived ? ArchiveRestore : Archive, onPress: () => void view.archive(thread.id, !thread.archived) },
       ],
       title,
     );
@@ -432,14 +438,14 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
     <View style={[styles.line, { gap: 4 }]}>
       <Icon icon={AlarmClock} size={13} color={c.warning} />
       <T medium style={{ ...styles.small, color: c.warning }}>
-        Wakes {resumeTime(thread.snoozedUntil!)}
+        {t("Wakes {{time}}", { time: resumeTime(thread.snoozedUntil!) })}
       </T>
     </View>
   ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
     <View style={[styles.line, { gap: 4 }]}>
       <Icon icon={AlarmClock} size={13} color={c.warning} />
       <T medium style={{ ...styles.small, color: c.warning }}>
-        {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+        {run.resumeAt ? t("Resumes {{time}}", { time: resumeTime(run.resumeAt) }) : t("Waiting")}
       </T>
     </View>
   ) : attention === "settled" ? (
@@ -452,7 +458,7 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
 
   return (
     <Swipe
-      label={thread.archived ? "Unarchive" : "Archive"}
+      label={thread.archived ? t("Unarchive") : t("Archive")}
       icon={thread.archived ? Lucide.ArchiveRestore : Archive}
       color={c.projectViolet}
       start={thread.archived}
@@ -460,8 +466,8 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${title}, on ${computer.machine.name}`}
-        accessibilityActions={[{ name: "archive", label: thread.archived ? "Unarchive" : "Archive" }]}
+        accessibilityLabel={t("{{title}}, on {{computer}}", { title, computer: computer.machine.name })}
+        accessibilityActions={[{ name: "archive", label: thread.archived ? t("Unarchive") : t("Archive") }]}
         onAccessibilityAction={() => void view.archive(thread.id, !thread.archived)}
         onPress={() => show({ name: "Thread", params: { hostId: computer.machine.id, runId: thread.id } })}
         onLongPress={actions}
@@ -477,7 +483,7 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
         <View style={styles.line}>
           <RepoIcon repo={entry.source} shared={shared} size={14} />
           <T faint numberOfLines={1} style={{ ...styles.small, flex: 1 }}>
-            {[repo ?? "No repo", run?.branch].filter(Boolean).join(" · ")}
+            {[repo ?? t("No repo"), run?.branch].filter(Boolean).join(" · ")}
           </T>
           {!!diff?.files && (
             <T style={styles.small}>
@@ -608,19 +614,33 @@ export function Sidebar() {
   for (const e of listed) {
     const key =
       groupBy === "repo"
-        ? `${e.repo ?? "No repo"}${many ? ` · ${e.computer.machine.name}` : ""}`
+        ? `${e.repo ?? t("No repo")}${many ? ` · ${e.computer.machine.name}` : ""}`
         : dayOf(when(e.thread), now);
     groups.set(key, [...(groups.get(key) ?? []), e]);
     if (groupBy === "repo") groupRepos.set(key, e.source);
   }
   type Row = { kind: "thread"; entry: Entry } | { kind: "orchestrator"; entry: ProjectEntry };
   const threadRows = (list: Entry[]): Row[] => list.map((entry) => ({ kind: "thread", entry }));
+  // `title` keys a section, and `label` shows it: a day's title is its English name (`dayOf`).
   const sections = [
     ...(orchestrators.length && !scope.startsWith("repo:")
-      ? [{ title: "Orchestrators", data: orchestrators.map((entry): Row => ({ kind: "orchestrator", entry })), drawer: true }]
+      ? [
+          {
+            title: "Orchestrators",
+            label: t("Orchestrators"),
+            data: orchestrators.map((entry): Row => ({ kind: "orchestrator", entry })),
+            drawer: true,
+          },
+        ]
       : []),
-    ...(pinned.length ? [{ title: "Pinned", data: threadRows(pinned), drawer: false }] : []),
-    ...[...groups].map(([title, data]) => ({ title, data: threadRows(data), drawer: false, repo: groupRepos.get(title) })),
+    ...(pinned.length ? [{ title: "Pinned", label: t("Pinned"), data: threadRows(pinned), drawer: false }] : []),
+    ...[...groups].map(([title, data]) => ({
+      title,
+      label: groupBy === "repo" ? title : t(title),
+      data: threadRows(data),
+      drawer: false,
+      repo: groupRepos.get(title),
+    })),
   ].map((s) => ({ ...s, count: s.data.length, data: folded.has(s.title) ? [] : s.data }));
 
   // The filter's choices: everything, a computer, or a repository, each with who needs you there.
@@ -631,15 +651,16 @@ export function Sidebar() {
       label: `${e.repo}${many ? ` · ${e.computer.machine.name}` : ""}`,
       entries: [...(repos.get(e.repoId)?.entries ?? []), e],
     });
-  const counted = (n: number) => (n ? `${n} need${n === 1 ? "s" : ""} you` : undefined);
+  const counted = (n: number) =>
+    n ? t("{{count}} need you", { count: n, defaultValue_one: "{{count}} needs you" }) : undefined;
   const scopes: Choice<Scope>[] = [
-    { value: "all", label: "All threads", icon: ListFilter, right: counted(needs(all)) },
+    { value: "all", label: t("All threads"), icon: ListFilter, right: counted(needs(all)) },
     ...(many
       ? computers.map(
           (m): Choice<Scope> => ({
             value: `computer:${m.machine.id}`,
             label: m.machine.name,
-            section: m === computers[0] ? "Computers" : undefined,
+            section: m === computers[0] ? t("Computers") : undefined,
             right: counted(needs(all.filter((e) => e.computer === m))),
           }),
         )
@@ -649,7 +670,7 @@ export function Sidebar() {
         value: `repo:${id}`,
         label: r.label,
         icon: FolderGit2,
-        section: i === 0 ? "Repositories" : undefined,
+        section: i === 0 ? t("Repositories") : undefined,
         right: counted(needs(r.entries)),
       }),
     ),
@@ -679,7 +700,7 @@ export function Sidebar() {
         <View style={[styles.top, { marginTop: insets.top }]}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="New thread where you last started one"
+            accessibilityLabel={t("New thread where you last started one")}
             hitSlop={8}
             onPress={fresh}
             style={({ pressed }) => pressed && { opacity: 0.6 }}
@@ -687,12 +708,12 @@ export function Sidebar() {
             <Wordmark size={19} color="#ffffff" />
           </Pressable>
           <View style={[styles.line, { gap: 10 }]}>
-            <GlassButton label="Projects" size={40} dark onPress={() => nav.navigate("Projects")}>
+            <GlassButton label={t("Projects")} size={40} dark onPress={() => nav.navigate("Projects")}>
               <Icon icon={Lucide.LayoutGrid} size={18} color="#ffffff" />
             </GlassButton>
             <View>
               <GlassButton
-                label={scope === "all" ? "Filter threads" : `Filter threads, showing ${scopeLabel}`}
+                label={scope === "all" ? t("Filter threads") : t("Filter threads, showing {{scope}}", { scope: scopeLabel })}
                 size={40}
                 dark
                 onPress={() => setFilter(true)}
@@ -703,7 +724,7 @@ export function Sidebar() {
                 <View pointerEvents="none" style={[styles.filterDot, { backgroundColor: c.accent }]} />
               )}
             </View>
-            <GlassButton label="Search threads" size={40} dark onPress={() => nav.navigate("Search")}>
+            <GlassButton label={t("Search threads")} size={40} dark onPress={() => nav.navigate("Search")}>
               <Icon icon={Search} size={18} color="#ffffff" />
             </GlassButton>
           </View>
@@ -733,11 +754,11 @@ export function Sidebar() {
               {scope !== "all" && (
                 <View style={styles.line}>
                   <T muted numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
-                    Showing {scopeLabel}
+                    {t("Showing {{scope}}", { scope: scopeLabel })}
                   </T>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="Show all threads"
+                    accessibilityLabel={t("Show all threads")}
                     hitSlop={10}
                     onPress={() => setScope("all")}
                   >
@@ -749,12 +770,11 @@ export function Sidebar() {
                 <View style={styles.line}>
                   <Icon icon={Lucide.WifiOff} size={13} color={c.faintForeground} />
                   <T faint numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
-                    {offline.map((m) => m.machine.name).join(", ")}{" "}
                     {offline.every((m) => m.state.updating)
-                      ? "updating…"
+                      ? t("{{names}} updating…", { names: offline.map((m) => m.machine.name).join(", ") })
                       : offline.every((m) => m.state.status === "connecting")
-                        ? "connecting…"
-                        : "offline"}
+                        ? t("{{names}} connecting…", { names: offline.map((m) => m.machine.name).join(", ") })
+                        : t("{{names}} offline", { names: offline.map((m) => m.machine.name).join(", ") })}
                   </T>
                 </View>
               )}
@@ -778,7 +798,7 @@ export function Sidebar() {
           section.drawer ? (
             <View style={{ paddingTop: 10 }}>
               <DrawerHeader
-                title={section.title}
+                title={section.label}
                 count={section.count}
                 open={!folded.has(section.title)}
                 onPress={() => toggle(section.title)}
@@ -788,12 +808,12 @@ export function Sidebar() {
             <View style={[styles.line, styles.section]}>
               <RepoIcon repo={"repo" in section ? section.repo : undefined} shared={shared} size={16} />
               <T muted medium style={{ fontSize: 13 }}>
-                {section.title}
+                {section.label}
               </T>
             </View>
           ) : (
             <T muted medium style={styles.section}>
-              {section.title}
+              {section.label}
             </T>
           )
         }
@@ -811,10 +831,10 @@ export function Sidebar() {
               {computers.length === 0 ? (
                 <>
                   <T muted style={{ textAlign: "center" }}>
-                    No computers yet. Add one that runs Parallax to see its threads here.
+                    {t("No computers yet. Add one that runs Parallax to see its threads here.")}
                   </T>
                   <Button
-                    label="Add computer"
+                    label={t("Add computer")}
                     icon={Lucide.Plus}
                     onPress={() => nav.navigate("Settings", { screen: "AddComputer", initial: false })}
                   />
@@ -822,7 +842,7 @@ export function Sidebar() {
               ) : loading || offline.length === computers.length ? (
                 <ActivityIndicator color={c.accent} />
               ) : (
-                <Empty icon={Lucide.MessagesSquare} title="No threads yet" note="Start one with New thread." />
+                <Empty icon={Lucide.MessagesSquare} title={t("No threads yet")} note={t("Start one with New thread.")} />
               )}
             </View>
           )
@@ -831,14 +851,14 @@ export function Sidebar() {
       />
       {(
         [
-          ["Working", working],
-          ["Snoozed", snoozedList],
-          ["Archived", archived],
+          [msg("Working"), working],
+          [msg("Snoozed"), snoozedList],
+          [msg("Archived"), archived],
         ] as const
       ).map(([title, entries]) => (
         <Drawer
           key={title}
-          title={title}
+          title={t(title)}
           entries={entries}
           open={!folded.has(title)}
           onToggle={() => toggle(title)}
@@ -848,7 +868,7 @@ export function Sidebar() {
       <View style={[styles.bottom, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Settings"
+          accessibilityLabel={t("Settings")}
           hitSlop={6}
           onPress={() => {
             void Haptics.selectionAsync();
@@ -858,13 +878,13 @@ export function Sidebar() {
         >
           <Avatar size={40} />
         </Pressable>
-        <GlassButton label="Pull requests" size={40} onPress={() => nav.navigate("PullRequests")}>
+        <GlassButton label={t("Pull requests")} size={40} onPress={() => nav.navigate("PullRequests")}>
           <Icon icon={GitPullRequest} size={18} color={c.foreground} />
         </GlassButton>
         <View style={{ flex: 1 }} />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="New thread"
+          accessibilityLabel={t("New thread")}
           onPress={() => {
             void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             nav.navigate("NewThread");
@@ -876,22 +896,22 @@ export function Sidebar() {
           ]}
         >
           <Icon icon={SquarePen} size={17} color="#ffffff" />
-          <T style={{ color: "#ffffff", fontSize: 16, fontWeight: "600" }}>New thread</T>
+          <T style={{ color: "#ffffff", fontSize: 16, fontWeight: "600" }}>{t("New thread")}</T>
         </Pressable>
       </View>
       <Choices
-        title="Filter threads"
+        title={t("Filter threads")}
         open={filter}
         value={[scope, `group:${groupBy}`]}
         options={[
           ...scopes,
           {
             value: "group:day",
-            label: "By day",
-            description: "Today, yesterday, this week, and older.",
-            section: "Group",
+            label: t("By day"),
+            description: t("Today, yesterday, this week, and older."),
+            section: t("Group"),
           },
-          { value: "group:repo", label: "By repository", description: "Under each repository, newest first." },
+          { value: "group:repo", label: t("By repository"), description: t("Under each repository, newest first.") },
         ]}
         onChoose={(v) => (v.startsWith("group:") ? setGroupBy(v.slice(6) as GroupBy) : setScope(v as Scope))}
         onClose={() => setFilter(false)}
