@@ -3,6 +3,7 @@ import { useEffect, useState, type SVGProps } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import type { SubscribeParams } from "../preload/bridge";
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
 import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -11,7 +12,7 @@ import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
 import { codeComponents, highlight } from "./AgentChat";
 
-/** The status board the orchestrator keeps, as `orchestrator.md` asks; the orchestrator tab leads with it. */
+/** The status board the orchestrator keeps, as `orchestrator.md` asks; the orchestrator tab shows it as its plan. */
 export const board = "notes.md";
 
 /** Applies one of an orchestrator's events to its context files: a changed file joins or replaces its row, by path. */
@@ -49,29 +50,31 @@ export function useOrchestratorContext(
     let unsubscribe = () => {};
 
     async function load() {
+      unsubscribe();
       // ponytail: `context/list` has no `seq` of its own (PLX-187), so subscribe after
       // `agent/list`'s, taken first: a change that lands before the list replays, harmlessly.
       const position = await window.parallax.request(hostId, "agent/list", {
         project: orchestrator,
       });
       if (stopped) return;
-      if ("error" in position) return setError(position.error.message);
+      if ("error" in position) return setError(describeError(position.error));
       const list = await window.parallax.request(hostId, "context/list", { project: orchestrator });
       if (stopped) return;
-      if ("error" in list) return setError(list.error.message);
+      if ("error" in list) return setError(describeError(list.error));
       setFiles(list.result.files);
       setError(undefined);
-      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
-      const since = {
+      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453). plxd
+      // refuses it without `project` (PLX-1340).
+      const since: SubscribeParams = {
         after: position.result.seq,
-        orchestrator,
+        project: orchestrator,
         shell: true,
         logId: position.logId,
       };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
-        if (message.type === "error") return setError(message.error.message);
+        if (message.type === "error") return setError(describeError(message.error));
         setFiles((prev) => applyContextEvent(prev, message.event.event));
       });
     }
@@ -248,7 +251,7 @@ function fileTree(files: readonly ContextFile[]) {
 
 /**
  * All of an orchestrator's context files, as a tree of folders and files, each with when it last
- * changed. A file opens with `onOpen`.
+ * changed. A file is a filled row that opens with `onOpen`.
  */
 export function AllFiles({
   files,
@@ -258,7 +261,7 @@ export function AllFiles({
   onOpen: (path: string) => void;
 }) {
   return (
-    <ul aria-label="All files" className="pb-4">
+    <ul aria-label="All files" className="flex flex-col gap-1">
       {fileTree(files).map((row) => {
         const inner = (
           <>
@@ -271,20 +274,20 @@ export function AllFiles({
             <span className="shrink-0 text-meta text-faint-foreground">{when(row.at)}</span>
           </>
         );
-        const indent = { paddingLeft: 10 + row.depth * 16 };
+        const indent = { marginLeft: row.depth * 16 };
         return (
-          <li key={row.key}>
+          <li key={row.key} className="flex flex-col">
             {row.path ? (
               <button
                 type="button"
                 onClick={() => onOpen(row.path!)}
                 style={indent}
-                className="flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2.5 text-left hover:bg-hover"
+                className="flex items-center gap-2.5 rounded-lg bg-hover px-3 py-2 text-left hover:bg-selected"
               >
                 {inner}
               </button>
             ) : (
-              <div style={indent} className="flex items-center gap-2.5 py-1.5 pr-2.5">
+              <div style={indent} className="flex items-center gap-2.5 px-3 py-1.5">
                 {inner}
               </div>
             )}

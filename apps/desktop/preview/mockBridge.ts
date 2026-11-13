@@ -349,7 +349,7 @@ function emit(event: ParallaxEvent, orchestrator?: string) {
   const logged: LoggedEvent = {
     seq: ++seq,
     time: new Date().toISOString(),
-    ...(orchestrator && { orchestrator }),
+    ...(orchestrator && { project: orchestrator }),
     event,
   };
   if ("runId" in event && event.kind.startsWith("agent.")) {
@@ -2346,6 +2346,11 @@ export const mockBridge: ParallaxBridge = {
 
   subscribe(hostId: string, params: SubscribeParams, listener: (m: SubscriptionMessage) => void) {
     if (hostId !== LOCAL && !deviceOf(hostId)) return noop;
+    // As plxd refuses it (PLX-455).
+    if (!params.project && (params.run || params.shell)) {
+      setTimeout(() => listener({ type: "error", error: fail("run and shell need a project") }));
+      return noop;
+    }
     const entry: Listener = {
       id: `sub-${++subscriptions}`,
       host: hostId,
