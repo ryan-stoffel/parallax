@@ -1,7 +1,15 @@
 // The pull request screens' pure pieces: the list's filters over the desktop's search, a unified
-// diff split into rows with line numbers, the checks' and reviews' one-line summaries, and the
-// activity timeline, as T3 Code's mobile app summarizes them. Pure, for the test.
-import type { PrCheck, PrReview, PrReviewState, PullRequest } from "../../desktop/src/protocol/generated/protocol";
+// diff split into rows with line numbers, where review threads and comments sit in it, the checks'
+// and reviews' one-line summaries, and the activity timeline, as T3 Code's mobile app summarizes
+// them. Pure, for the test.
+import type {
+  PrCheck,
+  PrDiffSide,
+  PrReview,
+  PrReviewState,
+  PrReviewThread,
+  PullRequest,
+} from "../../desktop/src/protocol/generated/protocol";
 import { matches, sortRows, type PrRow } from "../../desktop/src/renderer/pullRequestSearch";
 
 /** `owner/name` from a pull request's URL, for before it's read. */
@@ -136,13 +144,14 @@ export type Activity =
   | { kind: "comment"; author: string; at: string; body: string; verdict?: PrReviewState }
   | { kind: "review"; author: string; at: string; verdict: PrReviewState }
   | { kind: "commit"; author: string; at: string; headline: string; oid: string }
+  | { kind: "thread"; author: string; at: string; thread: PrReviewThread }
   | { kind: "merged"; author?: string; at: string }
   | { kind: "closed"; author?: string; at: string };
 
 /**
  * A pull request's activity, oldest first: comments, reviews (a review's text is one of the
- * comments, by the same author within a minute, so it shows once, with its verdict), commits,
- * and its merge or close.
+ * comments, by the same author within a minute, so it shows once, with its verdict), review
+ * threads, commits, and its merge or close.
  */
 export function activityOf(pr: PullRequest): Activity[] {
   const near = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) < 60_000;
@@ -155,9 +164,64 @@ export function activityOf(pr: PullRequest): Activity[] {
   });
   for (const r of reviews)
     if (!told.has(r) && r.state !== "commented") events.push({ kind: "review", author: r.author, at: r.submittedAt, verdict: r.state });
+  for (const thread of pr.reviewThreads ?? []) {
+    // A thread of only pending comments shows too, so one whose line left the diff isn't lost.
+    const first = thread.comments.find((c) => !c.pending) ?? thread.comments[0];
+    if (first) events.push({ kind: "thread", author: first.author, at: first.createdAt, thread });
+  }
   for (const c of pr.commits ?? [])
     events.push({ kind: "commit", author: c.author, at: c.committedAt, headline: c.headline, oid: c.oid });
   if (pr.state === "merged" && pr.mergedAt) events.push({ kind: "merged", author: pr.mergedBy, at: pr.mergedAt });
   else if (pr.state === "closed" && pr.closedAt) events.push({ kind: "closed", at: pr.closedAt });
   return events.sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** The diff side a line row is on: a removed line is the old file's, the rest the new one's. */
+export const sideOf = (row: Extract<DiffRow, { line: number }>): PrDiffSide => (row.kind === "del" ? "left" : "right");
+
+/** The file each row is in, by index, for rows that only carry a line number. */
+function filesOf(rows: DiffRow[]): (string | undefined)[] {
+  let path: string | undefined;
+  return rows.map((r) => (r.kind === "file" ? (path = r.path) : path));
+}
+
+/**
+ * Each diff row's review threads, by the row's index: a thread on a line under that line, on its
+ * side, and one on the whole file under the file's header. An outdated thread, whose line number
+ * is from older code, and one whose line isn't in the diff sit under no row; the Activity tab shows
+ * them.
+ */
+export function threadsAt(rows: DiffRow[], threads: PrReviewThread[]): Map<number, PrReviewThread[]> {
+  const files = filesOf(rows);
+  const at = new Map<number, PrReviewThread[]>();
+  for (const t of threads) {
+    if (t.isOutdated) continue;
+    const index = rows.findIndex((r, i) =>
+      t.line === undefined
+        ? r.kind === "file" && r.path === t.path
+        : r.kind !== "file" && r.kind !== "hunk" && files[i] === t.path && r.line === t.line && sideOf(r) === (t.side ?? "right"),
+    );
+    if (index >= 0) at.set(index, [...(at.get(index) ?? []), t]);
+  }
+  return at;
+}
+
+/** Where a diff line row is, to comment on it: its file, line, and side. */
+export function lineAt(rows: DiffRow[], index: number): { path: string; line: number; side: PrDiffSide } | undefined {
+  const row = rows[index];
+  if (!row || row.kind === "file" || row.kind === "hunk") return undefined;
+  for (let i = index - 1; i >= 0; i--) {
+    const above = rows[i]!;
+    if (above.kind === "file") return { path: above.path, line: row.line, side: sideOf(row) };
+  }
+  return undefined;
+}
+
+/** The row to scroll to for `path`: its first new-side line at or after `line`, else its header. */
+export function rowOf(rows: DiffRow[], path: string, line?: number): number {
+  const files = filesOf(rows);
+  const header = rows.findIndex((r) => r.kind === "file" && r.path === path);
+  if (line === undefined || header < 0) return header;
+  const at = rows.findIndex((r, i) => i > header && files[i] === path && r.kind !== "file" && r.kind !== "hunk" && r.kind !== "del" && r.line >= line);
+  return at >= 0 ? at : header;
 }

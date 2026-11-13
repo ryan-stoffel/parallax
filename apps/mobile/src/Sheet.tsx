@@ -1,10 +1,19 @@
 // The app's own sheets (the composer's model and attach sheets, and Choices), as iOS 26 floats
 // them: a card rounded on every corner rising from the bottom over a light dim. Its grabber and
 // header sit on the card's own background, and a drag down on them puts the sheet away, as a tap
-// outside does.
+// outside does. The keyboard lifts it, for a sheet with a text box.
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  useColorScheme,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -67,29 +76,35 @@ export function Sheet({
 
   return (
     <Modal visible={shown} transparent animationType="none" onRequestClose={onClose} onDismiss={onDismissed}>
-      <GestureHandlerRootView style={{ flex: 1, justifyContent: "flex-end" }}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, scrimStyle]}>
           <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close" />
         </Animated.View>
-        <Animated.View
-          style={[
-            styles.sheet,
-            // It runs past the screen's bottom edge, so its bottom never shows, even as it springs.
-            { backgroundColor: c.sidebar, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
-            edge,
-            sheetStyle,
-          ]}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          pointerEvents="box-none"
+          style={{ flex: 1, justifyContent: "flex-end" }}
         >
-          <GestureDetector gesture={pan}>
-            <View accessibilityHint="Drag down to close">
-              <View style={styles.grab}>
-                <View style={[styles.grabber, { backgroundColor: c.border }]} />
+          <Animated.View
+            style={[
+              styles.sheet,
+              // It runs past the screen's bottom edge, so its bottom never shows, even as it springs.
+              { backgroundColor: c.sidebar, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
+              edge,
+              sheetStyle,
+            ]}
+          >
+            <GestureDetector gesture={pan}>
+              <View accessibilityHint="Drag down to close">
+                <View style={styles.grab}>
+                  <View style={[styles.grabber, { backgroundColor: c.border }]} />
+                </View>
+                {head}
               </View>
-              {head}
-            </View>
-          </GestureDetector>
-          {children}
-        </Animated.View>
+            </GestureDetector>
+            {children}
+          </Animated.View>
+        </KeyboardAvoidingView>
       </GestureHandlerRootView>
     </Modal>
   );
