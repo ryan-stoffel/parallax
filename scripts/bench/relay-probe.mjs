@@ -2,7 +2,7 @@
 // Tests the deployed relay and reports the result (PLX-1360, weaknesses 5 and 11 of PLX-1347).
 // relay-probe.yml runs it on a schedule and on each nightly, whose notes get the result.
 //
-//     node scripts/bench/relay-probe.mjs [--relay <url>] [--tag <release tag>] [--out <dir>]
+//     node scripts/bench/relay-probe.mjs [--relay <url>] [--tag <release tag>] [--plxd <path>] [--out <dir>]
 //
 // With no secret it checks the relay's TLS, routes, and refusals, a release's published assets, and
 // times the Worker and its stream objects (relay-objects.mjs). It stores nothing on the relay.
@@ -10,7 +10,13 @@
 // With PROBE_CLERK_REFRESH_TOKEN, a dedicated test account's Clerk refresh token from
 // relay-probe-enroll.mjs, it also runs the release's real plxd as a throwaway host on that account:
 // sign-in, registration, a new device's approval, and streams through the relay, timing the connect,
-// the first event, and a round trip. Without the secret that part says so and skips.
+// the first event, and a round trip. Without the secret that part says so and skips. `--plxd` runs a
+// plxd built here instead of the release's, to time a change before it ships.
+//
+// Each stream dials as the desktop app does away from home (PLX-1549): a LAN route that doesn't
+// answer, then the relay, which starts `RELAY_HEAD_START` (200 ms) after it. Before PLX-1549 the
+// probe dialed the relay alone, which no app dial does, so its connects ran about 200 ms under the
+// app's.
 //
 // That part runs only on the account PROBE_CLERK_USER_ID names, a repo variable holding the test
 // account's Clerk user id. It fails before registering anything when the variable is unset or the
@@ -51,6 +57,7 @@ const { values: options } = parseArgs({
     "gap-ms": { type: "string", default: "2200" },
     timings: { type: "boolean", default: false },
     tag: { type: "string" },
+    plxd: { type: "string" },
     out: { type: "string", default: "." },
   },
 });
@@ -63,6 +70,11 @@ const HOST_NAMES = new Set([PROBE_NAME, "relay-objects bench"]);
 const STREAMS = count(options.connects, "connects");
 const ROUND_TRIPS = count(options.trips, "trips");
 const GAP_MS = count(options["gap-ms"], "gap-ms", 60000);
+/**
+ * A LAN route on another network, which the app's dial tries first away from home. TEST-NET-1 (RFC
+ * 5737) is never assigned, so it never answers, as a home address doesn't from elsewhere.
+ */
+const AWAY_ROUTE = "192.0.2.1";
 
 // relay-probe.yml sets PROBE_SKIP_SIGNIN to stale when another run stored a rotated token after this
 // attempt started, so this one holds a token Clerk already replaced, and Clerk revokes the
@@ -386,10 +398,10 @@ function stderrOf(child) {
   return () => said.trim();
 }
 
-/** One new stream: plxd dial over the relay, timed from its start. Answers the open connection. */
+/** One new stream: `dial`, a plxd dial over the relay, timed from its start. Answers the open connection. */
 async function openStream(dial, token, stages = []) {
   const started = performance.now();
-  const child = dial([], token);
+  const child = dial(token);
   let diagnostic = "";
   child.stderr.on("data", (chunk) => {
     diagnostic = (diagnostic + chunk).slice(-8192);
@@ -458,8 +470,8 @@ async function checkSignedIn(release) {
   let host;
   let hostId;
   try {
-    let plxd;
-    if (!(await check(`Host: download ${release.tag_name}'s plxd`, async () => {
+    let plxd = options.plxd;
+    if (!plxd && !(await check(`Host: download ${release.tag_name}'s plxd`, async () => {
       plxd = await downloadPlxd(release, scratch);
     }))) return true;
     // The release's plxd takes the test account's tokens, whatever instance it defaults to.
@@ -491,11 +503,13 @@ async function checkSignedIn(release) {
     if (!online) return true;
 
     const route = `relay:${hostId}`;
-    const dial = (args, relayToken) =>
-      spawn(plxd, ["dial", route, `--account=${hostId}`, "--data-dir", clientDir, ...args], {
+    // A sign-in tries routes one at a time, so only a stream's dial gets the route that doesn't answer.
+    const dial = (args, relayToken, routes = [route]) =>
+      spawn(plxd, ["dial", `--account=${hostId}`, "--data-dir", clientDir, ...args, "--", ...routes], {
         stdio: "pipe",
         env: { ...env, PLXD_RELAY_TOKEN: relayToken, PLXD_CONNECT_TIMINGS: options.timings ? "1" : undefined },
       });
+    const dialStream = (relayToken) => dial([], relayToken, [AWAY_ROUTE, route]);
 
     const approved = await check("Approval: a new device waits, then is approved with a matching code", async () => {
       const started = performance.now();
@@ -530,14 +544,14 @@ async function checkSignedIn(release) {
       const stageSamples = [];
       try {
         await sleep(GAP_MS);
-        (await openStream(dial, relayToken)).app.close(); // One uncounted warm-up, as on T3.
+        (await openStream(dialStream, relayToken)).app.close(); // One uncounted warm-up, as on T3.
 
         for (let run = 0; run < STREAMS; run++) {
           // As in the relay's budget test: the app connects long after plxd opened its spare stream.
           await sleep(GAP_MS);
           const stages = [];
           if (options.timings) stageSamples.push(stages);
-          const { app, connectMs, firstEventMs } = await openStream(dial, relayToken, stages);
+          const { app, connectMs, firstEventMs } = await openStream(dialStream, relayToken, stages);
           connect.push(connectMs);
           firstEvent.push(firstEventMs);
           try {
