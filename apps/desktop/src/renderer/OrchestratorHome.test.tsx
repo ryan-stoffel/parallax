@@ -128,7 +128,10 @@ test("the tab lists each child under what the user does about it", async () => {
 
   const section = (label: string) =>
     document.querySelector(`section[aria-label="${label}"]`)?.textContent;
-  expect(document.querySelector("h2")?.textContent).toBe("2 threads need you");
+  expect(document.querySelector("h2")?.textContent).toBe("ember");
+  expect(document.querySelector("header p")?.textContent).toBe(
+    "2 threads need you, 1 working, 1 to review",
+  );
   expect(section("Needs you")).toContain("asks");
   expect(section("Needs you")).toContain("tests failed");
   expect(section("Working")).toContain("parallax/works");
@@ -148,11 +151,10 @@ test("the tab lists each child under what the user does about it", async () => {
 test("the headline leads with the most pressing open state", () => {
   const rows = (...groups: Parameters<typeof headline>[0][number]["group"][]) =>
     groups.map((group) => ({ group }));
-  expect(headline(rows("working", "waiting", "ready", "ready"))).toEqual({
-    lead: "1 thread needs you",
-    rest: "1 working, 2 to review",
-  });
-  expect(headline(rows("working", "working"))).toEqual({ lead: "2 threads working" });
-  expect(headline(rows("resolved")).lead).toBe("Nothing open");
-  expect(headline([]).lead).toBe("No threads yet");
+  expect(headline(rows("working", "waiting", "ready", "ready"))).toBe(
+    "1 thread needs you, 1 working, 2 to review",
+  );
+  expect(headline(rows("working", "working"))).toBe("2 threads working");
+  expect(headline(rows("resolved"))).toBe("Nothing open");
+  expect(headline([])).toBe("No threads yet");
 });

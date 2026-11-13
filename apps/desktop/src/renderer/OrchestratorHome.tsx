@@ -1,7 +1,7 @@
 import {
   ArrowUp,
-  BookOpen,
-  ChevronLeft,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   GitBranch,
@@ -27,9 +27,8 @@ import { notify } from "./notifications";
 import { OpenHint } from "./OpenHint";
 import { clockOptions } from "./prefs";
 import type { OrchestratorAgentsView } from "./OrchestratorAgents";
-import { age, useMinute } from "./Sidebar";
+import { age, ProjectIcon, useMinute } from "./Sidebar";
 import { titleOf } from "./threads";
-import { IconButton } from "./ui";
 import type { Approval } from "./transcript";
 
 type Group = "waiting" | "working" | "ready" | "resolved";
@@ -47,13 +46,12 @@ interface Row {
 }
 
 /**
- * An orchestrator's home in the side panel, in the order the user acts on it (0083). Its headline
- * says what is open, beside a book that opens All files, its context folder as a tree. Then its
- * threads, read from their runs so they are never behind: Needs you
- * (a question answered in place, a permission request, or an unread failure), Working, and To
- * review, the finishes not opened yet. Then Plan, the status board the orchestrator writes, with
- * when it last changed. Then Earlier, the finishes already opened. Opening a finish marks what it
- * reported read (0043).
+ * An orchestrator's home in the side panel: its name and what is open, then three cards that each
+ * fold away. Threads lists its children from their runs, so it is never behind: Needs you (a
+ * question answered in place, a permission request, or an unread failure), Working, To review (the
+ * finishes not opened yet), and Earlier, folded, the finishes already opened. Plan is the status
+ * board the orchestrator writes, with when it last changed. Context is its context folder as a
+ * tree. Opening a finish marks what it reported read (0043).
  */
 export function OrchestratorHome({
   hostId,
@@ -66,7 +64,7 @@ export function OrchestratorHome({
   onOpen,
 }: {
   hostId: string;
-  /** The orchestrator's context files: its status board, and all of them behind the book. */
+  /** The orchestrator's context files: its status board, and all of them under Context. */
   context: OrchestratorContext;
   orchestrator: Orchestrator;
   agents: OrchestratorAgentsView;
@@ -76,7 +74,6 @@ export function OrchestratorHome({
   onOpen: (runId: string) => void;
 }) {
   const [openPath, setOpenPath] = useState<string>();
-  const [browsing, setBrowsing] = useState(false);
   const now = useMinute();
   const rows = rowsOf(orchestrator, agents, inbox, answerable, titles);
   const waiting = rows.filter((r) => r.group === "waiting");
@@ -100,7 +97,6 @@ export function OrchestratorHome({
   const { files, error } = context;
   const opened = files.find((f) => f.path === openPath);
   const notes = files.find((f) => f.path === board);
-  const { lead, rest } = headline(rows);
 
   if (opened)
     return (
@@ -113,40 +109,23 @@ export function OrchestratorHome({
         onBack={() => setOpenPath(undefined)}
       />
     );
-  if (browsing)
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <button
-          type="button"
-          onClick={() => setBrowsing(false)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          <ChevronLeft aria-hidden className="size-4 shrink-0" />
-          <span className="truncate">{orchestrator.name}</span>
-        </button>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2">
-          <h3 className={`${sectionHeading} px-2.5`}>All files</h3>
-          <AllFiles files={files} onOpen={setOpenPath} />
-        </div>
-      </div>
-    );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
-      <header className="flex items-start gap-3 px-1 pt-5">
-        <div className="min-w-0 flex-1">
-          <h2 className="text-heading leading-tight font-semibold tracking-tight">{lead}</h2>
-          {rest && <p className="mt-1 text-body text-muted-foreground">{rest}</p>}
+      <header className="px-2 pt-5 pb-1">
+        <div className="flex items-center gap-2.5">
+          <ProjectIcon icon={orchestrator.icon} className="size-5 shrink-0" />
+          <h2 className="truncate text-heading leading-tight font-semibold tracking-tight">
+            {orchestrator.name}
+          </h2>
         </div>
-        {files.length > 0 && (
-          <IconButton label="All files" onClick={() => setBrowsing(true)}>
-            <BookOpen />
-          </IconButton>
-        )}
+        <p className="mt-1.5 text-body text-muted-foreground">{headline(rows)}</p>
       </header>
-      {waiting.length > 0 && (
-        <section aria-label="Needs you">
-          <h3 className={sectionHeading}>Needs you</h3>
-          <ul className={group}>
+      <Card label="Threads">
+        {rows.length === 0 && (
+          <p className={empty}>Threads the orchestrator starts show up here.</p>
+        )}
+        {waiting.length > 0 && (
+          <ThreadGroup label="Needs you">
             {waiting.map((row) => (
               <WaitingRow
                 key={row.run.id}
@@ -156,15 +135,12 @@ export function OrchestratorHome({
                 onAnswer={answer(row)}
               />
             ))}
-          </ul>
-        </section>
-      )}
-      {working.length > 0 && (
-        <section aria-label="Working">
-          <h3 className={sectionHeading}>Working</h3>
-          <ul className={group}>
+          </ThreadGroup>
+        )}
+        {working.length > 0 && (
+          <ThreadGroup label="Working">
             {working.map((row) => (
-              <li key={row.run.id}>
+              <li key={row.run.id} className={tile}>
                 <ChildButton
                   icon={<WorkingMark />}
                   title={plainTitle(row.title)}
@@ -175,101 +151,124 @@ export function OrchestratorHome({
                 />
               </li>
             ))}
-          </ul>
-        </section>
-      )}
-      {ready.length > 0 && (
-        <section aria-label="To review">
-          <h3 className={sectionHeading}>To review</h3>
-          <ul className={group}>
+          </ThreadGroup>
+        )}
+        {ready.length > 0 && (
+          <ThreadGroup label="To review">
             {ready.map((row) => (
               <FinishedRow key={row.run.id} row={row} now={now} onOpen={() => open(row)} />
             ))}
-          </ul>
-        </section>
-      )}
-      <section aria-label="Plan">
-        <h3 className={`${sectionHeading} flex items-baseline justify-between gap-3`}>
-          Plan
-          {notes && (
-            <span className="text-meta font-normal tracking-normal normal-case">
-              Updated {updated(notes.modifiedAt, now)}
-            </span>
-          )}
-        </h3>
-        <div className="px-1">
-          {notes ? (
-            <ContextBody
-              hostId={hostId}
-              orchestrator={orchestrator.id}
-              files={files}
-              file={notes}
-              onOpen={setOpenPath}
-            />
-          ) : (
-            !error && (
-              <p className="text-body text-muted-foreground">
-                The orchestrator writes its plan here once it starts on the work.
-              </p>
-            )
-          )}
-          {error && (
-            <p role="alert" className="text-body text-danger">
-              Couldn't load the plan. {error}
+          </ThreadGroup>
+        )}
+        {earlier.length > 0 && (
+          <section aria-label="Earlier" className="mt-4 first:mt-0">
+            <details className="group/earlier">
+              <summary
+                className={`${tile} flex cursor-default list-none items-center gap-2 px-3 py-2 text-body hover:bg-selected [&::-webkit-details-marker]:hidden`}
+              >
+                <ChevronRight
+                  aria-hidden
+                  className="size-3.5 shrink-0 text-faint-foreground group-open/earlier:rotate-90"
+                />
+                <span className="flex-1">Earlier</span>
+                <span className="text-meta text-faint-foreground tabular-nums">
+                  {earlier.length}
+                </span>
+              </summary>
+              <ul className="mt-1 flex flex-col gap-1">
+                {earlier.map((row) => (
+                  <FinishedRow key={row.run.id} row={row} now={now} onOpen={() => open(row)} />
+                ))}
+              </ul>
+            </details>
+          </section>
+        )}
+      </Card>
+      <Card label="Plan" meta={notes && `Updated ${updated(notes.modifiedAt, now)}`}>
+        {notes ? (
+          <ContextBody
+            hostId={hostId}
+            orchestrator={orchestrator.id}
+            files={files}
+            file={notes}
+            onOpen={setOpenPath}
+          />
+        ) : (
+          !error && (
+            <p className={empty}>
+              The orchestrator writes its plan here once it starts on the work.
             </p>
-          )}
-        </div>
-      </section>
-      {earlier.length > 0 && (
-        <section aria-label="Earlier">
-          <h3 className={sectionHeading}>Earlier</h3>
-          <ul className={group}>
-            {earlier.map((row) => (
-              <FinishedRow key={row.run.id} row={row} now={now} onOpen={() => open(row)} />
-            ))}
-          </ul>
-        </section>
-      )}
+          )
+        )}
+        {error && (
+          <p role="alert" className="text-body text-danger">
+            Couldn't load the plan. {error}
+          </p>
+        )}
+      </Card>
+      <Card label="Context">
+        {files.length > 0 ? (
+          <AllFiles files={files} onOpen={setOpenPath} />
+        ) : (
+          <p className={empty}>Files the orchestrator saves show up here.</p>
+        )}
+      </Card>
     </div>
   );
 }
 
-// A section's heading, and its rows grouped in one rounded list with hairlines between them.
-const sectionHeading =
-  "px-1 pt-6 pb-2 text-caption font-medium tracking-[0.08em] text-faint-foreground uppercase";
-const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
+// A row in a card: filled, as the card itself is only an outline.
+const tile = "rounded-lg bg-hover";
+// What a card says while it has nothing to show.
+const empty = "text-body text-muted-foreground italic";
+
+/**
+ * One of the tab's cards: its name, a fact about it at the end, and a chevron that folds it away.
+ */
+function Card({ label, meta, children }: { label: string; meta?: ReactNode; children: ReactNode }) {
+  return (
+    <section aria-label={label} className="mt-3 rounded-prompt border border-border bg-surface">
+      <details open className="group/card">
+        <summary className="flex cursor-default list-none items-center gap-3 rounded-prompt py-3 pr-3 pl-4 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+          <h3 className="min-w-0 flex-1 text-body font-medium">{label}</h3>
+          {meta && <span className="shrink-0 text-meta text-faint-foreground">{meta}</span>}
+          <ChevronDown
+            aria-hidden
+            className="size-4 shrink-0 -rotate-90 group-open/card:rotate-0"
+          />
+        </summary>
+        <div className="px-4 pb-4">{children}</div>
+      </details>
+    </section>
+  );
+}
+
+/** The threads in one state, under the state's name. */
+function ThreadGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section aria-label={label} className="mt-4 first:mt-0">
+      <h4 className="pb-1.5 text-body font-medium text-foreground">{label}</h4>
+      <ul className="flex flex-col gap-1">{children}</ul>
+    </section>
+  );
+}
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * The tab's headline: the most pressing open state and how many threads are in it, then the other
- * open states. With nothing open it says so.
+ * What is open, as one sentence under the orchestrator's name: the most pressing state and how many
+ * threads are in it, then the other open states. With nothing open it says so.
  */
-export function headline(rows: readonly Pick<Row, "group">[]): { lead: string; rest?: string } {
+export function headline(rows: readonly Pick<Row, "group">[]): string {
   const n = (g: Group) => rows.filter((r) => r.group === g).length;
   const states = [
-    {
-      n: n("waiting"),
-      lead: count(n("waiting"), "thread needs you", "threads need you"),
-      rest: count(n("waiting"), "needs you", "need you"),
-    },
-    {
-      n: n("working"),
-      lead: count(n("working"), "thread working", "threads working"),
-      rest: `${n("working")} working`,
-    },
-    {
-      n: n("ready"),
-      lead: count(n("ready"), "thread to review", "threads to review"),
-      rest: `${n("ready")} to review`,
-    },
-  ].filter((s) => s.n > 0);
-  const [first, ...others] = states;
-  if (!first)
-    return rows.length > 0
-      ? { lead: "Nothing open", rest: count(rows.length, "thread finished", "threads finished") }
-      : { lead: "No threads yet", rest: "Threads the orchestrator starts show up here." };
-  return { lead: first.lead, rest: others.map((s) => s.rest).join(", ") || undefined };
+    [n("waiting"), count(n("waiting"), "thread needs you", "threads need you"), "need you"],
+    [n("working"), count(n("working"), "thread working", "threads working"), "working"],
+    [n("ready"), count(n("ready"), "thread to review", "threads to review"), "to review"],
+  ] as const;
+  const open = states.filter(([n]) => n > 0);
+  if (open.length === 0) return rows.length > 0 ? "Nothing open" : "No threads yet";
+  return open.map(([n, lead, rest], i) => (i === 0 ? lead : `${n} ${rest}`)).join(", ");
 }
 
 /** "just now", "6m ago", or "2d ago": how long since `at`. */
@@ -414,7 +413,7 @@ function WaitingRow({
   const failed = row.attention === "failed";
   const asking = row.question && row.question.status !== "answered";
   return (
-    <li>
+    <li className={tile}>
       <ChildButton
         icon={
           failed ? (
@@ -450,7 +449,7 @@ function FinishedRow({ row, now, onOpen }: { row: Row; now: number; onOpen: () =
   const unread = row.group === "ready";
   const failed = row.attention === "failed";
   return (
-    <li>
+    <li className={tile}>
       <ChildButton
         icon={
           failed ? (
@@ -496,7 +495,7 @@ function ChildButton({
     <button
       type="button"
       onClick={onOpen}
-      className="group flex w-full min-w-0 items-start gap-3 px-3 py-2.5 text-left hover:bg-hover"
+      className="group flex w-full min-w-0 items-start gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-hover"
     >
       <span aria-hidden className="mt-0.5 shrink-0 [&_svg]:size-4">
         {icon}
@@ -504,7 +503,7 @@ function ChildButton({
       <span className="min-w-0 flex-1">
         <span
           data-title
-          className={`block truncate text-body leading-5 font-medium ${dim ? "text-muted-foreground" : "text-foreground"}`}
+          className={`block truncate text-body leading-5 ${dim ? "text-muted-foreground" : "text-foreground"}`}
         >
           {title}
         </span>
@@ -552,9 +551,11 @@ function QuestionBox({
     else setText("");
   };
   return (
-    <div className="mr-3 mb-3 ml-10 overflow-hidden rounded-lg border border-border bg-background">
-      <p className="px-3 pt-2.5 pb-2 text-body leading-snug text-foreground">{question}</p>
-      <div className="flex flex-col border-t border-border">
+    <div className="px-2 pb-2">
+      <p className="pr-1 pb-2.5 pl-[30px] text-body leading-snug text-muted-foreground">
+        {question}
+      </p>
+      <div className="flex flex-col overflow-hidden rounded-md border border-border bg-surface">
         {assumption && (
           <button
             type="button"

@@ -251,7 +251,7 @@ function fileTree(files: readonly ContextFile[]) {
 
 /**
  * All of an orchestrator's context files, as a tree of folders and files, each with when it last
- * changed. A file opens with `onOpen`.
+ * changed. A file is a filled row that opens with `onOpen`.
  */
 export function AllFiles({
   files,
@@ -261,7 +261,7 @@ export function AllFiles({
   onOpen: (path: string) => void;
 }) {
   return (
-    <ul aria-label="All files" className="pb-4">
+    <ul aria-label="All files" className="flex flex-col gap-1">
       {fileTree(files).map((row) => {
         const inner = (
           <>
@@ -274,20 +274,20 @@ export function AllFiles({
             <span className="shrink-0 text-meta text-faint-foreground">{when(row.at)}</span>
           </>
         );
-        const indent = { paddingLeft: 10 + row.depth * 16 };
+        const indent = { marginLeft: row.depth * 16 };
         return (
-          <li key={row.key}>
+          <li key={row.key} className="flex flex-col">
             {row.path ? (
               <button
                 type="button"
                 onClick={() => onOpen(row.path!)}
                 style={indent}
-                className="flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2.5 text-left hover:bg-hover"
+                className="flex items-center gap-2.5 rounded-lg bg-hover px-3 py-2 text-left hover:bg-selected"
               >
                 {inner}
               </button>
             ) : (
-              <div style={indent} className="flex items-center gap-2.5 py-1.5 pr-2.5">
+              <div style={indent} className="flex items-center gap-2.5 px-3 py-1.5">
                 {inner}
               </div>
             )}
