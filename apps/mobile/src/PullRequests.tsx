@@ -673,7 +673,7 @@ function MergeControls({
   );
 }
 
-/** Diffs read, by URL, so switching back to Changes doesn't fetch again. */
+/** Diffs read, by URL and head commit, so switching back to Changes doesn't fetch again. */
 const diffs = new Map<string, { rows: DiffRow[]; truncated: boolean }>();
 
 /** Where the Changes tab scrolls to: a file, and a line in it. */
@@ -687,6 +687,7 @@ function Diff({
   hostId,
   runId,
   url,
+  head,
   header,
   focus,
   threads,
@@ -696,6 +697,8 @@ function Diff({
   hostId: string;
   runId: string;
   url: string;
+  /** The head commit the pull request was read at: a new one reads the diff again. */
+  head?: string;
   header: ReactNode;
   focus?: Focus;
   threads: PrReviewThread[];
@@ -705,18 +708,24 @@ function Diff({
   const c = useColors();
   const insets = useSafeAreaInsets();
   const list = useRef<FlatList<DiffRow>>(null);
+  const key = `${url} ${head ?? ""}`;
   const [state, setState] = useState<{ rows: DiffRow[]; truncated: boolean } | string | undefined>(() =>
-    diffs.get(url),
+    diffs.get(key),
   );
   useEffect(() => {
-    if (state) return;
+    const kept = diffs.get(key);
+    setState(kept);
+    if (kept) return;
+    let live = true;
     void window.parallax.request(hostId, "pr/diff", { runId, url }).then((a) => {
+      if (!live) return;
       if ("error" in a) return setState(a.error.message);
       const read = { rows: diffRows(a.result.diff), truncated: a.result.truncated };
-      diffs.set(url, read);
+      diffs.set(key, read);
       setState(read);
     });
-  }, [hostId, runId, url]);
+    return () => void (live = false);
+  }, [hostId, runId, key]);
   const rows = typeof state === "object" ? state.rows : undefined;
   const placed = rows ? threadsAt(rows, threads) : new Map<number, PrReviewThread[]>();
   useEffect(() => {
@@ -1040,6 +1049,7 @@ export function PullRequestScreen({
           hostId={hostId}
           runId={runId}
           url={url}
+          head={pr?.headSha}
           header={header}
           focus={focus}
           threads={threads}
