@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ArrowUpRight, Layers, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import {
   lazy,
@@ -10,6 +11,7 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
 } from "react";
+import { Trans } from "react-i18next";
 
 import { HOME_VARS, NPM_INSTALLS, npmInstallLine, type ThemePreference } from "../preload/bridge";
 import {
@@ -172,7 +174,7 @@ export function SettingsDialog({
   return (
     <dialog
       ref={dialog}
-      aria-label="Settings"
+      aria-label={t("Settings")}
       tabIndex={-1}
       onCancel={(e) => {
         // React passes a dialog's cancel up to the dialogs around it: Escape in one opened from
@@ -186,16 +188,18 @@ export function SettingsDialog({
       className="settings-dialog m-auto h-[calc(100vh-6rem)] max-h-none w-[calc(100vw-12rem)] max-w-[90rem] overflow-clip rounded-xl border border-border bg-background p-0 text-foreground shadow-composer outline-none backdrop:bg-black/40 open:flex"
     >
       <nav
-        aria-label="Settings sections"
+        aria-label={t("Settings sections")}
         className="flex w-64 shrink-0 flex-col border-r border-border/50 bg-surface pt-3"
       >
         <SettingsNav section={props.section} onSection={onSection} />
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-13 shrink-0 items-center gap-2 border-b border-border/50 pr-3 pl-6">
-          <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[props.section] }]} />
+          <Breadcrumb
+            items={[{ label: t("Settings") }, { label: t(settingsNames[props.section]) }]}
+          />
           <div className="ml-auto">
-            <IconButton label="Close settings" onClick={onClose}>
+            <IconButton label={t("Close settings")} onClick={onClose}>
               <X aria-hidden />
             </IconButton>
           </div>
@@ -275,21 +279,23 @@ export function Settings({
 
 /** A CLI's state in a few words: "Signed in · Max", "Not signed in", "Not installed". */
 function cliStatus(cli: DetectedCli): string {
-  if (!cli.installed) return "Not installed";
-  if (cli.signedIn === false) return "Not signed in";
+  if (!cli.installed) return t("Not installed");
+  if (cli.signedIn === false) return t("Not signed in");
   // plxd couldn't tell; its note says why.
-  if (cli.signedIn !== true) return "Sign-in unknown";
+  if (cli.signedIn !== true) return t("Sign-in unknown");
   // Plans come as the vendor writes them, such as Claude's "max".
   const plan = cli.plan && cli.plan[0]!.toUpperCase() + cli.plan.slice(1);
-  return plan ? `Signed in · ${plan}` : "Signed in";
+  return plan ? t("Signed in · {{plan}}", { plan }) : t("Signed in");
 }
 
 const cliTone = (cli: DetectedCli) => (!cli.installed ? "off" : cli.signedIn ? "on" : "warn");
 
 /** "Checked just now", "Checked 12m ago". */
 function checkedLabel(checkedAt: string): string {
-  const ago = age(checkedAt);
-  return ago === "now" ? "Checked just now" : `Checked ${ago} ago`;
+  // `age` reads "now" in the user's language, so this asks the clock rather than its words.
+  return Date.now() - Date.parse(checkedAt) < 60_000
+    ? t("Checked just now")
+    : t("Checked {{ago}} ago", { ago: age(checkedAt) });
 }
 
 /**
@@ -389,16 +395,17 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
 
   return (
     <div className="mx-auto h-full max-w-5xl overflow-y-auto px-8 pt-8 pb-16">
-      <PageTitle title="Providers">
-        The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
-        API key as a fallback. Turn one off to hide its models.
+      <PageTitle title={t("Providers")}>
+        {t(
+          "The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an API key as a fallback. Turn one off to hide its models.",
+        )}
       </PageTitle>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
         {picker}
         <div className="flex items-center gap-1 text-body text-muted-foreground">
-          {checking ? "Checking…" : checkedAt && checkedLabel(checkedAt)}
+          {checking ? t("Checking…") : checkedAt && checkedLabel(checkedAt)}
           <IconButton
-            label="Refresh"
+            label={t("Refresh")}
             disabled={!connected || checking}
             onClick={() => void load("accounts/refresh")}
           >
@@ -417,14 +424,14 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
             {!connected
               ? connection
                 ? statusLabel(connection)
-                : "Connecting…"
+                : t("Connecting…")
               : error
-                ? "Couldn't check this host's CLIs."
-                : "Checking…"}
+                ? t("Couldn't check this host's CLIs.")
+                : t("Checking…")}
           </p>
           {/* The CLIs failed but the keys answered: they can still be seen and removed. */}
           {connected && !!keys?.length && (
-            <Section title="API keys">
+            <Section title={t("API keys")}>
               {keys.map((account) => (
                 <KeyRow
                   key={account.id}
@@ -443,7 +450,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
           <div className="grid gap-6 @2xl:grid-cols-[17rem_minmax(0,1fr)] @2xl:items-start">
             <div
               role="tablist"
-              aria-label="Providers"
+              aria-label={t("Providers")}
               aria-orientation="vertical"
               onKeyDown={moveTab}
               className="flex flex-col gap-0.5 rounded-xl border border-border bg-surface p-1"
@@ -477,7 +484,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
                       </span>
                       <span className="flex items-center gap-1.5 text-body text-muted-foreground">
                         <StatusDot tone={enabled ? cliTone(cli) : "off"} />
-                        {enabled ? cliStatus(cli) : "Off"}
+                        {enabled ? cliStatus(cli) : t("Off")}
                       </span>
                     </span>
                   </button>
@@ -507,7 +514,9 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
                       notify({
                         key: `provider/${host.id}/${cli.cli}`,
                         tone: "success",
-                        title: `Signed in to ${cliInfo[cli.cli]?.name ?? cli.cli}`,
+                        title: t("Signed in to {{name}}", {
+                          name: cliInfo[cli.cli]?.name ?? cli.cli,
+                        }),
                       });
                   })
                 }
@@ -577,7 +586,7 @@ function ProviderPane({
         rel="noreferrer"
         className={`${quietButton} flex shrink-0 items-center gap-1 [&_svg]:size-3.5`}
       >
-        Install
+        {t("Install")}
         <ArrowUpRight aria-hidden />
       </a>
     );
@@ -585,11 +594,11 @@ function ProviderPane({
     action = (
       <button
         type="button"
-        aria-label={`Sign in to ${name}`}
+        aria-label={t("Sign in to {{name}}", { name })}
         onClick={() => onSignIn(true)}
         className={`${quietButton} -my-1 shrink-0`}
       >
-        Sign in
+        {t("Sign in")}
       </button>
     );
 
@@ -603,11 +612,11 @@ function ProviderPane({
         )}
         <label
           className="ml-auto flex items-center gap-2 text-body text-muted-foreground"
-          title={last ? "One provider stays on, for new threads." : undefined}
+          title={last ? t("One provider stays on, for new threads.") : undefined}
         >
-          {enabled ? "On" : "Off"}
+          {enabled ? t("On") : t("Off")}
           <Switch
-            label={`Use ${name}`}
+            label={t("Use {{name}}", { name })}
             checked={enabled}
             disabled={last}
             onChange={(next) => setCliEnabled(cli.cli, next)}
@@ -616,17 +625,19 @@ function ProviderPane({
       </div>
       {!enabled && (
         <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
-          Off on this computer: new threads and model menus leave out {name}'s models. Threads
-          already on {name} keep running.
+          {t(
+            "Off on this computer: new threads and model menus leave out {{name}}'s models. Threads already on {{name}} keep running.",
+            { name },
+          )}
         </p>
       )}
-      <Section title="Status">
+      <Section title={t("Status")}>
         <div className={settingRow}>
           <div className="min-w-0">
             <span className="block truncate text-body font-medium">{cliStatus(cli)}</span>
             {!cli.installed ? (
               <span className="block truncate text-body text-muted-foreground">
-                Install {name} on this host, then refresh.
+                {t("Install {{name}} on this host, then refresh.", { name })}
               </span>
             ) : (
               cli.signedIn === undefined &&
@@ -647,27 +658,29 @@ function ProviderPane({
         )}
       </Section>
       {cli.installed && (
-        <Section title="Runtime">
+        <Section title={t("Runtime")}>
           <div className={settingRow}>
             <div className="min-w-0">
-              <span className="block text-body font-medium">Binary</span>
+              <span className="block text-body font-medium">{t("Binary")}</span>
               <span className="block text-body text-muted-foreground">
-                The {name} CLI plxd found on this host's PATH, which runs your agents.
+                {t("The {{name}} CLI plxd found on this host's PATH, which runs your agents.", {
+                  name,
+                })}
               </span>
             </div>
             <span
               className="max-w-[50%] truncate font-mono text-meta text-muted-foreground"
               title={cli.path}
             >
-              {cli.path ?? "Unknown"}
+              {cli.path ?? t("Unknown")}
             </span>
           </div>
           {/* A newer plxd may send kinds this doesn't know, which say nothing here. */}
           {(cli.authKind === "subscription" || cli.authKind === "apiKey") && (
             <div className={settingRow}>
-              <span className="text-body font-medium">Signed in with</span>
+              <span className="text-body font-medium">{t("Signed in with")}</span>
               <span className="text-body text-muted-foreground">
-                {cli.authKind === "subscription" ? "A subscription" : "An API key"}
+                {cli.authKind === "subscription" ? t("A subscription") : t("An API key")}
               </span>
             </div>
           )}
@@ -684,7 +697,7 @@ function ProviderPane({
           period={period}
         />
       )}
-      <Section title="Models">
+      <Section title={t("Models")}>
         {offered.length ? (
           offered.map((m) => (
             <div key={m.id} className={settingRow}>
@@ -694,7 +707,7 @@ function ProviderPane({
           ))
         ) : (
           <p className={`${settingRow} text-body text-muted-foreground`}>
-            Parallax doesn't run {name} models yet.
+            {t("Parallax doesn't run {{name}} models yet.", { name })}
           </p>
         )}
       </Section>
@@ -821,13 +834,14 @@ function HostInstances({
     : undefined;
   const asking = confirming !== undefined && confirming === chosenTab;
   const remove = async (id: string) => {
-    const name = list?.find((p) => p.instance.id === id)?.instance.name ?? "the provider";
+    const name = list?.find((p) => p.instance.id === id)?.instance.name ?? t("the provider");
     setRemoving(true);
     const failed = await removeEverywhere(host.id, id);
     // Gone from the list, its pane goes too, and the next one is chosen.
     setRemoving(false);
     setConfirming(undefined);
-    if (failed) notify({ tone: "error", title: `Couldn't remove ${name}`, body: failed });
+    if (failed)
+      notify({ tone: "error", title: t("Couldn't remove {{name}}", { name }), body: failed });
   };
   const on = list?.filter((p) => p.instance.enabled) ?? [];
   const labels = useProviderLabels();
@@ -847,9 +861,9 @@ function HostInstances({
   });
   // Whose attention each needs: what's on and can't run, then what's on, then what's off.
   const groups: [string, ProviderInfo[]][] = [
-    ["Needs attention", found?.filter((p) => p.instance.enabled && instanceTone(p)) ?? []],
-    ["Ready", found?.filter((p) => p.instance.enabled && !instanceTone(p)) ?? []],
-    ["Off", found?.filter((p) => !p.instance.enabled) ?? []],
+    [t("Needs attention"), found?.filter((p) => p.instance.enabled && instanceTone(p)) ?? []],
+    [t("Ready"), found?.filter((p) => p.instance.enabled && !instanceTone(p)) ?? []],
+    [t("Off"), found?.filter((p) => !p.instance.enabled) ?? []],
   ];
 
   const bar = (
@@ -857,27 +871,32 @@ function HostInstances({
       <div className="text-reading">{picker}</div>
       <button
         type="button"
-        aria-label="Refresh"
+        aria-label={t("Refresh")}
         disabled={checking}
         onClick={() => void refresh()}
         className="ml-auto flex items-center gap-1.5 rounded-md px-1.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
       >
         <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
-        {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
+        {checking ? t("Checking…") : providers && checkedLabel(providers.checkedAt)}
       </button>
       {/* Linked, it stays until it's turned off, even with one computer left. */}
       {(hosts.length > 1 || linkOn) && (
         <div className="-mx-1 basis-full overflow-hidden rounded-xl border border-border/40">
           <Row
-            title="Link providers across computers"
+            title={t("Link providers across computers")}
             description={
               linkOn
-                ? "Every computer uses the same providers. API keys and sign-ins stay on each computer."
-                : `Use ${host.name}'s providers on every computer. Any others are turned off, not removed. API keys and sign-ins stay on each computer.`
+                ? t(
+                    "Every computer uses the same providers. API keys and sign-ins stay on each computer.",
+                  )
+                : t(
+                    "Use {{host}}'s providers on every computer. Any others are turned off, not removed. API keys and sign-ins stay on each computer.",
+                    { host: host.name },
+                  )
             }
           >
             <Switch
-              label="Link providers across computers"
+              label={t("Link providers across computers")}
               checked={linkOn}
               disabled={!linkOn && !canLink(list ?? [])}
               onChange={(next) => void (next ? linkProviders(host.id) : unlinkProviders())}
@@ -916,8 +935,12 @@ function HostInstances({
         chosen={showingHubs}
         onClick={() => setSelected(hubsTab)}
         icon={<Layers aria-hidden className="text-faint-foreground" />}
-        title="Hubs"
-        detail={hubs?.length ? `${hubs.length} on this host` : "Run agents through a proxy"}
+        title={t("Hubs")}
+        detail={
+          hubs?.length
+            ? t("{{count}} on this host", { count: hubs.length })
+            : t("Run agents through a proxy")
+        }
       />
     </div>
   );
@@ -945,8 +968,8 @@ function HostInstances({
               <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
               <input
                 type="search"
-                aria-label="Search providers"
-                placeholder="Search"
+                aria-label={t("Search providers")}
+                placeholder={t("Search")}
                 value={query}
                 spellCheck={false}
                 onChange={(e) => setQuery(e.target.value)}
@@ -959,7 +982,7 @@ function HostInstances({
                 className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
               />
             </label>
-            <IconButton label="Add provider" onClick={() => setAdding(true)}>
+            <IconButton label={t("Add provider")} onClick={() => setAdding(true)}>
               <Plus aria-hidden />
             </IconButton>
           </div>
@@ -967,7 +990,7 @@ function HostInstances({
             <div
               className="flex flex-wrap gap-1 px-4 py-1"
               role="group"
-              aria-label="Filter by label"
+              aria-label={t("Filter by label")}
             >
               {known.map((label) => (
                 <button
@@ -984,7 +1007,7 @@ function HostInstances({
           )}
           <div
             role="tablist"
-            aria-label="Providers"
+            aria-label={t("Providers")}
             aria-orientation="vertical"
             onKeyDown={moveTab}
           >
@@ -1013,7 +1036,7 @@ function HostInstances({
                                 <span className="flex min-h-5 items-center gap-1.5">
                                   {instance.enabled && tone && <StatusDot tone={tone} />}
                                   <span className="line-clamp-2 min-w-0">
-                                    {instance.enabled ? instanceStatus(info) : "Off"}
+                                    {instance.enabled ? instanceStatus(info) : t("Off")}
                                   </span>
                                   {instance.enabled && <InstancePlan info={info} />}
                                 </span>
@@ -1045,7 +1068,7 @@ function HostInstances({
             )}
             {list && found?.length === 0 && (
               <p className="px-4 py-3 text-meta text-faint-foreground">
-                {list.length ? "No providers match." : "None on this host yet."}
+                {list.length ? t("No providers match.") : t("None on this host yet.")}
               </p>
             )}
           </div>
@@ -1061,19 +1084,25 @@ function HostInstances({
         >
           {!list ? (
             error ? (
-              "Couldn't list this host's providers."
+              t("Couldn't list this host's providers.")
             ) : (
-              "Checking…"
+              t("Checking…")
             )
           ) : (
             <>
               <p>
                 {hubs?.length
-                  ? `${host.name} runs threads on its hubs below. Add an agent or a model service to run them on it directly too.`
-                  : `No providers on ${host.name} yet. Add an agent or a model service for threads to run on.`}
+                  ? t(
+                      "{{host}} runs threads on its hubs below. Add an agent or a model service to run them on it directly too.",
+                      { host: host.name },
+                    )
+                  : t(
+                      "No providers on {{host}} yet. Add an agent or a model service for threads to run on.",
+                      { host: host.name },
+                    )}
               </p>
               <button type="button" onClick={() => setAdding(true)} className={primaryButton}>
-                Add provider
+                {t("Add provider")}
               </button>
             </>
           )}
@@ -1103,10 +1132,19 @@ function HostInstances({
               info === current && (
                 <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
                   <span className="min-w-0 flex-1">
-                    Remove <span className="font-medium text-foreground">{chosenName}</span>? Its
-                    settings and secrets leave{" "}
-                    {isListed(chosenTab) ? "every connected computer" : "this host"}; its threads
-                    keep their transcripts.
+                    {isListed(chosenTab) ? (
+                      <Trans values={{ name: chosenName }}>
+                        Remove <span className="font-medium text-foreground">{"{{name}}"}</span>?
+                        Its settings and secrets leave every connected computer; its threads keep
+                        their transcripts.
+                      </Trans>
+                    ) : (
+                      <Trans values={{ name: chosenName }}>
+                        Remove <span className="font-medium text-foreground">{"{{name}}"}</span>?
+                        Its settings and secrets leave this host; its threads keep their
+                        transcripts.
+                      </Trans>
+                    )}
                   </span>
                   <ConfirmRemove
                     disabled={removing}
@@ -1194,7 +1232,7 @@ function ProviderLabels({ hostId, instance }: { hostId: string; instance: string
           {label}
           <button
             type="button"
-            aria-label={`Remove the label ${label}`}
+            aria-label={t("Remove the label {{label}}", { label })}
             onClick={() =>
               setProviderLabels(
                 hostId,
@@ -1209,8 +1247,8 @@ function ProviderLabels({ hostId, instance }: { hostId: string; instance: string
         </span>
       ))}
       <input
-        aria-label="Add a label"
-        placeholder="+ Add label"
+        aria-label={t("Add a label")}
+        placeholder={t("+ Add label")}
         list={suggestions}
         value={text}
         maxLength={24}
@@ -1319,7 +1357,7 @@ function InstancePane({
       if ("error" in answer) problem = describeError(answer.error);
     } else problem = await window.parallax.install(hostId, instance.kind);
     setNpmInstalling(false);
-    if (problem) failed(`Couldn't install ${instance.name}`, problem);
+    if (problem) failed(t("Couldn't install {{name}}", { name: instance.name }), problem);
     else onSignedIn();
   };
   // While it installs, plxd probes it again on each list, so the list shows when it ends.
@@ -1343,9 +1381,9 @@ function InstancePane({
   const save = async (change: Partial<ProviderInstance>) => {
     retry();
     const problem = await saveEverywhere(hostId, { ...instance, ...change });
-    if (problem) failed(`Couldn't save ${instance.name}`, problem);
+    if (problem) failed(t("Couldn't save {{name}}", { name: instance.name }), problem);
   };
-  const program = instance.program ?? kind.program ?? "the program";
+  const program = instance.program ?? kind.program ?? t("the program");
   // A Cursor instance with its own CURSOR_API_KEY runs on that key, with no browser sign-in (as T3 Code).
   const cursorAccount =
     instance.kind === "cursor" && !instance.env.some((v) => v.name === "CURSOR_API_KEY");
@@ -1372,7 +1410,7 @@ function InstancePane({
       notify({
         key: `provider/${hostId}/${instance.id}`,
         tone: "error",
-        title: `Couldn't sign in to ${instance.name}`,
+        title: t("Couldn't sign in to {{name}}", { name: instance.name }),
         body: info.signInError,
       });
     }
@@ -1383,7 +1421,10 @@ function InstancePane({
       instance: instance.id,
     });
     if ("error" in answer) {
-      failed(`Couldn't sign in to ${instance.name}`, describeError(answer.error));
+      failed(
+        t("Couldn't sign in to {{name}}", { name: instance.name }),
+        describeError(answer.error),
+      );
       return;
     }
     window.open(answer.result.url, "_blank");
@@ -1396,7 +1437,10 @@ function InstancePane({
       instance: instance.id,
     });
     if ("error" in answer)
-      return failed(`Couldn't sign out of ${instance.name}`, describeError(answer.error));
+      return failed(
+        t("Couldn't sign out of {{name}}", { name: instance.name }),
+        describeError(answer.error),
+      );
     await loadProviders(hostId, true);
     await signInCursor();
   };
@@ -1406,14 +1450,17 @@ function InstancePane({
       instance: instance.id,
     });
     if ("error" in answer)
-      failed(`Couldn't sign out of ${instance.name}`, describeError(answer.error));
+      failed(
+        t("Couldn't sign out of {{name}}", { name: instance.name }),
+        describeError(answer.error),
+      );
     else void loadProviders(hostId, true);
   };
 
   let account = instanceStatus(info);
   // Show the sign-in identity even when the account has a custom display label.
   if (info.signedIn === true && info.account?.includes("@"))
-    account = `Authenticated as ${info.account}`;
+    account = t("Authenticated as {{account}}", { account: info.account });
   // Such as "Pi isn't installed on this host": for Pi, the `pi` its adapter runs, not npx.
   if (!info.installed && info.note) account = capitalized(info.note);
 
@@ -1431,7 +1478,7 @@ function InstancePane({
         </span>
         <div data-setting="display-name" className="min-w-0 flex-1">
           <SavedField
-            aria-label="Display name"
+            aria-label={t("Display name")}
             required
             maxLength={64}
             value={instance.name}
@@ -1445,34 +1492,38 @@ function InstancePane({
         </div>
         <label
           className="flex shrink-0 items-center gap-2 pt-1 text-body text-muted-foreground"
-          title={lastOn ? "One provider stays on, for new threads." : undefined}
+          title={lastOn ? t("One provider stays on, for new threads.") : undefined}
         >
-          {instance.enabled ? "On" : "Off"}
+          {instance.enabled ? t("On") : t("Off")}
           <Switch
-            label={`Use ${instance.name}`}
+            label={t("Use {{name}}", { name: instance.name })}
             checked={instance.enabled}
             disabled={lastOn}
             onChange={(next) => void save({ enabled: next })}
           />
         </label>
-        <IconButton label={`Remove ${instance.name}`} onClick={onRemove}>
+        <IconButton label={t("Remove {{name}}", { name: instance.name })} onClick={onRemove}>
           <Trash2 aria-hidden />
         </IconButton>
       </div>
       {removal}
       {!instance.enabled && (
         <p className="mb-6 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
-          Off on this host: new threads and model menus leave out {instance.name}'s models.
+          {t("Off on this host: new threads and model menus leave out {{name}}'s models.", {
+            name: instance.name,
+          })}
         </p>
       )}
-      <Card label="Account">
+      <Card label={t("Account")}>
         {canInstall ? (
           <Row
-            title="Install"
+            title={t("Install")}
             description={
               <span className="flex items-center gap-1.5">
                 <StatusDot tone="error" />
-                <span className="min-w-0">{busy ? `Installing ${kind.name}…` : account}</span>
+                <span className="min-w-0">
+                  {busy ? t("Installing {{name}}…", { name: kind.name }) : account}
+                </span>
               </span>
             }
           >
@@ -1481,13 +1532,13 @@ function InstancePane({
               <span className="group relative">
                 <button
                   type="button"
-                  aria-label={`Install ${kind.name}`}
+                  aria-label={t("Install {{name}}", { name: kind.name })}
                   aria-describedby={npmLine ? `${id}-install` : undefined}
                   disabled={busy}
                   onClick={() => void install()}
                   className={primaryButton}
                 >
-                  {busy ? "Installing…" : "Install"}
+                  {busy ? t("Installing…") : t("Install")}
                 </button>
                 {npmLine && (
                   <span
@@ -1495,7 +1546,9 @@ function InstancePane({
                     role="tooltip"
                     className="pointer-events-none invisible absolute top-full right-0 z-10 mt-2 w-max max-w-96 rounded-md border border-border bg-surface px-2.5 py-1.5 text-meta text-foreground shadow-composer group-hover:visible"
                   >
-                    Runs <code className="font-mono">{npmLine}</code>
+                    <Trans values={{ command: npmLine }}>
+                      Runs <code className="font-mono">{"{{command}}"}</code>
+                    </Trans>
                   </span>
                 )}
               </span>
@@ -1503,7 +1556,7 @@ function InstancePane({
           </Row>
         ) : (
           <Row
-            title="Status"
+            title={t("Status")}
             description={
               <span className="flex min-h-5 items-center gap-1.5">
                 <StatusDot
@@ -1516,7 +1569,7 @@ function InstancePane({
           >
             {cursorAccount && info.installed && info.signedIn === true && !cursorWaiting && (
               <button type="button" onClick={() => void signOutCursor()} className={outlineButton}>
-                Sign out
+                {t("Sign out")}
               </button>
             )}
             {((cursorAccount && info.installed && !cursorWaiting) ||
@@ -1525,8 +1578,8 @@ function InstancePane({
                 type="button"
                 aria-label={
                   info.signedIn === true
-                    ? `Re-authenticate ${instance.name}`
-                    : `Sign in to ${instance.name}`
+                    ? t("Re-authenticate {{name}}", { name: instance.name })
+                    : t("Sign in to {{name}}", { name: instance.name })
                 }
                 onClick={() => {
                   if (cursorAccount)
@@ -1537,21 +1590,21 @@ function InstancePane({
                 className={info.signedIn === true ? outlineButton : primaryButton}
               >
                 {info.signedIn === true
-                  ? "Re-authenticate"
+                  ? t("Re-authenticate")
                   : instance.kind === "pi"
-                    ? "Login"
-                    : "Sign in"}
+                    ? t("Login")
+                    : t("Sign in")}
               </button>
             )}
           </Row>
         )}
         {cursorWaiting && (
           <Row
-            title="Sign-in"
-            description="Approve the sign-in in your browser. This keeps waiting until you do."
+            title={t("Sign-in")}
+            description={t("Approve the sign-in in your browser. This keeps waiting until you do.")}
           >
             <button type="button" onClick={() => setCursorWaiting(false)} className={quietButton}>
-              Cancel
+              {t("Cancel")}
             </button>
           </Row>
         )}
@@ -1568,25 +1621,31 @@ function InstancePane({
           </Suspense>
         )}
       </Card>
-      <Section title="Runtime">
+      <Section title={t("Runtime")}>
         {instance.kind === "cursor" ? (
           <Row
             title="Cursor SDK"
             description={
-              info.note ?? "Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer."
+              info.note ??
+              t("Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer.")
             }
           />
         ) : ollamaCloud ? (
           <Row
             title="Ollama Cloud"
-            description="Runs Ollama Cloud's models on this host with the key in OLLAMA_API_KEY."
+            description={t(
+              "Runs Ollama Cloud's models on this host with the key in OLLAMA_API_KEY.",
+            )}
           />
         ) : (
           <>
             {choices && version && (
-              <Row title="Version" description={`Which ${kind.name} this instance runs.`}>
+              <Row
+                title={t("Version")}
+                description={t("Which {{name}} this instance runs.", { name: kind.name })}
+              >
                 <Segmented
-                  label="Version"
+                  label={t("Version")}
                   options={choices.map((v) => ({
                     value: v.label,
                     name: v.label,
@@ -1604,15 +1663,20 @@ function InstancePane({
               </Row>
             )}
             <Row
-              title="Binary path"
+              title={t("Binary path")}
               description={
                 info.path
-                  ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
-                  : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
+                  ? t("Path to the {{name}} binary this instance runs. Found at {{path}}.", {
+                      name: kind.name,
+                      path: info.path,
+                    })
+                  : t("Path to the {{name}} binary this instance runs. Not found on the host.", {
+                      name: kind.name,
+                    })
               }
             >
               <SavedField
-                aria-label="Binary path"
+                aria-label={t("Binary path")}
                 placeholder={
                   kind.program ?? (instance.kind === "ollamaCloud" ? "claude" : undefined)
                 }
@@ -1623,27 +1687,32 @@ function InstancePane({
             </Row>
             {homeVar && (
               <Row
-                title={`${homeVar} path`}
-                description={`Custom ${kind.name} home and config directory, for a second account.`}
+                title={t("{{variable}} path", { variable: homeVar })}
+                description={t("Custom {{name}} home and config directory, for a second account.", {
+                  name: kind.name,
+                })}
               >
                 <SavedField
-                  aria-label={`${homeVar} path`}
-                  placeholder="Default"
+                  aria-label={t("{{variable}} path", { variable: homeVar })}
+                  placeholder={t("Default")}
                   value={instance.home ?? ""}
                   onSave={(home) => void save({ home: home.trim() || undefined })}
                 />
               </Row>
             )}
             <Row
-              title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+              title={kind.wholeArgs ? t("Arguments") : t("Launch arguments")}
               description={
                 kind.wholeArgs
-                  ? `Every argument passed to ${program}, separated by spaces.`
-                  : `Additional arguments passed to ${program} on session start, separated by spaces.`
+                  ? t("Every argument passed to {{program}}, separated by spaces.", { program })
+                  : t(
+                      "Additional arguments passed to {{program}} on session start, separated by spaces.",
+                      { program },
+                    )
               }
             >
               <SavedField
-                aria-label={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+                aria-label={kind.wholeArgs ? t("Arguments") : t("Launch arguments")}
                 value={instance.args.join(" ")}
                 onSave={(args) => void save({ args: argsOf(args) })}
               />
@@ -1654,7 +1723,9 @@ function InstancePane({
                 title="Claude Agent SDK"
                 description={
                   info.note ??
-                  "Runs Claude Code through the Agent SDK on this host. Needs Node.js 22.16 or newer."
+                  t(
+                    "Runs Claude Code through the Agent SDK on this host. Needs Node.js 22.16 or newer.",
+                  )
                 }
               />
             )}
@@ -1704,10 +1775,10 @@ function EnvSection({
   };
 
   return (
-    <Section title="Environment">
+    <Section title={t("Environment")}>
       <Row
-        title="Variables"
-        description="API keys, base URLs, and other settings this instance's runs get."
+        title={t("Variables")}
+        description={t("API keys, base URLs, and other settings this instance's runs get.")}
       >
         <button
           type="button"
@@ -1715,7 +1786,7 @@ function EnvSection({
           className={`${quietButton} flex items-center gap-1 border border-border [&_svg]:size-3.5`}
         >
           <Plus aria-hidden />
-          Add variable
+          {t("Add variable")}
         </button>
       </Row>
       {env.map((v, i) => (
@@ -1724,13 +1795,13 @@ function EnvSection({
             <span className="block truncate font-mono text-body">{v.name}</span>
             {v.secret && (
               <span className="block text-body text-muted-foreground">
-                Secret, kept in the host's keychain
+                {t("Secret, kept in the host's keychain")}
               </span>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <SavedField
-              aria-label={`Value of ${v.name}`}
+              aria-label={t("Value of {{name}}", { name: v.name })}
               type={v.secret ? "password" : "text"}
               placeholder={v.secret ? "••••" : ""}
               value={v.secret ? "" : (v.value ?? "")}
@@ -1741,7 +1812,7 @@ function EnvSection({
               }}
             />
             <IconButton
-              label={`Remove ${v.name}`}
+              label={t("Remove {{name}}", { name: v.name })}
               onClick={() => void onSave(env.filter((_, j) => j !== i))}
             >
               <X aria-hidden />
@@ -1751,7 +1822,7 @@ function EnvSection({
       ))}
       {adding && (
         <form
-          aria-label="Add variable"
+          aria-label={t("Add variable")}
           onSubmit={(e) => {
             e.preventDefault();
             const value = (e.currentTarget.elements.namedItem("value") as HTMLInputElement).value;
@@ -1762,12 +1833,12 @@ function EnvSection({
         >
           <div className="grid grid-cols-2 gap-3">
             <label className="text-body text-muted-foreground">
-              Name
+              {t("Name")}
               <input
                 name="name"
                 required
                 pattern="[A-Za-z_][A-Za-z0-9_]*"
-                title="Letters, digits, and _, not starting with a digit."
+                title={t("Letters, digits, and _, not starting with a digit.")}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 spellCheck={false}
@@ -1776,7 +1847,7 @@ function EnvSection({
               />
             </label>
             <label className="text-body text-muted-foreground">
-              Value
+              {t("Value")}
               <input
                 name="value"
                 type={secret ? "password" : "text"}
@@ -1787,15 +1858,15 @@ function EnvSection({
             </label>
           </div>
           <label className="flex items-center gap-2 text-body text-muted-foreground">
-            <Switch label="Secret" checked={secret} onChange={setSecret} />
-            Secret: kept in the host's keychain, and never shown again
+            <Switch label={t("Secret")} checked={secret} onChange={setSecret} />
+            {t("Secret: kept in the host's keychain, and never shown again")}
           </label>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={reset} className={quietButton}>
-              Cancel
+              {t("Cancel")}
             </button>
             <button type="submit" className={primaryButton}>
-              Add variable
+              {t("Add variable")}
             </button>
           </div>
         </form>
@@ -1828,7 +1899,7 @@ function KeyRow({
     if ("error" in answer && answer.error.data?.kind !== "accountNotFound")
       notify({
         tone: "error",
-        title: `Couldn't remove ${account.label}`,
+        title: t("Couldn't remove {{name}}", { name: account.label }),
         body: accountsError(answer.error),
       });
     else onRemoved();
@@ -1840,8 +1911,11 @@ function KeyRow({
         <span className="block truncate text-body font-medium">{account.label}</span>
         <span className="block truncate text-body text-muted-foreground">
           {confirming
-            ? "Remove this key? Parallax deletes it from the host's keychain."
-            : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
+            ? t("Remove this key? Parallax deletes it from the host's keychain.")
+            : t("{{provider}} API key · {{key}}", {
+                provider: providerNames[account.provider] ?? account.provider,
+                key: account.maskedKey,
+              })}
         </span>
         {usage}
       </div>
@@ -1854,7 +1928,7 @@ function KeyRow({
           />
         ) : (
           <button type="button" className={quietButton} onClick={() => setConfirming(true)}>
-            Remove
+            {t("Remove")}
           </button>
         )}
       </div>
@@ -1874,9 +1948,9 @@ function UsageSection({
 }) {
   return (
     <Section
-      title="Usage"
+      title={t("Usage")}
       action={
-        <Segmented label="Usage period" options={periods} value={period} onChange={onPeriod} />
+        <Segmented label={t("Usage period")} options={periods} value={period} onChange={onPeriod} />
       }
     >
       <div className={settingRow}>
@@ -1906,7 +1980,7 @@ function KeysSection({
 }) {
   const [adding, setAdding] = useState(false);
   return (
-    <Section title={`${providerNames[provider]} API keys`}>
+    <Section title={t("{{provider}} API keys", { provider: providerNames[provider] })}>
       {keys
         .filter((k) => k.provider === provider)
         .map((account) => (
@@ -1934,7 +2008,7 @@ function KeysSection({
           className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
         >
           <Plus aria-hidden />
-          Add API key
+          {t("Add API key")}
         </button>
       )}
     </Section>
@@ -1974,7 +2048,7 @@ function KeyForm({
     if ("error" in answer)
       notify({
         tone: "error",
-        title: "Couldn't add the API key",
+        title: t("Couldn't add the API key"),
         body: accountsError(answer.error),
       });
     else onDone(answer.result.account);
@@ -1982,7 +2056,7 @@ function KeyForm({
 
   return (
     <form
-      aria-label="Add API key"
+      aria-label={t("Add API key")}
       onSubmit={(e) => {
         e.preventDefault();
         void save(e.currentTarget);
@@ -1990,21 +2064,21 @@ function KeyForm({
       className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
     >
       <label className="text-body text-muted-foreground">
-        Label
+        {t("Label")}
         {/* Within plxd's limits (a label with a non-space, of at most 256 bytes, and a key of at
             least 20), so it never answers invalidParams. */}
         <input
           name="label"
           required
           pattern=".*\S.*"
-          title="A label can't be only spaces."
+          title={t("A label can't be only spaces.")}
           maxLength={64}
-          placeholder="Work"
+          placeholder={t("Work")}
           className={field}
         />
       </label>
       <label className="text-body text-muted-foreground">
-        API key
+        {t("API key")}
         <input
           name="key"
           type="password"
@@ -2015,15 +2089,15 @@ function KeyForm({
           className={field}
         />
         <span className="mt-1 block text-faint-foreground">
-          Kept in the host's keychain. Parallax never shows it again.
+          {t("Kept in the host's keychain. Parallax never shows it again.")}
         </span>
       </label>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={() => onDone()} className={quietButton}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button type="submit" disabled={saving} className={primaryButton}>
-          Add key
+          {t("Add key")}
         </button>
       </div>
     </form>

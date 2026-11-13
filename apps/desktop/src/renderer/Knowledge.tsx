@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { MemoryPanel, type Memory } from "./MemoryPanel";
 import { MiniPrompt } from "./MiniPrompt";
 import type { AgentRun } from "../protocol/generated/protocol";
@@ -57,16 +59,20 @@ function Head({ memories }: { memories: readonly Memory[] }) {
   const entries = memories.filter((m) => m.path.startsWith("memory/")).length;
   const documents = memories.filter((m) => m.path.startsWith("knowledge/")).length;
   const counts = [
-    entries > 0 && `${entries} memory ${entries === 1 ? "entry" : "entries"}`,
-    documents > 0 && `${documents} ${documents === 1 ? "document" : "documents"}`,
+    entries > 0 &&
+      t("{{count}} memory entries", { count: entries, defaultValue_one: "{{count}} memory entry" }),
+    documents > 0 &&
+      t("{{count}} documents", { count: documents, defaultValue_one: "{{count}} document" }),
   ]
     .filter(Boolean)
     .join(", ");
   return (
     <header className="px-1 pt-5">
-      <h2 className="text-heading leading-tight font-semibold tracking-tight">Knowledge</h2>
+      <h2 className="text-heading leading-tight font-semibold tracking-tight">{t("Knowledge")}</h2>
       <p className="mt-0.5 text-body text-muted-foreground">
-        What this orchestrator's agents know{counts && `: ${counts}`}.
+        {counts
+          ? t("What this orchestrator's agents know: {{counts}}.", { counts })
+          : t("What this orchestrator's agents know.")}
       </p>
     </header>
   );

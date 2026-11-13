@@ -1,5 +1,7 @@
 // What the widget and the Live Activity show of the threads the app sees (0100), for
 // modules/thread-status. No platform code, for the test.
+import { t as translate } from "i18next";
+
 import { phaseOf, type Phase } from "./alerts";
 import type { Computer } from "./fleet";
 
@@ -42,7 +44,7 @@ export function threadStatus(computers: Computer[], now = Date.now()): ThreadSta
       seen.push({
         run: t.id,
         host: m.machine.id,
-        title: state.titles[t.id] ?? "A thread",
+        title: state.titles[t.id] ?? translate("A thread"),
         state: phase,
         at,
         link: `parallax://thread/${encodeURIComponent(m.machine.id)}/${encodeURIComponent(t.id)}`,

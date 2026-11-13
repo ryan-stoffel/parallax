@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Target } from "lucide-react";
 
 /**
@@ -7,13 +8,13 @@ import { Target } from "lucide-react";
 export function GoalStrip({ objective, compact }: { objective: string; compact?: boolean }) {
   return (
     <section
-      aria-label="Goal"
+      aria-label={t("Goal")}
       title={objective}
       className={`plan-strip flex min-w-0 items-center text-body ${compact ? "h-7 gap-1.5 px-1.5 text-muted-foreground" : "gap-2.5 py-0.5 pr-3.5 pl-4"}`}
     >
       <Target aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className={compact ? "text-body" : "shrink-0 font-medium"}>
-        {compact ? "Goal" : "Pursuing goal"}
+        {compact ? t("Goal") : t("Pursuing goal")}
       </span>
       {!compact && (
         <span className="min-w-0 flex-1 truncate text-muted-foreground">{objective}</span>

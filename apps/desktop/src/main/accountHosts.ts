@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import type { DeviceIcon, KeyStanding, Outage } from "../preload/bridge";
 import type {
   AccessState,
@@ -71,7 +73,7 @@ export const directRoutes = (routes: unknown): string[] =>
 
 /** Checks `settings.json`'s `accounts`. Throws for people when an entry isn't one. */
 export function checkAccounts(accounts: unknown, ids: Set<string>): void {
-  if (!Array.isArray(accounts)) throw new Error("`accounts` isn't a list");
+  if (!Array.isArray(accounts)) throw new Error(t("`accounts` isn't a list"));
   for (const entry of accounts as unknown[]) {
     const {
       hostId,
@@ -85,31 +87,33 @@ export function checkAccounts(accounts: unknown, ids: Set<string>): void {
       removed,
       pairRuns,
     } = (entry ?? {}) as Record<string, unknown>;
-    const where = `account computer ${JSON.stringify(entry)}`;
-    if (!isRelayId(hostId) || ids.has(accountId(hostId))) throw new Error(`${where} has a bad id`);
+    const where = t("account computer {{entry}}", { entry: JSON.stringify(entry) });
+    if (!isRelayId(hostId) || ids.has(accountId(hostId)))
+      throw new Error(t("{{where}} has a bad id", { where }));
     ids.add(accountId(hostId));
     if (typeof name !== "string" || !Array.isArray(routes) || !routes.every(isRoute))
-      throw new Error(`${where} needs a name and routes`);
+      throw new Error(t("{{where}} needs a name and routes", { where }));
     if (
       addedRoutes !== undefined &&
       !(Array.isArray(addedRoutes) && addedRoutes.every((r) => isRoute(r) && !isRelay(r)))
     )
-      throw new Error(`${where} has bad addedRoutes`);
+      throw new Error(t("{{where}} has bad addedRoutes", { where }));
     if (routeOrder !== undefined && !(Array.isArray(routeOrder) && routeOrder.every(isRoute)))
-      throw new Error(`${where} has a bad routeOrder`);
+      throw new Error(t("{{where}} has a bad routeOrder", { where }));
     if (
       hiddenRoutes !== undefined &&
       !(Array.isArray(hiddenRoutes) && hiddenRoutes.every((r) => isRoute(r) && !isRelay(r)))
     )
-      throw new Error(`${where} has bad hiddenRoutes`);
-    if (icon !== undefined && !isDeviceIcon(icon)) throw new Error(`${where} has a bad icon`);
+      throw new Error(t("{{where}} has bad hiddenRoutes", { where }));
+    if (icon !== undefined && !isDeviceIcon(icon))
+      throw new Error(t("{{where}} has a bad icon", { where }));
     if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
-      throw new Error(`${where} has a bad off or removed`);
+      throw new Error(t("{{where}} has a bad off or removed", { where }));
     if (
       pairRuns !== undefined &&
       !(Array.isArray(pairRuns) && pairRuns.every((at) => Number.isSafeInteger(at)))
     )
-      throw new Error(`${where} has bad pairRuns`);
+      throw new Error(t("{{where}} has bad pairRuns", { where }));
   }
 }
 
@@ -224,7 +228,7 @@ export async function waitForListener(
     if (Date.now() >= deadline)
       return status.listening
         ? undefined
-        : (status.problem ?? "This computer didn't start listening in time. Try again.");
+        : (status.problem ?? t("This computer didn't start listening in time. Try again."));
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 }

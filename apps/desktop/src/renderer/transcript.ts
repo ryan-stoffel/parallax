@@ -1,6 +1,9 @@
 // One agent run's transcript, rebuilt from its logged events. Pure, so it is
 // tested without React; useAgentRun feeds it a snapshot's events, older pages
 // of `orchestration/threadHistory`, and live events alike.
+import { t } from "i18next";
+
+import { msg } from "../i18n";
 import type {
   AgentBackgroundTask,
   AgentFailureKind,
@@ -308,16 +311,17 @@ const noCalls: ReadonlySet<string> = new Set();
 export const backgroundCalls = (tasks: readonly AgentBackgroundTask[]): ReadonlySet<string> =>
   new Set(tasks.flatMap((task) => (task.callId ? [task.callId] : [])));
 
+/** Each state's word, marked with `msg`: show it with `t`. */
 export const subagentLabels: Record<SubagentState, string> = {
-  running: "Working",
-  completed: "Done",
-  failed: "Failed",
-  stopped: "Stopped",
+  running: msg("Working"),
+  completed: msg("Done"),
+  failed: msg("Failed"),
+  stopped: msg("Stopped"),
 };
 
 /** A subagent for people: its task, else its prompt's first line, else its type. */
 export const nativeTitle = (s: Subagent) =>
-  s.description?.trim() || s.prompt?.trim().split("\n")[0] || s.agentType || "Subagent";
+  s.description?.trim() || s.prompt?.trim().split("\n")[0] || s.agentType || t("Subagent");
 
 /**
  * A subagent's transcript: its prompt, what it did, and its final report when its transcript
@@ -450,10 +454,14 @@ function withUsage(
   };
 }
 
-function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
-  let { run, seq, turnDone, openTurns = 0, requestUsage, threadUsage } = t;
-  const items = [...t.items];
-  const subagents = { ...t.subagents };
+function applyEventsInner(
+  transcript: Transcript,
+  events: LoggedEvent[],
+  runId: string,
+): Transcript {
+  let { run, seq, turnDone, openTurns = 0, requestUsage, threadUsage } = transcript;
+  const items = [...transcript.items];
+  const subagents = { ...transcript.subagents };
 
   for (const { seq: at, time, event } of events) {
     if (at <= seq) continue;
@@ -487,7 +495,11 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
           kind: "notice",
           key: key(),
           tone: "info",
-          text: `Switched from ${accountLabel(event.fromAccount)} to ${accountLabel(event.toAccount)}: ${failureText(event.reason)}.`,
+          text: t("Switched from {{from}} to {{to}}: {{reason}}.", {
+            from: accountLabel(event.fromAccount),
+            to: accountLabel(event.toAccount),
+            reason: failureText(event.reason),
+          }),
         });
         break;
       case "agent.finished":
@@ -507,7 +519,9 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
           kind: "notice",
           key: key(),
           tone: "info",
-          text: "Wake-ups are paused: finished subagents won't wake the orchestrator. Your next message resumes them.",
+          text: t(
+            "Wake-ups are paused: finished subagents won't wake the orchestrator. Your next message resumes them.",
+          ),
         });
         break;
       case "thread.script": {
@@ -563,7 +577,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
       if (items[i]!.at === undefined) items[i] = { ...items[i]!, at: time };
   }
   // Unchanged subagents keep their object, so what reads them doesn't render again.
-  const had = t.subagents ?? {};
+  const had = transcript.subagents ?? {};
   const changed =
     Object.keys(subagents).length !== Object.keys(had).length ||
     Object.entries(subagents).some(([callId, sub]) => had[callId] !== sub);
@@ -572,7 +586,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
     requestUsage,
     threadUsage,
     items,
-    subagents: changed ? subagents : t.subagents,
+    subagents: changed ? subagents : transcript.subagents,
     seq,
     ...(turnDone !== undefined && { turnDone, openTurns }),
   };
@@ -825,7 +839,7 @@ function applyOutput(
         kind: "notice",
         key,
         tone: "warning",
-        text: "A message wasn't sent to the agent.",
+        text: t("A message wasn't sent to the agent."),
         turnId: item.turnId,
       });
       break;
@@ -834,7 +848,7 @@ function applyOutput(
         kind: "notice",
         key,
         tone: "info",
-        text: "Stopped by another thread.",
+        text: t("Stopped by another thread."),
         from: item.from,
       });
       break;
@@ -1199,49 +1213,57 @@ export function subagentRuns(items: readonly Item[]): (Item | Work)[] {
 /** "Worked for 1m 29s", or "Worked briefly" when the times are missing or under a second. */
 export function workedFor(startedAt?: string, endedAt?: string): string {
   const s = Math.round((Date.parse(endedAt ?? "") - Date.parse(startedAt ?? "")) / 1000);
-  if (!(s >= 1)) return "Worked briefly";
+  if (!(s >= 1)) return t("Worked briefly");
   const [h, m] = [Math.floor(s / 3600), Math.floor((s % 3600) / 60)];
-  const parts = h ? [`${h}h`, `${m}m`] : m ? [`${m}m`, `${s % 60}s`] : [`${s}s`];
-  return `Worked for ${parts.join(" ")}`;
+  const hours = t("{{hours}}h", { hours: h });
+  const minutes = t("{{minutes}}m", { minutes: m });
+  const parts = h
+    ? [hours, minutes]
+    : m
+      ? [minutes, t("{{seconds}}s", { seconds: s % 60 })]
+      : [t("{{seconds}}s", { seconds: s })];
+  return t("Worked for {{duration}}", { duration: parts.join(" ") });
 }
 
 /** An account for people: a subscription is named by its backend, a key account by its id. */
 export function accountLabel(accountId: string): string {
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(accountId)) return "API key";
-  return `${accountId.charAt(0).toUpperCase()}${accountId.slice(1)} subscription`;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(accountId)) return t("API key");
+  return t("{{backend}} subscription", {
+    backend: `${accountId.charAt(0).toUpperCase()}${accountId.slice(1)}`,
+  });
 }
 
 const failures: Record<AgentFailureKind, string> = {
-  notSignedIn: "not signed in",
-  rateLimited: "rate limited",
-  policyViolation: "stopped by Parallax's safety check",
-  unexpectedApiKey: "found an unexpected API key",
-  vendorError: "the provider returned an error",
-  crashed: "the CLI crashed",
-  spawnFailed: "the CLI didn't start",
-  setupFailed: "the setup script didn't succeed",
-  commitFailed: "Parallax couldn't commit its changes",
-  internal: "something went wrong in plxd",
+  notSignedIn: msg("not signed in"),
+  rateLimited: msg("rate limited"),
+  policyViolation: msg("stopped by Parallax's safety check"),
+  unexpectedApiKey: msg("found an unexpected API key"),
+  vendorError: msg("the provider returned an error"),
+  crashed: msg("the CLI crashed"),
+  spawnFailed: msg("the CLI didn't start"),
+  setupFailed: msg("the setup script didn't succeed"),
+  commitFailed: msg("Parallax couldn't commit its changes"),
+  internal: msg("something went wrong in plxd"),
 };
 
 /** Why a run failed or moved accounts, for people. */
 export const failureText = (kind: AgentFailureKind) =>
-  (failures as Partial<Record<string, string>>)[kind] ?? "something went wrong";
+  t((failures as Partial<Record<string, string>>)[kind] ?? msg("something went wrong"));
 
 const statuses: Record<AgentStatus, string> = {
-  starting: "Starting",
-  running: "Working",
-  completed: "Done",
-  failed: "Failed",
-  cancelled: "Stopped",
-  interrupted: "Interrupted",
-  waiting: "Waiting",
-  accepted: "Accepted",
+  starting: msg("Starting"),
+  running: msg("Working"),
+  completed: msg("Done"),
+  failed: msg("Failed"),
+  cancelled: msg("Stopped"),
+  interrupted: msg("Interrupted"),
+  waiting: msg("Waiting"),
+  accepted: msg("Accepted"),
 };
 
 /** A run's status for people. A status newer than this app is "Unknown". */
 export const statusLabel = (status: AgentStatus) =>
-  (statuses as Partial<Record<string, string>>)[status] ?? "Unknown";
+  t((statuses as Partial<Record<string, string>>)[status] ?? msg("Unknown"));
 
 /** Whether the run's CLI is live, so Stop applies. */
 export const isRunning = (status?: AgentStatus) => status === "starting" || status === "running";

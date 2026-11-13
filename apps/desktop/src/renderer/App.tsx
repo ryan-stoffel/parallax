@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ChevronLeft,
   Cloud,
@@ -31,6 +32,7 @@ import {
   type ComponentProps,
   type SetStateAction,
 } from "react";
+import { Trans } from "react-i18next";
 import { flushSync } from "react-dom";
 
 import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
@@ -227,7 +229,7 @@ function tabItem(tab: ThreadTab, { state }: ThreadsView): TabItem {
     const orchestrator = state.orchestrators.find((o) => o.id === selection.orchestratorId);
     return {
       id,
-      title: orchestrator?.name ?? "Orchestrator",
+      title: orchestrator?.name ?? t("Orchestrator"),
       icon: <ProjectIcon icon={orchestrator?.icon} />,
     };
   }
@@ -235,17 +237,21 @@ function tabItem(tab: ThreadTab, { state }: ThreadsView): TabItem {
     // With no group, it's the first one, as the page's is.
     const groupId = selection.groupId ?? groupThreads(state)[0]?.id;
     const repo = state.repos.find((r) => r.id === groupId);
-    return { id, title: repo?.project ? repo.name : "New thread", icon: <RepoIcon repo={repo} /> };
+    return {
+      id,
+      title: repo?.project ? repo.name : t("New thread"),
+      icon: <RepoIcon repo={repo} />,
+    };
   }
   const { threadId } = selection;
   const thread = state.threads.find((t) => t.id === threadId);
   const attention = thread && attentionOf(thread, state.runs[threadId], asksOf(state, threadId));
   return {
     id,
-    title: state.titles[threadId] ?? "Thread",
+    title: state.titles[threadId] ?? t("Thread"),
     icon:
       attention === "needsYou" ? (
-        <MessageCircleQuestion aria-label="Needs you" className="text-warning" />
+        <MessageCircleQuestion aria-label={t("Needs you")} className="text-warning" />
       ) : attention === "working" ? (
         <span className="text-working">
           <WorkingMark />
@@ -634,7 +640,7 @@ export function App() {
   const agent = agents.runs.find((r) => r.id === agentId);
   // Its thread's title from plxd (0041), else its prompt's.
   const agentTitle = agentId
-    ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
+    ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : t("Subagent")))
     : undefined;
   // Whose memory the side panel's Knowledge view shows, on a plxd with `memory` (0044): the open
   // orchestrator's, with its repository's, or the open thread's repository's. ponytail: a repo
@@ -698,11 +704,11 @@ export function App() {
       : undefined;
   // Every pull request linked to a thread on any host, for the Pull requests page.
   const prEntries: PrEntry[] = listed.flatMap(({ host: h, view }) =>
-    view.state.threads.flatMap((t) =>
-      (view.state.runs[t.id]?.pullRequests ?? []).map((url) => ({
+    view.state.threads.flatMap((thread) =>
+      (view.state.runs[thread.id]?.pullRequests ?? []).map((url) => ({
         hostId: h.id,
-        runId: t.id,
-        threadTitle: view.state.titles[t.id] ?? "Thread",
+        runId: thread.id,
+        threadTitle: view.state.titles[thread.id] ?? t("Thread"),
         url,
       })),
     ),
@@ -730,7 +736,9 @@ export function App() {
       if (run.id === open || !orchestrator) return [];
       const orchestratorRun = run.id === orchestrator.run;
       const from = {
-        label: orchestratorRun ? "Orchestrator" : `Subagent: ${titleOf(run)}`,
+        label: orchestratorRun
+          ? t("Orchestrator")
+          : t("Subagent: {{title}}", { title: titleOf(run) }),
         open: () => openAgent(orchestratorRun ? undefined : run.id),
       };
       return (agents.waiting[run.id] ?? []).map((approval) => ({ runId: run.id, approval, from }));
@@ -881,8 +889,8 @@ export function App() {
   } else {
     const page =
       selection.kind === "thread"
-        ? (threads.state.titles[selection.threadId] ?? "Thread")
-        : "New thread";
+        ? (threads.state.titles[selection.threadId] ?? t("Thread"))
+        : t("New thread");
     // A Claude Remote Control thread runs on another computer, not this host (PLX-1140).
     const remote: Crumb[] =
       selection.kind === "thread" && remoteThread
@@ -914,7 +922,7 @@ export function App() {
     const parent = lineage?.parent;
     if (parent) {
       const back = {
-        label: threads.state.titles[parent.id] ?? "Thread",
+        label: threads.state.titles[parent.id] ?? t("Thread"),
         onClick: () => openThreadId(parent.id),
       };
       crumbs = lineage.active ? [...where, back] : [...where, back, { label: page }];
@@ -923,7 +931,9 @@ export function App() {
     const original = threads.state.threads.find((t) => t.id === openThread?.forkedFrom?.run);
     if (original)
       crumbs.splice(-1, 0, {
-        label: `Forked from ${threads.state.titles[original.id] ?? "Thread"}`,
+        label: t("Forked from {{title}}", {
+          title: threads.state.titles[original.id] ?? t("Thread"),
+        }),
         icon: <GitFork />,
         onClick: () => openThreadId(original.id),
       });
@@ -933,7 +943,7 @@ export function App() {
       if (!lineage?.active)
         crumbs[crumbs.length - 1] = { label: page, onClick: () => openSubagent(threadId) };
       crumbs.push({
-        label: subagents.find((s) => s.callId === subagentOpen)?.title ?? "Subagent",
+        label: subagents.find((s) => s.callId === subagentOpen)?.title ?? t("Subagent"),
         icon: <ClaudeLogo />,
       });
     }
@@ -1108,11 +1118,11 @@ export function App() {
           {
             id: "newThreadHere",
             label: (
-              <>
-                New thread in <strong className="font-semibold">{hereRepo.name}</strong>
-              </>
+              <Trans values={{ name: hereRepo.name }}>
+                New thread in <strong className="font-semibold">{"{{name}}"}</strong>
+              </Trans>
             ),
-            text: `New thread in ${hereRepo.name}`,
+            text: t("New thread in {{name}}", { name: hereRepo.name }),
             icon: <SquarePen />,
             run: () => newThread(hereRepo.id),
           },
@@ -1120,24 +1130,24 @@ export function App() {
       : []),
     {
       id: "newThreadIn",
-      label: "New thread in…",
-      text: "New thread in",
+      label: t("New thread in…"),
+      text: t("New thread in"),
       icon: <SquarePen />,
       command: "newThread",
       page: "repos",
     },
     {
       id: "noRepoThread",
-      label: "New thread without a repo",
-      text: "New thread without a repo",
+      label: t("New thread without a repo"),
+      text: t("New thread without a repo"),
       icon: <SquareDashed />,
       command: "noRepoThread",
       run: () => newThread(noRepo),
     },
     {
       id: "goToFile",
-      label: "Go to file",
-      text: "Go to file",
+      label: t("Go to file"),
+      text: t("Go to file"),
       keywords: "open find",
       icon: <FileSearch />,
       command: "goToFile",
@@ -1145,8 +1155,8 @@ export function App() {
     },
     {
       id: "searchContents",
-      label: "Search project contents",
-      text: "Search project contents",
+      label: t("Search project contents"),
+      text: t("Search project contents"),
       keywords: "grep find text code",
       icon: <TextSearch />,
       command: "searchContents",
@@ -1154,8 +1164,8 @@ export function App() {
     },
     {
       id: "newOrchestrator",
-      label: "New orchestrator thread",
-      text: "New orchestrator thread",
+      label: t("New orchestrator thread"),
+      text: t("New orchestrator thread"),
       keywords: "create orchestrator",
       icon: <FolderPlus />,
       command: "newOrchestrator",
@@ -1163,10 +1173,13 @@ export function App() {
     },
     {
       id: "diagnose",
-      label: "Diagnose a problem",
-      text: "Diagnose a problem",
+      label: t("Diagnose a problem"),
+      text: t("Diagnose a problem"),
       keywords: "doctor triage bug report issue logs",
-      hint: `An agent looks into it with full access${listed.length > 1 ? ` on ${host.name}` : ""}`,
+      hint:
+        listed.length > 1
+          ? t("An agent looks into it with full access on {{host}}", { host: host.name })
+          : t("An agent looks into it with full access"),
       icon: <Stethoscope />,
       run: () => {
         const draft = doctorDraft(host.id, noRepo);
@@ -1176,40 +1189,40 @@ export function App() {
     },
     {
       id: "addRepo",
-      label: "Add repository",
-      text: "Add repository",
+      label: t("Add repository"),
+      text: t("Add repository"),
       keywords: "folder clone github new",
       icon: <FolderGit2 />,
       run: () => openAdd(),
     },
     {
       id: "theme",
-      label: "Change theme",
-      text: "Change theme",
+      label: t("Change theme"),
+      text: t("Change theme"),
       keywords: "color",
       icon: <Palette />,
       page: "theme",
     },
     {
       id: "appearance",
-      label: "Change appearance",
-      text: "Change appearance",
+      label: t("Change appearance"),
+      text: t("Change appearance"),
       keywords: "light dark system mode",
       icon: <SunMoon />,
       page: "appearance",
     },
     {
       id: "pullRequests",
-      label: "Pull requests",
-      text: "Pull requests",
+      label: t("Pull requests"),
+      text: t("Pull requests"),
       keywords: "pr github",
       icon: <GitPullRequest />,
       run: () => openMainPage("pullRequests"),
     },
     {
       id: "usage",
-      label: "Usage",
-      text: "Usage",
+      label: t("Usage"),
+      text: t("Usage"),
       keywords: "limits tokens cost",
       icon: <ChartColumn />,
       command: "usage",
@@ -1217,8 +1230,8 @@ export function App() {
     },
     {
       id: "settings",
-      label: "Settings",
-      text: "Settings",
+      label: t("Settings"),
+      text: t("Settings"),
       keywords: "preferences",
       icon: <SettingsIcon />,
       command: "settings",
@@ -1298,7 +1311,9 @@ export function App() {
       // A new thread waits for an open dialog, the picker included, to close.
       const dialog = !!document.querySelector("dialog[open]");
       // The command menu's shortcuts work in it too: its own toggles it, the others go to a page.
-      const menuOpen = !!document.querySelector('dialog[aria-label="Command menu"][open]');
+      const menuOpen = [...document.querySelectorAll("dialog[open]")].some(
+        (d) => d.getAttribute("aria-label") === t("Command menu"),
+      );
       if (command === "commandMenu") {
         if (menuOpen || !dialog) commandMenu.current?.toggle();
       } else if (command === "goToFile" || command === "searchContents") {
@@ -1395,7 +1410,7 @@ export function App() {
   // Shown in the main pane's top row only while the sidebar is hidden.
   const showSidebar = !sidebarOpen && (
     <IconButton
-      label="Show sidebar"
+      label={t("Show sidebar")}
       command="sidebar"
       aria-expanded={false}
       aria-controls="sidebar"
@@ -1533,7 +1548,7 @@ export function App() {
   const historyButtons = (
     <div className="flex shrink-0 items-center">
       <IconButton
-        label="Back"
+        label={t("Back")}
         command="back"
         disabled={stepTo(-1) === undefined}
         onClick={() => step(-1)}
@@ -1542,7 +1557,7 @@ export function App() {
         <ChevronLeft />
       </IconButton>
       <IconButton
-        label="Forward"
+        label={t("Forward")}
         command="forward"
         disabled={stepTo(1) === undefined}
         onClick={() => step(1)}
@@ -1557,7 +1572,7 @@ export function App() {
     <>
       {tiled && (
         <IconButton
-          label={workspace.maximized ? "Restore tiles" : "Maximize thread"}
+          label={workspace.maximized ? t("Restore tiles") : t("Maximize thread")}
           onClick={() => setWorkspace((state) => ({ ...state, maximized: !state.maximized }))}
         >
           {workspace.maximized ? <Minimize2 /> : <Maximize2 />}
@@ -1568,7 +1583,7 @@ export function App() {
       )}
       {folder && (
         <IconButton
-          label={drawerOpen ? "Hide terminal" : "Show terminal"}
+          label={drawerOpen ? t("Hide terminal") : t("Show terminal")}
           command="terminal"
           aria-pressed={drawerOpen}
           aria-controls="terminal-drawer"
@@ -1580,7 +1595,7 @@ export function App() {
       {/* Shown only while the panel is hidden; its top bar has it otherwise. */}
       {!panelOpen && (
         <IconButton
-          label="Show side panel"
+          label={t("Show side panel")}
           command="panel"
           aria-expanded={false}
           aria-controls="side-panel"
@@ -1769,10 +1784,14 @@ export function App() {
       />
       {failedList && (
         <CrashScreen
-          title={`Couldn't load your threads${listed.length > 1 ? ` on ${failedList.host.name}` : ""}`}
-          message="Parallax couldn't read this computer's thread list."
+          title={
+            listed.length > 1
+              ? t("Couldn't load your threads on {{host}}", { host: failedList.host.name })
+              : t("Couldn't load your threads")
+          }
+          message={t("Parallax couldn't read this computer's thread list.")}
           details={failedList.view.error!}
-          action={{ label: "Try again", onClick: failedList.view.retry }}
+          action={{ label: t("Try again"), onClick: failedList.view.retry }}
           onDismiss={() => setSetAside((now) => new Set(now).add(failedList.view.error!))}
         />
       )}
@@ -2103,7 +2122,7 @@ export function App() {
                               <section
                                 data-pane={tiled ? side : undefined}
                                 data-focused={tiled && focused ? "" : undefined}
-                                aria-label={tiled ? (title ?? "Thread") : undefined}
+                                aria-label={tiled ? (title ?? t("Thread")) : undefined}
                                 // Clicking or tabbing into a tile focuses it.
                                 onPointerDownCapture={() =>
                                   !focused && setWorkspace((w) => selectTab(w, tab.id))
@@ -2169,7 +2188,7 @@ export function App() {
                                           key: "parent",
                                           node: (
                                             <ChildStrip
-                                              name={view.state.titles[paneParent] ?? "Thread"}
+                                              name={view.state.titles[paneParent] ?? t("Thread")}
                                               onOpenName={() => openThreadId(paneParent)}
                                               onBack={() => openThreadId(paneParent)}
                                             />
@@ -2350,7 +2369,7 @@ export function App() {
                   offline ??
                   (connected && "checkpoints" in connection.capabilities
                     ? undefined
-                    : "Update Parallax on this host to see a thread's changes.")
+                    : t("Update Parallax on this host to see a thread's changes."))
                 }
                 reviewScopes={connected && "reviewScopes" in connection.capabilities}
                 onCompose={(text) => {
@@ -2374,7 +2393,7 @@ export function App() {
                   offline ??
                   (connected && "files" in connection.capabilities
                     ? undefined
-                    : "Update Parallax on this host to browse a thread's files.")
+                    : t("Update Parallax on this host to browse a thread's files."))
                 }
                 editable={connected && "fileEdit" in connection.capabilities}
                 writable={connected && "fileWrite" in connection.capabilities}
@@ -2402,7 +2421,7 @@ export function App() {
           terminal={(shown, empty) => (
             <TerminalPool
               prefix="panel"
-              label="Side panel terminal"
+              label={t("Side panel terminal")}
               active={shown ? folder : undefined}
               deleted={deleted}
               empty={empty}

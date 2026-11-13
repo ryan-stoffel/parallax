@@ -1,6 +1,8 @@
 // The pure parts of Settings, which the mobile app's Settings shares: how a provider, an account,
 // a schedule, a script, and GitHub read for people, and the accounts a thread can run on.
 
+import { t } from "i18next";
+
 import type { RpcError } from "../../preload/bridge";
 import {
   ErrorCodes,
@@ -47,9 +49,9 @@ export const providerNames: Record<string, string> = {
  */
 export function accountsError(error: RpcError): string {
   if (error.code === ErrorCodes.MethodNotFound)
-    return "Update plxd on this host to manage its accounts here.";
+    return t("Update plxd on this host to manage its accounts here.");
   if (error.data?.kind === "keychainUnavailable")
-    return `This host's keychain isn't available: ${error.message}.`;
+    return t("This host's keychain isn't available: {{message}}.", { message: error.message });
   return describeError(error);
 }
 
@@ -65,51 +67,60 @@ export const capitalized = (text: string) =>
 export function instanceStatus(info: ProviderInfo): string {
   const why = info.note ? ` · ${info.note}` : "";
   // plxd's note only names the missing program, which the pane says.
-  if (!info.installed) return "Not installed";
-  if (info.signedIn === false) return `Not authenticated${why}`;
-  if (info.signedIn !== true) return info.note ?? "Ready";
+  if (!info.installed) return t("Not installed");
+  if (info.signedIn === false) return `${t("Not authenticated")}${why}`;
+  if (info.signedIn !== true) return info.note ?? t("Ready");
   return info.account && !info.account.includes("@")
-    ? `Authenticated · ${capitalized(info.account)}`
-    : "Authenticated";
+    ? `${t("Authenticated")} · ${capitalized(info.account)}`
+    : t("Authenticated");
 }
-
-const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /** A trigger in a few words, as T3 Code's `scheduleLabel`: "Every 60 min", "Weekdays at 09:00". */
 export function scheduleLabel(schedule: Schedule): string {
-  if (schedule.type === "webhook") return "On webhook";
+  if (schedule.type === "webhook") return t("On webhook");
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)
-      ? `Every ${minutes} min`
-      : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
+      ? t("Every {{count}} min", { count: minutes })
+      : t("Every {{count}} sec", { count: Math.round(schedule.everyMs / 1000) });
   }
+  const weekdayNames = [
+    t("Sun", { context: "weekday" }),
+    t("Mon", { context: "weekday" }),
+    t("Tue", { context: "weekday" }),
+    t("Wed", { context: "weekday" }),
+    t("Thu", { context: "weekday" }),
+    t("Fri", { context: "weekday" }),
+    t("Sat", { context: "weekday" }),
+  ];
   const weekdays = schedule.weekdays ?? [];
   const days =
     weekdays.length === 0
-      ? "Daily"
+      ? t("Daily")
       : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
-        ? "Weekdays"
+        ? t("Weekdays")
         : weekdays.map((day) => weekdayNames[day]).join(", ");
-  return `${days} at ${schedule.timeOfDay}`;
+  return t("{{days}} at {{time}}", { days, time: schedule.timeOfDay });
 }
 
 /** When a task runs next, from `now`: "in 5m", "in 3h", "in 2d". */
 export function nextLabel(at: string, now = Date.now()): string {
   const minutes = Math.ceil((new Date(at).getTime() - now) / 60_000);
-  if (minutes < 2) return "in under a minute";
-  if (minutes < 60) return `in ${minutes}m`;
+  if (minutes < 2) return t("in under a minute");
+  if (minutes < 60) return t("in {{count}}m", { count: minutes });
   const hours = Math.round(minutes / 60);
-  return hours < 24 ? `in ${hours}h` : `in ${Math.round(hours / 24)}d`;
+  return hours < 24
+    ? t("in {{count}}h", { count: hours })
+    : t("in {{count}}d", { count: Math.round(hours / 24) });
 }
 
 /** A script's roles in a few words, as T3 Code's `projectScriptMenuLabel` names them. */
 export function scriptRoles(script: RepoScript): string {
   const roles = [
     ...(script.runOnWorktreeCreate
-      ? [script.async === false ? "setup, holds the agent" : "setup"]
+      ? [script.async === false ? t("setup, holds the agent") : t("setup")]
       : []),
-    ...(script.runOnSettle ? ["on settle"] : []),
+    ...(script.runOnSettle ? [t("on settle")] : []),
   ];
   return roles.join(", ");
 }
@@ -122,29 +133,31 @@ export function githubLine(
   status: GithubStatus,
   setup: boolean,
 ): { detail: string; tone: "on" | "off" | "warn" } {
-  if (status.installing) return { detail: "Installing the GitHub CLI…", tone: "warn" };
+  if (status.installing) return { detail: t("Installing the GitHub CLI…"), tone: "warn" };
   if (!status.installed)
     return {
       detail: setup
-        ? "Not installed. Parallax can install the GitHub CLI on this host."
-        : "Not installed. Install the GitHub CLI on this host to open pull requests.",
+        ? t("Not installed. Parallax can install the GitHub CLI on this host.")
+        : t("Not installed. Install the GitHub CLI on this host to open pull requests."),
       tone: "off",
     };
   if (status.signingIn)
-    return { detail: "Waiting for you to approve the code on GitHub…", tone: "warn" };
+    return { detail: t("Waiting for you to approve the code on GitHub…"), tone: "warn" };
   if (status.signedIn === false)
     return {
       detail: setup
-        ? "Not signed in."
-        : "Not signed in. Run `gh auth login` on this host, then refresh.",
+        ? t("Not signed in.")
+        : t("Not signed in. Run `gh auth login` on this host, then refresh."),
       tone: "warn",
     };
   if (status.signedIn)
     return {
-      detail: status.account ? `Signed in as @${status.account}` : "Signed in",
+      detail: status.account
+        ? t("Signed in as @{{account}}", { account: status.account })
+        : t("Signed in"),
       tone: "on",
     };
-  return { detail: status.note ?? "Couldn't tell whether gh is signed in.", tone: "warn" };
+  return { detail: status.note ?? t("Couldn't tell whether gh is signed in."), tone: "warn" };
 }
 
 /** An account a worker or orchestrator can run on, as the account chooser lists it. */
@@ -177,7 +190,7 @@ export async function accountOptions(hostId: string): Promise<AccountOption[] | 
     ...keys.result.accounts
       .filter((k) => k.provider === "anthropic")
       .map((k) => ({
-        label: `${k.label} (API key)`,
+        label: t("{{label}} (API key)", { label: k.label }),
         account: { kind: "key", id: k.id } as const,
       })),
   ];

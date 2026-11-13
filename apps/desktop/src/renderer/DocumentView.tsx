@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   useEffect,
   useLayoutEffect,
@@ -53,7 +54,7 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
 
   let body: ReactNode;
   if (error) body = <p className="p-6 text-body text-muted-foreground">{error}</p>;
-  else if (!loaded) body = <p className="p-6 text-body text-muted-foreground">Opening…</p>;
+  else if (!loaded) body = <p className="p-6 text-body text-muted-foreground">{t("Opening…")}</p>;
   else {
     const { opened } = loaded;
     body =
@@ -94,8 +95,9 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
         />
       ) : (
         <p className="p-6 text-body text-muted-foreground">
-          {sizeOf(loaded.bytes.length)}. Parallax can't show this kind of file, but you can download
-          it.
+          {t("{{size}}. Parallax can't show this kind of file, but you can download it.", {
+            size: sizeOf(loaded.bytes.length),
+          })}
         </p>
       );
   }
@@ -165,7 +167,7 @@ function Framed({
           onClick={onDownload}
           className="rounded-lg bg-selected px-3 py-1 text-body text-foreground hover:bg-hover disabled:opacity-40"
         >
-          Download as {type}
+          {t("Download as {{type}}", { type })}
         </button>
       </div>
       {children}
@@ -216,8 +218,8 @@ function SourceToggle({
     <div className="mr-1 flex shrink-0 gap-0.5 rounded-lg bg-selected p-0.5">
       <button
         type="button"
-        aria-label="Preview"
-        title="Preview"
+        aria-label={t("Preview")}
+        title={t("Preview")}
         aria-pressed={!source}
         onClick={() => onChange(false)}
         className={button}
@@ -226,8 +228,8 @@ function SourceToggle({
       </button>
       <button
         type="button"
-        aria-label="Source"
-        title="Source"
+        aria-label={t("Source")}
+        title={t("Source")}
         aria-pressed={source}
         onClick={() => onChange(true)}
         className={button}
@@ -324,7 +326,7 @@ function Paged({
       </div>
       {count > 0 && (
         <span className="pointer-events-none absolute right-5 bottom-4 rounded-lg bg-black/55 px-2.5 py-1 text-body text-white tabular-nums">
-          Page {current} / {count}
+          {t("Page {{current}} / {{total}}", { current, total: count })}
         </span>
       )}
     </div>
@@ -446,7 +448,7 @@ function SheetView({ xlsx }: { xlsx: Xlsx }) {
       {xlsx.sheets.length > 1 && (
         <div
           role="tablist"
-          aria-label="Sheets"
+          aria-label={t("Sheets")}
           className="flex gap-0.5 overflow-x-auto border-t border-border px-2 py-1"
         >
           {xlsx.sheets.map((s, i) => (

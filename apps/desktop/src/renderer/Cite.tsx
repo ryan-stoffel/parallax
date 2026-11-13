@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Quote } from "lucide-react";
 import {
   useEffect,
@@ -56,7 +57,7 @@ export function CommentBox({
     <form
       ref={box}
       popover="auto"
-      aria-label="Cite"
+      aria-label={t("Cite")}
       onToggle={(e: ToggleEvent<HTMLFormElement>) => e.newState === "closed" && onClose()}
       onSubmit={(e) => {
         e.preventDefault();
@@ -72,8 +73,8 @@ export function CommentBox({
       className="fixed inset-auto m-0 rounded-xl border border-border bg-surface p-3 text-foreground shadow-composer"
     >
       <textarea
-        aria-label="Comment"
-        placeholder="Add an optional comment..."
+        aria-label={t("Comment", { context: "noun" })}
+        placeholder={t("Add an optional comment...")}
         rows={3}
         value={comment}
         onChange={(e) => setComment(e.target.value)}
@@ -90,13 +91,13 @@ export function CommentBox({
           onClick={() => box.current?.hidePopover()}
           className="rounded-md border border-border px-3 py-1.5 text-body hover:bg-hover"
         >
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           type="submit"
           className="rounded-md bg-accent px-3 py-1.5 text-body font-medium text-accent-foreground hover:opacity-90"
         >
-          Save
+          {t("Save")}
         </button>
       </div>
     </form>,
@@ -180,7 +181,7 @@ export function CiteSelection({
             className="fixed z-50 flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-body text-foreground shadow-composer hover:bg-[image:linear-gradient(var(--color-hover),var(--color-hover))] [&_svg]:size-4"
           >
             <Quote aria-hidden />
-            Cite
+            {t("Cite")}
           </button>,
           document.body,
         )}

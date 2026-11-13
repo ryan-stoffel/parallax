@@ -7,6 +7,7 @@
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import {
   ArrowDown,
   ArrowLeft,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react-native";
 import { useRef, useState, type ReactNode } from "react";
 import { useIsFocused } from "@react-navigation/native";
+import { Trans } from "react-i18next";
 import { LayoutAnimation, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
 
 import type {
@@ -88,7 +90,7 @@ function ApprovalCard({
       decision,
     });
     setAnswering(false);
-    if ("error" in reply) showAlert("Your answer didn't reach the agent", reply.error.message);
+    if ("error" in reply) showAlert(t("Your answer didn't reach the agent"), reply.error.message);
     else onAnswered();
   }
   return (
@@ -96,11 +98,11 @@ function ApprovalCard({
       <View style={styles.line}>
         <KindIcon kind={toolKind(request.toolName)} color={c.warning} />
         <T medium style={{ flex: 1 }}>
-          Allow {request.toolName}?
+          {t("Allow {{tool}}?", { tool: request.toolName })}
         </T>
         {count > 1 && (
           <T faint style={{ fontSize: 12 }}>
-            1 of {count}
+            {t("1 of {{count}}", { count })}
           </T>
         )}
       </View>
@@ -120,8 +122,8 @@ function ApprovalCard({
         )
       )}
       <View style={{ flexDirection: "row", gap: 10 }}>
-        <Button label="Deny" style={{ flex: 1 }} disabled={answering} onPress={() => void answer("deny")} />
-        <Button label="Allow" primary style={{ flex: 1 }} disabled={answering} onPress={() => void answer("allow")} />
+        <Button label={t("Deny")} style={{ flex: 1 }} disabled={answering} onPress={() => void answer("deny")} />
+        <Button label={t("Allow")} primary style={{ flex: 1 }} disabled={answering} onPress={() => void answer("allow")} />
       </View>
     </View>
   );
@@ -170,7 +172,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
   const value = useRef("");
   const [busy, setBusy] = useState<"save" | "decline">();
   const isFile = secretInput(request) === "file";
-  const wanted = request.accept?.length ? `a ${request.accept.join(" or ")} file` : "a file";
+  const types = request.accept?.length ? request.accept.join(` ${t("or", { context: "between file types" })} `) : undefined;
   const [fileName, setFileName] = useState<string>();
   async function send(
     answer:
@@ -187,7 +189,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
     });
     // On success the card goes once plxd logs the answer.
     if ("error" in reply) {
-      showAlert(saving ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
+      showAlert(saving ? t("Couldn't save the secret") : t("Couldn't decline the secret"), reply.error.message);
       setBusy(undefined);
     }
   }
@@ -198,13 +200,15 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
     const { name, uri } = picked.assets[0]!;
     const copy = new File(uri);
     try {
-      if (!acceptsFile(name, request.accept)) return showAlert(`Couldn't use ${name}`, `Choose ${wanted}.`);
-      if (!copy.size) return showAlert(`Couldn't use ${name}`, "It's empty.");
-      if (copy.size > maxSecretBytes) return showAlert(`Couldn't use ${name}`, "A secret can be up to 64 KB.");
+      const unusable = t("Couldn't use {{name}}", { name });
+      if (!acceptsFile(name, request.accept))
+        return showAlert(unusable, types ? t("Choose a {{types}} file.", { types }) : t("Choose a file."));
+      if (!copy.size) return showAlert(unusable, t("It's empty."));
+      if (copy.size > maxSecretBytes) return showAlert(unusable, t("A secret can be up to 64 KB."));
       value.current = await copy.base64();
       setFileName(name);
     } catch (e) {
-      showAlert(`Couldn't use ${name}`, (e as Error).message);
+      showAlert(t("Couldn't use {{name}}", { name }), (e as Error).message);
     } finally {
       if (copy.exists) copy.delete();
     }
@@ -217,7 +221,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
           {request.label}
         </T>
         <T faint style={{ fontSize: 12 }}>
-          The agent asks for a secret
+          {t("The agent asks for a secret")}
         </T>
       </View>
       {!!request.reason && (
@@ -227,7 +231,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
       )}
       {isFile ? (
         <Button
-          label={fileName ?? `Choose ${wanted}`}
+          label={fileName ?? (types ? t("Choose a {{types}} file", { types }) : t("Choose a file"))}
           disabled={!!busy}
           onPress={() => void pickFile()}
         />
@@ -238,7 +242,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
           autoCapitalize="none"
           autoCorrect={false}
           editable={!busy}
-          placeholder={request.placeholder ?? "Paste the secret"}
+          placeholder={request.placeholder ?? t("Paste the secret")}
           placeholderTextColor={c.faintForeground}
           onChangeText={(text) => (value.current = text)}
           style={[styles.input, { borderColor: c.border, backgroundColor: c.code, color: c.foreground }]}
@@ -246,18 +250,18 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
       )}
       <T faint style={{ fontSize: 12, lineHeight: 16 }}>
         {request.delivery === "file"
-          ? "Kept out of chat, in a private file this agent's commands can read for 24 hours."
-          : "Kept in this computer's keychain. The agent gets a one-time reference, never the value."}
+          ? t("Kept out of chat, in a private file this agent's commands can read for 24 hours.")
+          : t("Kept in this computer's keychain. The agent gets a one-time reference, never the value.")}
       </T>
       <View style={{ flexDirection: "row", gap: 10 }}>
         <Button
-          label={busy === "decline" ? "Declining…" : "Decline"}
+          label={busy === "decline" ? t("Declining…") : t("Decline")}
           style={{ flex: 1 }}
           disabled={!!busy}
           onPress={() => void send({ type: "decline" })}
         />
         <Button
-          label={busy === "save" ? "Saving…" : "Save"}
+          label={busy === "save" ? t("Saving…") : t("Save")}
           primary
           style={{ flex: 1 }}
           disabled={!!busy}
@@ -408,7 +412,7 @@ function QueueList({
     setBusy(true);
     const answer = await window.parallax.request(hostId, "orchestration/dispatch", command);
     setBusy(false);
-    if ("error" in answer) showAlert("Couldn't change the queue", answer.error.message);
+    if ("error" in answer) showAlert(t("Couldn't change the queue"), answer.error.message);
   }
   function move(id: string, to: number) {
     const ids = messages.map((m) => m.id);
@@ -418,7 +422,7 @@ function QueueList({
   }
   const edit = (m: QueuedMessage) =>
     showPrompt(
-      "Edit queued message",
+      t("Edit queued message"),
       undefined,
       (next) => void change({ type: "queued-run.edit", threadId: runId, runId: m.id, text: next }),
       "plain-text",
@@ -428,7 +432,7 @@ function QueueList({
     <>
       <View style={styles.line}>
         <T faint style={{ ...text, flex: 1 }}>
-          {held ? "Paused" : "Next turn"}
+          {held ? t("Paused") : t("Next turn")}
         </T>
         {held && (
           <Pressable
@@ -437,7 +441,7 @@ function QueueList({
             onPress={() => void change({ type: "queue.resume", threadId: runId })}
           >
             <T medium style={{ ...text, color: c.accent }}>
-              Resume
+              {t("Resume")}
             </T>
           </Pressable>
         )}
@@ -445,25 +449,25 @@ function QueueList({
       {messages.map((m, i) => (
         <View key={m.id} style={styles.line}>
           <T numberOfLines={2} style={{ ...text, flex: 1 }}>
-            {m.text || "Image message"}
+            {m.text || t("Image message")}
           </T>
-          <Action icon={ArrowUp} label={`Move queued message ${i + 1} up`} disabled={off || i === 0} onPress={() => move(m.id, i - 1)} />
+          <Action icon={ArrowUp} label={t("Move queued message {{n}} up", { n: i + 1 })} disabled={off || i === 0} onPress={() => move(m.id, i - 1)} />
           <Action
             icon={ArrowDown}
-            label={`Move queued message ${i + 1} down`}
+            label={t("Move queued message {{n}} down", { n: i + 1 })}
             disabled={off || i === messages.length - 1}
             onPress={() => move(m.id, i + 1)}
           />
-          <Action icon={Pencil} label={`Edit queued message ${i + 1}`} disabled={off} onPress={() => edit(m)} />
+          <Action icon={Pencil} label={t("Edit queued message {{n}}", { n: i + 1 })} disabled={off} onPress={() => edit(m)} />
           <Action
             icon={CornerUpRight}
-            label={`Steer queued message ${i + 1} now`}
+            label={t("Steer queued message {{n}} now", { n: i + 1 })}
             disabled={off || !running}
             onPress={() => void change({ type: "queued-message.promote-to-steer", threadId: runId, runId: m.id })}
           />
           <Action
             icon={X}
-            label={`Cancel queued message ${i + 1}`}
+            label={t("Cancel queued message {{n}}", { n: i + 1 })}
             disabled={off}
             onPress={() => void change({ type: "queued-run.cancel", threadId: runId, runId: m.id })}
           />
@@ -497,22 +501,22 @@ function WaitingList({
     // What ends leaves with plxd's events, and what didn't can be stopped again.
     setStopping(false);
     const wrong = answers.find((a) => "error" in a);
-    if (wrong && "error" in wrong) showAlert("Couldn't stop waiting", wrong.error.message);
+    if (wrong && "error" in wrong) showAlert(t("Couldn't stop waiting"), wrong.error.message);
   }
   return (
     <>
       <T muted style={text}>
-        The agent picks up when one of these ends or changes.
+        {t("The agent picks up when one of these ends or changes.")}
       </T>
       {items.map((item, i) => (
         <View key={i} style={[styles.line, { alignItems: "flex-start" }]}>
           <T faint style={{ ...text, width: 96, textTransform: "capitalize" }}>
-            {item.kind}
+            {t(item.kind, { context: "kind of background task" })}
           </T>
           <T style={{ ...text, flex: 1 }}>{item.label}</T>
         </View>
       ))}
-      <Button label={stopping ? "Stopping…" : "Stop"} disabled={stopping} onPress={() => void stop()} />
+      <Button label={stopping ? t("Stopping…") : t("Stop")} disabled={stopping} onPress={() => void stop()} />
     </>
   );
 }
@@ -568,13 +572,15 @@ export function ThreadStrips({
   if (parent)
     tabs.push({
       key: "parent",
-      label: `A child thread of ${parent.name}. Open parent`,
+      label: t("A child thread of {{name}}. Open parent", { name: parent.name }),
       onPress: parent.open,
       full: (
         <>
           <Icon icon={ArrowLeft} size={14} color={c.mutedForeground} />
           <T muted numberOfLines={1} style={{ ...text, flex: 1 }}>
-            A child thread of <T style={text}>{parent.name}</T>
+            <Trans values={{ name: parent.name }}>
+              A child thread of <T style={text}>{"{{name}}"}</T>
+            </Trans>
           </T>
         </>
       ),
@@ -582,7 +588,7 @@ export function ThreadStrips({
         <>
           <Icon icon={ArrowLeft} size={14} color={c.mutedForeground} />
           <T muted style={text}>
-            Parent
+            {t("Parent")}
           </T>
         </>
       ),
@@ -591,13 +597,15 @@ export function ThreadStrips({
   if (original)
     tabs.push({
       key: "original",
-      label: `Forked from ${original.name}. Open it`,
+      label: t("Forked from {{name}}. Open it", { name: original.name }),
       onPress: original.open,
       full: (
         <>
           <Icon icon={GitFork} size={14} color={c.mutedForeground} />
           <T muted numberOfLines={1} style={{ ...text, flex: 1 }}>
-            Forked from <T style={text}>{original.name}</T>
+            <Trans values={{ name: original.name }}>
+              Forked from <T style={text}>{"{{name}}"}</T>
+            </Trans>
           </T>
         </>
       ),
@@ -605,7 +613,7 @@ export function ThreadStrips({
         <>
           <Icon icon={GitFork} size={14} color={c.mutedForeground} />
           <T muted style={text}>
-            Forked
+            {t("Forked")}
           </T>
         </>
       ),
@@ -621,7 +629,7 @@ export function ThreadStrips({
   if (going.length > 0) {
     const working = (
       <T muted style={{ ...text, fontVariant: ["tabular-nums"] }}>
-        {going.length} working
+        {t("{{count}} working", { count: going.length })}
       </T>
     );
     const row = (a: (typeof agents)[number]) => (
@@ -631,14 +639,14 @@ export function ThreadStrips({
           {a.title}
         </T>
         <T faint style={{ fontSize: 12 }}>
-          {subagentLabels[a.state]}
+          {t(subagentLabels[a.state])}
         </T>
       </View>
     );
     const finished = agents.filter((a) => a.state !== "running").slice(0, finishedShown);
     tabs.push({
       key: "subagents",
-      label: `Subagents: ${going.length} working`,
+      label: t("Subagents: {{count}} working", { count: going.length }),
       full: (
         <>
           <Icon icon={Bot} size={14} color={c.mutedForeground} />
@@ -657,12 +665,12 @@ export function ThreadStrips({
       panel: (
         <>
           <T faint style={{ fontSize: 12 }}>
-            Working {going.length}
+            {t("Working {{count}}", { count: going.length })}
           </T>
           {going.map(row)}
           {finished.length > 0 && (
             <T faint style={{ fontSize: 12, marginTop: 4 }}>
-              Done {finished.length}
+              {t("Done {{count}}", { count: finished.length })}
             </T>
           )}
           {finished.map(row)}
@@ -679,7 +687,11 @@ export function ThreadStrips({
     const counted = others.length > 0 ? others : waiting.items;
     const kinds = new Set(counted.map((item) => item.kind));
     const verb =
-      kinds.size === 1 && kinds.has("command") ? "Running" : kinds.size === 1 && kinds.has("pull request") ? "Monitoring" : "Waiting";
+      kinds.size === 1 && kinds.has("command")
+        ? t("Running")
+        : kinds.size === 1 && kinds.has("pull request")
+          ? t("Monitoring")
+          : t("Waiting");
     tabs.push({
       key: "waiting",
       label: waiting.title,
@@ -714,24 +726,24 @@ export function ThreadStrips({
       <>
         <Icon icon={Inbox} size={14} color={c.mutedForeground} />
         <T muted style={text}>
-          Inbox
+          {t("Inbox")}
         </T>
         {unread > 0 && <Count n={unread} />}
       </>
     );
-    tabs.push({ key: "inbox", label: `Inbox: ${unread} unread`, onPress: inbox.open, full: tab, compact: tab });
+    tabs.push({ key: "inbox", label: t("Inbox: {{count}} unread", { count: unread }), onPress: inbox.open, full: tab, compact: tab });
   }
 
   const goal = live ? pursuedGoal(items) : undefined;
   if (goal)
     tabs.push({
       key: "goal",
-      label: `Pursuing goal: ${goal}`,
+      label: t("Pursuing goal: {{goal}}", { goal }),
       full: (
         <>
           <Icon icon={Target} size={14} color={c.mutedForeground} />
           <T medium style={text}>
-            Pursuing goal
+            {t("Pursuing goal")}
           </T>
           <T muted numberOfLines={1} style={{ ...text, flex: 1 }}>
             {goal}
@@ -742,7 +754,7 @@ export function ThreadStrips({
         <>
           <Icon icon={Target} size={14} color={c.mutedForeground} />
           <T muted style={text}>
-            Goal
+            {t("Goal")}
           </T>
         </>
       ),
@@ -762,19 +774,19 @@ export function ThreadStrips({
     const tally = (
       <>
         <T muted style={{ fontSize: 12, fontVariant: ["tabular-nums"] }}>
-          {done} of {plan.items.length}
+          {t("{{done}} of {{total}}", { done, total: plan.items.length })}
         </T>
         <Progress done={done} total={plan.items.length} />
       </>
     );
     tabs.push({
       key: "plan",
-      label: `Plan: ${done} of ${plan.items.length} done`,
+      label: t("Plan: {{done}} of {{total}} done", { done, total: plan.items.length }),
       full: (
         <>
           <StepMark status={now ? "inProgress" : next ? "pending" : "completed"} />
           <T numberOfLines={1} style={{ ...text, flex: 1 }}>
-            {next ? (now ? (plan.active ?? now.text) : next.text) : "All steps done"}
+            {next ? (now ? (plan.active ?? now.text) : next.text) : t("All steps done")}
           </T>
           {tally}
         </>
@@ -803,19 +815,19 @@ export function ThreadStrips({
     const queued = (
       <>
         <T muted style={text}>
-          Queued
+          {t("Queued")}
         </T>
         <Count n={queue.length} />
         {held && (
           <T faint style={text}>
-            Paused
+            {t("Paused")}
           </T>
         )}
       </>
     );
     tabs.push({
       key: "queue",
-      label: `${queue.length} queued${held ? ", paused" : ""}`,
+      label: held ? t("{{count}} queued, paused", { count: queue.length }) : t("{{count}} queued", { count: queue.length }),
       full: queued,
       compact: queued,
       panel: <QueueList hostId={hostId} runId={runId} messages={queue} held={held} running={running} connected={connected} />,

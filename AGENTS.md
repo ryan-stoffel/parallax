@@ -51,6 +51,7 @@ When something comes up mid-work (a bug, a follow-up, a question, out-of-scope w
 ## Pull requests
 
 - Target `develop`.
+- UI text goes through i18next ([0105](docs/decisions/0105-app-languages.md)). A PR that adds or changes it runs `corepack pnpm exec i18next-cli extract` in `apps/desktop` and translates each new string into every file in `apps/desktop/src/i18n/locales`.
 - The body follows `.github/pull_request_template.md`: the problem, the fix, a `Linear: <issue URL>` line, and the acceptance criteria as a checklist. Linear's GitHub integration links the PR and marks the issue Done when it merges.
 - A separate senior engineer subagent reviews every PR against the acceptance criteria and posts it as a comment review (`gh pr review --comment`; the shared account cannot approve its own PRs). The review opens with `Verdict: ready to merge` or `Verdict: changes needed`.
 - The project manager merges a PR into `develop` once the review says ready and CI is green. Feature, bug, chore, and docs PRs are squash-merged.

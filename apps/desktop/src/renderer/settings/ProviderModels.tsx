@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronDown, ChevronUp, Plus, Star, X } from "lucide-react";
 import { useState } from "react";
 
@@ -21,9 +22,9 @@ const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 100
 /** What a model offers, in a few words: "1M context · Fast", or "Custom". */
 function hint(m: Model): string {
   const parts = [
-    m.contexts[0] && `${tokens(m.contexts[0])} context`,
-    m.fast && "Fast",
-    m.custom && "Custom",
+    m.contexts[0] && t("{{size}} context", { size: tokens(m.contexts[0]) }),
+    m.fast && t("Fast"),
+    m.custom && t("Custom"),
   ];
   return parts.filter(Boolean).join(" · ");
 }
@@ -67,7 +68,11 @@ export function ProviderModels({
       <div key={m.id} className={`${settingRow} py-2`}>
         <div className="flex min-w-0 items-center gap-2">
           <IconButton
-            label={starred ? `Unfavorite ${m.name}` : `Favorite ${m.name}`}
+            label={
+              starred
+                ? t("Unfavorite {{name}}", { name: m.name })
+                : t("Favorite {{name}}", { name: m.name })
+            }
             aria-pressed={starred}
             onClick={() => toggleFavorite(hostId, m.provider, m.id)}
           >
@@ -84,21 +89,21 @@ export function ProviderModels({
         <div className="flex shrink-0 items-center gap-0.5">
           {m.custom && (
             <IconButton
-              label={`Remove ${m.name}`}
+              label={t("Remove {{name}}", { name: m.name })}
               onClick={() => void onSave(info.instance.models.filter((c) => c.id !== m.id))}
             >
               <X aria-hidden />
             </IconButton>
           )}
           <IconButton
-            label={`Move ${m.name} up`}
+            label={t("Move {{name}} up", { name: m.name })}
             disabled={i === 0}
             onClick={() => move(group, i, -1)}
           >
             <ChevronUp aria-hidden />
           </IconButton>
           <IconButton
-            label={`Move ${m.name} down`}
+            label={t("Move {{name}} down", { name: m.name })}
             disabled={i === group.length - 1}
             onClick={() => move(group, i, 1)}
           >
@@ -106,7 +111,7 @@ export function ProviderModels({
           </IconButton>
           <span className="ml-1.5 flex">
             <Switch
-              label={`Show ${m.name}`}
+              label={t("Show {{name}}", { name: m.name })}
               checked={!hidden.has(m.id)}
               onChange={() =>
                 updateModelPrefs(key, (prev) => ({ ...prev, hidden: toggled(prev.hidden, m.id) }))
@@ -119,10 +124,11 @@ export function ProviderModels({
   };
 
   return (
-    <Section title="Models">
+    <Section title={t("Models")}>
       <p className={`${settingRow} text-body text-muted-foreground`}>
-        Favorites, visibility, and ordering are saved on this device. Custom models are saved on the
-        host.
+        {t(
+          "Favorites, visibility, and ordering are saved on this device. Custom models are saved on the host.",
+        )}
       </p>
       <div className={`${settingRow} py-2`}>
         <div className="flex items-center gap-3">
@@ -137,11 +143,15 @@ export function ProviderModels({
               }))
             }
           >
-            {allHidden ? "Enable all" : "Disable all"}
+            {allHidden ? t("Enable all") : t("Disable all")}
           </button>
           <span className="text-body text-muted-foreground">
-            {list.length} {list.length === 1 ? "model" : "models"} · {favorites.length}{" "}
-            {favorites.length === 1 ? "favorite" : "favorites"}
+            {t("{{count}} models", { count: list.length, defaultValue_one: "{{count}} model" })}
+            {" · "}
+            {t("{{count}} favorites", {
+              count: favorites.length,
+              defaultValue_one: "{{count}} favorite",
+            })}
           </span>
         </div>
         <button
@@ -150,12 +160,12 @@ export function ProviderModels({
           className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
         >
           <Plus aria-hidden />
-          Add custom model
+          {t("Add custom model")}
         </button>
       </div>
       {adding && (
         <form
-          aria-label="Add custom model"
+          aria-label={t("Add custom model")}
           onSubmit={(e) => {
             e.preventDefault();
             const data = new FormData(e.currentTarget);
@@ -168,12 +178,12 @@ export function ProviderModels({
         >
           <div className="grid grid-cols-2 gap-3">
             <label className="text-body text-muted-foreground">
-              Model id
+              {t("Model id")}
               <input
                 name="id"
                 required
                 pattern="\S+"
-                title="A model id has no spaces."
+                title={t("A model id has no spaces.")}
                 placeholder="gpt-oss:120b"
                 spellCheck={false}
                 autoComplete="off"
@@ -181,34 +191,34 @@ export function ProviderModels({
               />
             </label>
             <label className="text-body text-muted-foreground">
-              Display name
+              {t("Display name")}
               <input name="name" placeholder="GPT-OSS 120B" autoComplete="off" className={field} />
             </label>
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className={quietButton}>
-              Cancel
+              {t("Cancel")}
             </button>
             <button type="submit" className={primaryButton}>
-              Add model
+              {t("Add model")}
             </button>
           </div>
         </form>
       )}
       {favorites.length > 0 && (
         <>
-          <h3 className={groupHeading}>Favorites</h3>
+          <h3 className={groupHeading}>{t("Favorites")}</h3>
           {favorites.map(row(favorites))}
         </>
       )}
       {list.length > 0 ? (
         <>
-          <h3 className={groupHeading}>All</h3>
+          <h3 className={groupHeading}>{t("All", { context: "every model" })}</h3>
           {list.map(row(list))}
         </>
       ) : (
         <p className={`${settingRow} text-body text-muted-foreground`}>
-          plxd found no models for {info.instance.name}. Add one above.
+          {t("plxd found no models for {{name}}. Add one above.", { name: info.instance.name })}
         </p>
       )}
     </Section>

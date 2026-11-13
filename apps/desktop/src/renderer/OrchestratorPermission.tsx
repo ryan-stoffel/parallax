@@ -1,24 +1,27 @@
+import { t } from "i18next";
 import { useId } from "react";
 
+import { msg } from "../i18n";
 import type { OrchestratorAutonomy } from "../protocol/generated/protocol";
 
-/** Each autonomy level (0043), with a line on who answers. */
+/** Each autonomy level (0043), with a line on who answers. Show `name` and `detail` with `t`. */
 export const autonomyLevels: { value: OrchestratorAutonomy; name: string; detail: string }[] = [
   {
     value: "ask",
-    name: "Ask me",
-    detail: "The orchestrator answers nothing. Every question waits on you.",
+    name: msg("Ask me"),
+    detail: msg("The orchestrator answers nothing. Every question waits on you."),
   },
   {
     value: "routine",
-    name: "Routine",
-    detail:
+    name: msg("Routine"),
+    detail: msg(
       "The orchestrator answers what memory or the code clearly settles, and asks you the rest.",
+    ),
   },
   {
     value: "full",
-    name: "Full",
-    detail: "The orchestrator answers everything it can justify.",
+    name: msg("Full", { context: "autonomy level" }),
+    detail: msg("The orchestrator answers everything it can justify."),
   },
 ];
 
@@ -33,10 +36,11 @@ export function AutonomyChoice({
   const name = useId();
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-body font-medium">Autonomy</legend>
+      <legend className="mb-1 text-body font-medium">{t("Autonomy")}</legend>
       <p className="text-body text-muted-foreground">
-        A child never waits on a question: it goes on with what it assumed. This decides who answers
-        it. Every answer shows on the orchestrator tab.
+        {t(
+          "A child never waits on a question: it goes on with what it assumed. This decides who answers it. Every answer shows on the orchestrator tab.",
+        )}
       </p>
       {autonomyLevels.map((m) => (
         <label
@@ -52,8 +56,8 @@ export function AutonomyChoice({
             className="mt-0.5 accent-primary"
           />
           <span>
-            <span className="block text-body font-medium">{m.name}</span>
-            <span className="block text-meta text-muted-foreground">{m.detail}</span>
+            <span className="block text-body font-medium">{t(m.name)}</span>
+            <span className="block text-meta text-muted-foreground">{t(m.detail)}</span>
           </span>
         </label>
       ))}

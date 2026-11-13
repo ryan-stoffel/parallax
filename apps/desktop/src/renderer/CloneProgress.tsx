@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { LoaderCircle } from "lucide-react";
 
 /**
@@ -38,7 +39,7 @@ export function CloneProgress({ title, line }: { title: string; line?: string })
         />
       </div>
       <div className="mt-1.5 flex justify-between gap-3 text-meta text-muted-foreground">
-        <span className="truncate">{progress?.phase ?? "Connecting…"}</span>
+        <span className="truncate">{progress?.phase ?? t("Connecting…")}</span>
         {progress?.detail && <span className="shrink-0 tabular-nums">{progress.detail}</span>}
       </div>
     </div>

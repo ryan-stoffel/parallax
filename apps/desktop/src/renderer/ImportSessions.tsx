@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowLeft,
   Check,
@@ -20,6 +21,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { msg } from "../i18n";
 import type { ImportSource, ImportableSession } from "../protocol/generated/protocol";
 import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
 import { useConnectedNow, useShownConnection, useShownConnections } from "./ConnectionStatus";
@@ -74,10 +76,14 @@ function useImport(capability: "threadImport" | "chatImport", hostId = localId, 
   const why =
     connection?.status === "failed"
       ? local
-        ? "Parallax couldn't start on this computer, so it can't import."
-        : `Parallax couldn't connect to ${name}, so it can't import.`
+        ? t("Parallax couldn't start on this computer, so it can't import.")
+        : t("Parallax couldn't connect to {{computer}}, so it can't import.", { computer: name })
       : connected && !supported
-        ? `${local ? "This computer" : name}'s plxd can't import these yet. Update it, then try again.`
+        ? local
+          ? t("This computer's plxd can't import these yet. Update it, then try again.")
+          : t("{{computer}}'s plxd can't import these yet. Update it, then try again.", {
+              computer: name,
+            })
         : undefined;
   useEffect(() => {
     // The agents imports run on: listed here, as Settings > Threads may be the first to need them.
@@ -171,14 +177,13 @@ export function ImportSessions({ className = "" }: { className?: string }) {
     if (supported && connectedNow) void load();
   }, [supported, connectedNow, load]);
 
-  const where = host.id === localId ? "this computer" : host.name;
   const bar = (
     <div className="flex items-center justify-between gap-3">
       {hosts.length > 1 ? (
         <span className="flex min-w-0 items-center gap-1.5 text-body text-muted-foreground">
-          Sessions on
+          {t("Sessions on")}
           <Picker
-            label="Computer"
+            label={t("Computer")}
             value={host.id}
             onChange={setHostId}
             options={hosts.map((h) => ({ value: h.id, label: h.name }))}
@@ -187,7 +192,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         </span>
       ) : (
         <span className="text-body font-medium">
-          {remote.length ? "Your sessions" : "Sessions on this computer"}
+          {remote.length ? t("Your sessions") : t("Sessions on this computer")}
         </span>
       )}
       <span className="flex min-w-0 items-center gap-2">
@@ -197,11 +202,11 @@ export function ImportSessions({ className = "" }: { className?: string }) {
             className="flex min-w-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3"
           >
             <CloudOff aria-hidden className="shrink-0" />
-            <span className="truncate">Couldn't check claude.ai</span>
+            <span className="truncate">{t("Couldn't check claude.ai")}</span>
           </span>
         )}
         <IconButton
-          label="Refresh"
+          label={t("Refresh")}
           disabled={!supported || loading || checking}
           onClick={() => void load()}
         >
@@ -243,14 +248,18 @@ export function ImportSessions({ className = "" }: { className?: string }) {
     body = (
       <Notice className="min-h-0 flex-1">
         <LoaderCircle aria-hidden className="mb-2 size-5 animate-spin text-faint-foreground" />
-        Looking for sessions in Claude, Codex, and Cursor…
+        {t("Looking for sessions in Claude, Codex, and Cursor…")}
       </Notice>
     );
   else if (items.length === 0)
     body = (
       <Notice className="min-h-0 flex-1">
         <AppLogos apps={sessionApps} className="mb-3" />
-        No sessions from Claude, Codex, or Cursor on {where}.
+        {host.id === localId
+          ? t("No sessions from Claude, Codex, or Cursor on this computer.")
+          : t("No sessions from Claude, Codex, or Cursor on {{computer}}.", {
+              computer: host.name,
+            })}
       </Notice>
     );
   else
@@ -325,7 +334,7 @@ function ImportChats({ className = "" }: { className?: string }) {
         setFile(picked.map((f) => f.name).join(", "));
       }
     } catch (e) {
-      chatsFailed("Couldn't read the export", e);
+      chatsFailed(t("Couldn't read the export"), e);
     }
     setReading(false);
   };
@@ -359,7 +368,7 @@ function ImportChats({ className = "" }: { className?: string }) {
           }}
           className="shrink-0 rounded-md px-1.5 py-0.5 font-medium hover:bg-hover hover:text-foreground"
         >
-          Choose another
+          {t("Choose another")}
         </button>
       </p>
       <SessionList
@@ -382,7 +391,9 @@ function ImportChats({ className = "" }: { className?: string }) {
           return "error" in answer ? describeError(answer.error) : undefined;
         }}
         onImported={() =>
-          refresh(chats).catch((e: unknown) => chatsFailed("Couldn't check the imported chats", e))
+          refresh(chats).catch((e: unknown) =>
+            chatsFailed(t("Couldn't check the imported chats"), e),
+          )
         }
       />
     </div>
@@ -427,12 +438,17 @@ function ExportDrop({
         <div className="rounded-xl border border-border bg-surface p-4 text-body">
           <p className="flex items-center gap-1.5 text-body font-medium [&_svg]:size-3.5">
             <ClaudeLogo />
-            That&apos;s Claude&apos;s export manifest
+            {t("That's Claude's export manifest")}
           </p>
           <p className="mt-1 text-muted-foreground">
-            Your chats are in {parts.length === 1 ? "this part" : "these parts"}. Download{" "}
-            {parts.length === 1 ? "it" : "each"} in your browser, then drop the .zip below.
-            Claude&apos;s links expire a day after the export, and may work only once.
+            {t(
+              "Your chats are in these parts. Download each in your browser, then drop the .zip below. Claude's links expire a day after the export, and may work only once.",
+              {
+                count: parts.length,
+                defaultValue_one:
+                  "Your chats are in this part. Download it in your browser, then drop the .zip below. Claude's links expire a day after the export, and may work only once.",
+              },
+            )}
           </p>
           <ul className="mt-3 flex flex-wrap gap-2">
             {parts.map((part) => (
@@ -461,17 +477,19 @@ function ExportDrop({
       >
         <AppLogos apps={chatApps} className="mb-3" />
         <p className="text-body font-medium">
-          {parts.length ? "Now drop the downloaded .zip here" : "Drop your export's .zip here"}
+          {parts.length
+            ? t("Now drop the downloaded .zip here")
+            : t("Drop your export's .zip here")}
         </p>
         <p className="mt-1 text-body text-muted-foreground">
-          From ChatGPT or Claude. Each emails you a link to it once it's ready.
+          {t("From ChatGPT or Claude. Each emails you a link to it once it's ready.")}
         </p>
         <input
           ref={input}
           type="file"
           accept=".zip,.json,.jsonl,application/zip"
           multiple
-          aria-label="Export .zip"
+          aria-label={t("Export .zip")}
           className="sr-only"
           onChange={(e) => {
             onFiles([...(e.target.files ?? [])]);
@@ -489,25 +507,28 @@ function ExportDrop({
           ) : (
             <FileArchive aria-hidden />
           )}
-          {reading ? "Reading…" : "Choose .zip…"}
+          {reading ? t("Reading…") : t("Choose .zip…")}
         </button>
       </div>
       <div className="grid grid-cols-2 gap-3 text-body">
         {[
           {
             app: chatApps[0]!,
-            steps: "Settings › Data controls › Export data. ChatGPT emails you a link to the .zip.",
+            steps: t(
+              "Settings › Data controls › Export data. ChatGPT emails you a link to the .zip.",
+            ),
           },
           {
             app: chatApps[1]!,
-            steps:
+            steps: t(
               "Settings › Privacy › Export data. Claude emails you a manifest: drop it here to get your chats' download.",
+            ),
           },
         ].map(({ app, steps }) => (
           <div key={app.source} className="rounded-xl border border-border bg-surface p-3">
             <p className="mb-1 flex items-center gap-1.5 font-medium [&_svg]:size-3.5">
               <app.Logo />
-              From {app.name}
+              {t("From {{app}}", { app: app.name })}
             </p>
             <p className="text-muted-foreground">{steps}</p>
           </div>
@@ -569,7 +590,7 @@ function SessionList({
       notify({
         key: "import",
         tone: "error",
-        title: `${failed.length} couldn't be imported`,
+        title: t("{{count}} couldn't be imported", { count: failed.length }),
         body: failed.join("\n"),
       });
     await onImported();
@@ -586,14 +607,14 @@ function SessionList({
     <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
       <div className="flex items-center justify-between gap-3">
         <fieldset
-          aria-label="App"
+          aria-label={t("App")}
           disabled={busy}
           className="flex gap-0.5 rounded-lg border border-border p-0.5"
         >
           {[
-            { source: "all" as const, name: "All" },
+            { source: "all" as const, name: t("All") },
             ...apps,
-            { source: "remote" as const, name: "Remote" },
+            { source: "remote" as const, name: t("Remote") },
           ].map((app) => {
             const n = items.filter((s) => matches(s, app.source)).length;
             if (n === 0) return null;
@@ -620,11 +641,11 @@ function SessionList({
           onClick={() => toggle(shownOpen, !allShown)}
           className="shrink-0 rounded-md px-2 py-1 text-body font-medium text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50"
         >
-          {allShown ? "Clear" : "Select all"}
+          {allShown ? t("Clear", { context: "selection" }) : t("Select all")}
         </button>
       </div>
       <ul
-        aria-label="Sessions"
+        aria-label={t("Sessions")}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-surface p-1"
       >
         {checking && ["all", "claude", "remote"].includes(filter) && <CheckingRow />}
@@ -643,10 +664,16 @@ function SessionList({
         <div className="min-w-0 flex-1">
           <p role="status" className="truncate text-body text-muted-foreground">
             {progress
-              ? `Importing ${progress.done + 1} of ${progress.total}…`
+              ? t("Importing {{current}} of {{total}}…", {
+                  current: progress.done + 1,
+                  total: progress.total,
+                })
               : count
-                ? `${count} selected`
-                : `${items.length - open.length} of ${items.length} imported`}
+                ? t("{{count}} selected", { count })
+                : t("{{imported}} of {{total}} imported", {
+                    imported: items.length - open.length,
+                    total: items.length,
+                  })}
           </p>
           {progress && (
             <span className="mt-1.5 block h-1 max-w-48 overflow-hidden rounded-full bg-selected">
@@ -664,7 +691,7 @@ function SessionList({
           className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
         >
           {busy ? <LoaderCircle aria-hidden className="animate-spin" /> : <Download aria-hidden />}
-          {count ? `Import ${count}` : "Import"}
+          {count ? t("Import {{count}}", { count }) : t("Import")}
         </button>
       </div>
     </div>
@@ -730,7 +757,7 @@ function SessionRow({
           <span className="size-4 shrink-0" />
         ) : (
           <PickBox
-            label={`Import ${s.title}`}
+            label={t("Import {{title}}", { title: s.title })}
             disabled={disabled}
             picked={picked}
             onToggle={onToggle}
@@ -741,8 +768,8 @@ function SessionRow({
           {s.remote && (
             <span
               role="img"
-              aria-label="Remote Control, from claude.ai"
-              title="Remote Control session, from claude.ai"
+              aria-label={t("Remote Control, from claude.ai")}
+              title={t("Remote Control session, from claude.ai")}
               className="absolute -right-1.5 -bottom-1.5 grid size-4 place-items-center rounded-full border border-border bg-surface text-muted-foreground"
             >
               <Cloud aria-hidden className="size-2.5" strokeWidth={2.5} />
@@ -768,7 +795,7 @@ function SessionRow({
         </span>
         {s.thread && (
           <span className="shrink-0 rounded-full bg-added/15 px-2 py-0.5 text-meta font-medium text-added">
-            Imported
+            {t("Imported")}
           </span>
         )}
       </label>
@@ -789,10 +816,10 @@ function CheckingRow() {
       </span>
       <span className="min-w-0 flex-1">
         <span role="status" className="shimmer-text block truncate text-body font-medium">
-          Looking for Remote Control sessions on claude.ai
+          {t("Looking for Remote Control sessions on claude.ai")}
         </span>
         <span className="block truncate text-meta text-faint-foreground">
-          The ones claude rc ran on your other computers
+          {t("The ones claude rc ran on your other computers")}
         </span>
       </span>
     </li>
@@ -834,16 +861,18 @@ function PickBox({
 /** What `ImportButton` opens: this computer's app sessions, or an export's chats. */
 const imports = {
   sessions: {
-    label: "Import sessions…",
-    title: "Import sessions",
-    line: "Bring past sessions from the Claude, Codex, and Cursor apps and Remote Control into Archived as threads.",
+    label: msg("Import sessions…"),
+    title: msg("Import sessions"),
+    line: msg(
+      "Bring past sessions from the Claude, Codex, and Cursor apps and Remote Control into Archived as threads.",
+    ),
     apps: sessionApps,
     List: ImportSessions,
   },
   chats: {
-    label: "Import chats…",
-    title: "Import chats",
-    line: "Bring chats from a ChatGPT or Claude data export into Archived as threads.",
+    label: msg("Import chats…"),
+    title: msg("Import chats"),
+    line: msg("Bring chats from a ChatGPT or Claude data export into Archived as threads."),
     apps: chatApps,
     List: ImportChats,
   },
@@ -866,7 +895,7 @@ export function ImportButton({ what }: { what: keyof typeof imports }) {
         className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-body font-medium hover:bg-hover [&_svg]:size-3.5"
       >
         <Download aria-hidden />
-        {label}
+        {t(label)}
       </button>
       <dialog
         ref={dialog}
@@ -879,11 +908,11 @@ export function ImportButton({ what }: { what: keyof typeof imports }) {
             <AppLogos apps={apps} className="mt-0.5" />
             <div className="min-w-0 flex-1">
               <h2 id={titleId} className="text-heading font-semibold tracking-tight">
-                {title}
+                {t(title)}
               </h2>
-              <p className="mt-0.5 text-body text-muted-foreground">{line}</p>
+              <p className="mt-0.5 text-body text-muted-foreground">{t(line)}</p>
             </div>
-            <IconButton label="Close" onClick={() => dialog.current?.close()}>
+            <IconButton label={t("Close")} onClick={() => dialog.current?.close()}>
               <X aria-hidden />
             </IconButton>
           </div>
@@ -908,7 +937,7 @@ export function ImportStepBody({ className = "" }: { className?: string }) {
         <>
           <button type="button" onClick={() => setChats(false)} className={link}>
             <ArrowLeft aria-hidden />
-            Back to app sessions
+            {t("Back to app sessions")}
           </button>
           <ImportChats className="min-h-0 flex-1" />
         </>
@@ -917,7 +946,7 @@ export function ImportStepBody({ className = "" }: { className?: string }) {
           <ImportSessions className="min-h-0 flex-1" />
           <button type="button" onClick={() => setChats(true)} className={link}>
             <FileArchive aria-hidden />
-            Import ChatGPT or Claude chats from an export…
+            {t("Import ChatGPT or Claude chats from an export…")}
           </button>
         </>
       )}

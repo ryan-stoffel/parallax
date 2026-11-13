@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -27,29 +28,35 @@ export function lookOf(pr?: PullRequest): {
       Icon: icons.merged,
       color: "text-project-violet",
       tint: "bg-project-violet/12",
-      label: "Merged",
+      label: t("Merged"),
     };
   if (pr?.state === "closed")
     return {
       Icon: icons.closedPullRequest,
       color: "text-danger",
       tint: "bg-danger/12",
-      label: "Closed",
+      label: t("Closed", { context: "pull request state" }),
     };
   if (pr?.state === "open" && pr.draft)
     return {
       Icon: icons.draftPullRequest,
       color: "text-faint-foreground",
       tint: "bg-hover",
-      label: "Draft",
+      label: t("Draft", { context: "pull request state" }),
     };
   if (pr?.state === "open")
-    return { Icon: icons.pullRequest, color: "text-added", tint: "bg-added/12", label: "Open" };
+    return {
+      Icon: icons.pullRequest,
+      color: "text-added",
+      tint: "bg-added/12",
+      label: t("Open", { context: "pull request state" }),
+    };
   return { Icon: icons.pullRequest, color: "text-muted-foreground", tint: "bg-hover" };
 }
 
 /** "3m ago", or "just now" under a minute. */
-export const ago = (time: string) => (age(time) === "now" ? "just now" : `${age(time)} ago`);
+export const ago = (time: string) =>
+  Date.now() - Date.parse(time) < 60_000 ? t("just now") : t("{{age}} ago", { age: age(time) });
 
 /** A pull request's state as a chip: its icon and Open, Draft, Merged, or Closed, in its color. */
 export function StateBadge({ pr }: { pr: PullRequest }) {
@@ -110,7 +117,10 @@ export function BranchChips({
   const quiet = "bg-hover text-muted-foreground";
   const look = issue && issueLook[issue.kind];
   return (
-    <span title={`Merges ${head} into ${base}`} className="flex min-w-0 items-center gap-1">
+    <span
+      title={t("Merges {{head}} into {{base}}", { head, base })}
+      className="flex min-w-0 items-center gap-1"
+    >
       <span
         title={issue?.label}
         className={`${chip} flex max-w-[45%] shrink-0 items-center gap-1 ${look?.tint ?? quiet}`}
@@ -118,7 +128,7 @@ export function BranchChips({
         {look && <look.Icon aria-label={issue?.label} className="size-3 shrink-0" />}
         <span className="truncate">{base}</span>
       </span>
-      <icons.back aria-label="from" className="size-3.5 shrink-0 text-faint-foreground" />
+      <icons.back aria-label={t("from")} className="size-3.5 shrink-0 text-faint-foreground" />
       <span className={`${chip} ${quiet} min-w-0`}>{head}</span>
     </span>
   );
@@ -247,7 +257,7 @@ export function PrRow({
               </>
             ) : (
               <span className={`min-w-0 truncate ${error ? "text-danger" : ""}`}>
-                · {error ? describeError(error) : "Loading…"}
+                · {error ? describeError(error) : t("Loading…")}
               </span>
             )}
           </span>

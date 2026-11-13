@@ -5,6 +5,8 @@
 //
 // It imports no runtime code from the renderer, so the desktop app's chunks stay as they are.
 
+import i18next from "i18next";
+
 import type {
   ConnectionState,
   DeviceStreamMessage,
@@ -55,7 +57,20 @@ const LOCAL = "local";
 const HEARTBEAT_MS = 30_000;
 const LIVENESS_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 30_000;
-const NOT_HERE = "Only the desktop app can do this.";
+
+// Marks text for `i18next-cli extract`, as ../i18n's `msg` does, which this chunk doesn't import.
+const msg = <T extends string>(text: T): T => text;
+
+/**
+ * `text` marked with `msg`, in the app's language with `values` in it. Before the app sets up
+ * i18next, as on a first connect, it reads as written.
+ */
+const say = (text: string, values: Record<string, string | number> = {}) =>
+  i18next.isInitialized
+    ? i18next.t(text, values)
+    : text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values[name]));
+
+const notHere = () => say(msg("Only the desktop app can do this."));
 
 /** A paired browser's session: its token, and the `DPoP` key it's bound to, which never leaves. */
 export type Session = { token: string; key: CryptoKeyPair };
@@ -149,17 +164,23 @@ async function ticket({ token, key }: Session): Promise<{ ticket: string } | { e
     method: "POST",
     headers: { Authorization: `DPoP ${token}`, DPoP: await proof(key, "POST", path, token) },
   }).catch(() => undefined);
-  if (!response) return { error: "Couldn't reach Parallax on this computer." };
+  if (!response) return { error: say(msg("Couldn't reach Parallax on this computer.")) };
   const answer = (await response.json().catch(() => ({}))) as { ticket?: string; error?: string };
   if (answer.ticket) return { ticket: answer.ticket };
   if (answer.error === "invalid_token") return { error: "revoked" };
   if (answer.error === "access_denied")
-    return { error: "Open in a browser is off on this computer. Turn it on there to continue." };
+    return {
+      error: say(msg("Open in a browser is off on this computer. Turn it on there to continue.")),
+    };
   if (response.status === 401)
     return {
-      error: "Parallax refused this browser's proof. Check that this device's clock is right.",
+      error: say(
+        msg("Parallax refused this browser's proof. Check that this device's clock is right."),
+      ),
     };
-  return { error: `Parallax couldn't connect (${response.status}).` };
+  return {
+    error: say(msg("Parallax couldn't connect ({{status}})."), { status: response.status }),
+  };
 }
 
 type Pending = { done: (response: RpcResponse<unknown>) => void; timer: number };
@@ -261,7 +282,8 @@ export class WebHost {
       this.receive(String(event.data));
     };
     socket.onclose = () => {
-      if (socket === this.socket) this.end("The connection to Parallax ended.", "transport_closed");
+      if (socket === this.socket)
+        this.end(say(msg("The connection to Parallax ended.")), "transport_closed");
     };
     socket.onopen = () => {
       const capabilities = { resyncNotice: {}, [CLIENT_CAPABILITY]: {} };
@@ -270,7 +292,10 @@ export class WebHost {
       this.send("initialize", { protocol, client, capabilities }, (response) => {
         if (socket !== this.socket) return;
         if ("error" in response)
-          return this.end(`initialize failed: ${response.error.message}`, "protocol_error");
+          return this.end(
+            say(msg("initialize failed: {{error}}"), { error: response.error.message }),
+            "protocol_error",
+          );
         this.initialized(response.result as InitializeResult);
       });
       // Behind `initialize`, without waiting for its answer, which saves a round trip (PLX-1480).
@@ -287,7 +312,9 @@ export class WebHost {
   request(method: string, params: unknown): Promise<HostResponse<unknown>> {
     const logId = this.logId;
     if (this.state.status !== "connected" || logId === undefined) {
-      return Promise.resolve({ error: { code: INTERNAL_ERROR, message: "not connected" } });
+      return Promise.resolve({
+        error: { code: INTERNAL_ERROR, message: say(msg("not connected")) },
+      });
     }
     // An emulator can take minutes to boot, past plxd's own 3 minute wait, and a cold Mac's
     // simulators over 30 seconds to list (PLX-886). `host/update`, which only the phone sends here,
@@ -379,7 +406,7 @@ export class WebHost {
     if (this.state.status !== "connected") return;
     this.send("host/health", {});
     this.livenessTimer ??= window.setTimeout(
-      () => this.end("Parallax stopped answering.", "liveness_timeout"),
+      () => this.end(say(msg("Parallax stopped answering.")), "liveness_timeout"),
       LIVENESS_MS,
     );
   }
@@ -389,7 +416,7 @@ export class WebHost {
     this.closed = true;
     this.updateNotice.stop();
     clearTimeout(this.retryTimer);
-    if (this.socket) this.end("The connection was closed.", "app_closed");
+    if (this.socket) this.end(say(msg("The connection was closed.")), "app_closed");
   }
 
   /** Reconnects now if the connection failed. */
@@ -407,7 +434,7 @@ export class WebHost {
   ): void {
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN) {
-      done?.({ error: { code: INTERNAL_ERROR, message: "not connected" } });
+      done?.({ error: { code: INTERNAL_ERROR, message: say(msg("not connected")) } });
       return;
     }
     const id = this.nextId++;
@@ -415,7 +442,7 @@ export class WebHost {
       const timer = window.setTimeout(() => {
         this.pending.delete(id);
         this.notify("$/cancelRequest", { id });
-        done({ error: { code: -32800, message: `${method} timed out` } });
+        done({ error: { code: -32800, message: say(msg("{{method}} timed out"), { method }) } });
       }, timeoutMs);
       this.pending.set(id, { done, timer });
     }
@@ -649,14 +676,14 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     zoomed: () => {},
     onFullScreen: none,
     pickFolder: async () => null,
-    listFolders: async () => ({ error: NOT_HERE }),
-    createRepo: async () => ({ error: NOT_HERE }),
-    copyPicture: () => Promise.reject(new Error(NOT_HERE)),
+    listFolders: async () => ({ error: notHere() }),
+    createRepo: async () => ({ error: notHere() }),
+    copyPicture: () => Promise.reject(new Error(notHere())),
     // The web client has no webview, so no page asks anything.
     onBrowser: () => () => {},
     extensions: () => Promise.resolve([]),
-    installExtension: () => Promise.resolve(NOT_HERE),
-    loadUnpackedExtension: () => Promise.resolve(NOT_HERE),
+    installExtension: () => Promise.resolve(notHere()),
+    loadUnpackedExtension: () => Promise.resolve(notHere()),
     removeExtension: () => Promise.resolve(),
     onExtensionsChanged: () => () => {},
     selectBrowserTab: () => {},
@@ -672,7 +699,8 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     setDownloadPrefs: () => {},
     updatable: false,
     locale: navigator.language,
-    update: async () => NOT_HERE,
+    setLanguage: () => {},
+    update: async () => notHere(),
     onUpdateState: none,
 
     request: (async (hostId: string, method: string, params: unknown) =>
@@ -701,45 +729,45 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     onHosts: none,
     sshSuggestions: async () => [],
     onLocalName: (listener) => (listener(name), () => {}),
-    renameLocal: async () => NOT_HERE,
-    saveHost: async () => NOT_HERE,
-    removeHost: async () => NOT_HERE,
-    installPlxd: async () => NOT_HERE,
-    discoverLan: async () => NOT_HERE,
-    pairLan: async () => NOT_HERE,
-    registerRelay: async () => NOT_HERE,
-    relayHosts: async () => NOT_HERE,
-    removeRelayHost: async () => NOT_HERE,
-    checkRelay: async () => NOT_HERE,
+    renameLocal: async () => notHere(),
+    saveHost: async () => notHere(),
+    removeHost: async () => notHere(),
+    installPlxd: async () => notHere(),
+    discoverLan: async () => notHere(),
+    pairLan: async () => notHere(),
+    registerRelay: async () => notHere(),
+    relayHosts: async () => notHere(),
+    removeRelayHost: async () => notHere(),
+    checkRelay: async () => notHere(),
 
     onConnect: (listener) => (listener({ icon: "laptop", channel: "stable" }), () => {}),
-    setConnect: async () => NOT_HERE,
+    setConnect: async () => notHere(),
     onDevices: (listener) => (listener([]), () => {}),
-    saveDevice: async () => NOT_HERE,
+    saveDevice: async () => notHere(),
     setDeviceEnabled: async () => {},
     removeDevice: async () => {},
     editRoutes: async () => undefined,
     discoverAccount: async () => {},
-    enterSetupCode: async () => NOT_HERE,
-    showSetupCode: async () => NOT_HERE,
+    enterSetupCode: async () => notHere(),
+    showSetupCode: async () => notHere(),
     onSetupApproved: () => () => {},
     askAgain: async () => {},
     onKeyStanding: () => () => {},
-    startOver: async () => NOT_HERE,
-    answerCompare: async () => NOT_HERE,
+    startOver: async () => notHere(),
+    answerCompare: async () => notHere(),
     deviceKey: async () => undefined,
     onAccessRequests: (listener) => (listener([]), () => {}),
-    answerAccess: async () => NOT_HERE,
-    revokeDevice: async () => NOT_HERE,
-    makeDeviceReadOnly: async () => NOT_HERE,
-    turnOnReach: async () => NOT_HERE,
+    answerAccess: async () => notHere(),
+    revokeDevice: async () => notHere(),
+    makeDeviceReadOnly: async () => notHere(),
+    turnOnReach: async () => notHere(),
 
-    acpRegistry: async () => NOT_HERE,
+    acpRegistry: async () => notHere(),
 
     // Shells in a host's folder run in plxd, as in the app. Sign-ins and installs pick a command
     // to run, which only the app does.
     async openTerminal(id, target, cols, rows) {
-      if (target.hostId !== LOCAL || !("path" in target)) return NOT_HERE;
+      if (target.hostId !== LOCAL || !("path" in target)) return notHere();
       const cwd = target.path;
       return host.openTerminal({
         threadId: target.threadId ?? "",
@@ -749,7 +777,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
         rows,
       });
     },
-    install: async () => NOT_HERE,
+    install: async () => notHere(),
     terminalInput: (id, data) => {
       const params = host.terminals.get(id);
       if (params)
@@ -779,7 +807,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     },
 
     openDeviceStream: async (hostId, params, listener) =>
-      hostId === LOCAL ? host.openDeviceStream(params, listener) : NOT_HERE,
+      hostId === LOCAL ? host.openDeviceStream(params, listener) : notHere(),
     sendDeviceStream: (streamId, data) => {
       if (typeof data === "string") host.notify("device/send", { streamId, data, text: true });
       else {
@@ -796,20 +824,20 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     openFolder: async () => undefined,
     sshDestination: async () => undefined,
     setSshDestination: async () => undefined,
-    showFile: async () => NOT_HERE,
+    showFile: async () => notHere(),
     terminalApp: async () => null,
     terminalApps: async () => [],
     selectTerminalApp: async () => null,
     // A browser has no terminal of this computer's to put a command in.
     command: async () => ({ state: "unavailable" as const, path: "", onPath: true }),
-    installCommand: async () => NOT_HERE,
-    removeCommand: async () => NOT_HERE,
+    installCommand: async () => notHere(),
+    removeCommand: async () => notHere(),
 
     onProfile: (listener) => (listener(null), () => {}),
     accountMoved: async () => false,
     onConnectNotice: () => () => {},
     onRelayUsage: () => () => {},
-    signIn: async () => NOT_HERE,
+    signIn: async () => notHere(),
     editProfile: async () => {},
     signOut: async () => {},
     storage: async () => [],

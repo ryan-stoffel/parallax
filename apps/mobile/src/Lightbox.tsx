@@ -1,6 +1,7 @@
 // Images full screen, as the desktop's Lightbox shows them: swipe between them, pinch or double-tap
 // to zoom (a native zoomable scroll view, so it's iOS's own feel), and share or save one. Any
 // screen opens it with `openLightbox`; `LightboxHost` at the app's root shows it.
+import { t } from "i18next";
 import { Share as ShareIcon, X } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -65,7 +66,7 @@ function Zoomable({ shot, width, height }: { shot: Shot; width: number; height: 
           source={{ uri: shot.uri }}
           style={{ width, height }}
           resizeMode="contain"
-          accessibilityLabel={shot.name ?? "Image"}
+          accessibilityLabel={shot.name ?? t("Image")}
         />
       </Pressable>
     </ScrollView>
@@ -107,7 +108,7 @@ export function LightboxHost() {
         <View style={[styles.bar, { top: insets.top + 6 }]}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Close"
+            accessibilityLabel={t("Close")}
             hitSlop={12}
             onPress={() => setOpen(undefined)}
             style={styles.button}
@@ -116,11 +117,11 @@ export function LightboxHost() {
           </Pressable>
           <Text numberOfLines={1} style={styles.title}>
             {shot?.name ?? ""}
-            {open && open.shots.length > 1 ? `  ${index + 1} of ${open.shots.length}` : ""}
+            {open && open.shots.length > 1 ? `  ${t("{{index}} of {{total}}", { index: index + 1, total: open.shots.length })}` : ""}
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Share"
+            accessibilityLabel={t("Share")}
             hitSlop={12}
             onPress={() => shot && void Share.share({ url: shot.uri })}
             style={styles.button}

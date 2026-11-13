@@ -1,6 +1,7 @@
 // A transcript's stand-in while it loads: the shapes of a short conversation, the user's bubbles
 // and the agent's lines and a step, in the theme's quiet fills, breathing slowly. With Reduce
 // Motion on, it holds still.
+import { t } from "i18next";
 import { useEffect } from "react";
 import { StyleSheet, View, type DimensionValue } from "react-native";
 import Animated, {
@@ -39,7 +40,7 @@ export function TranscriptSkeleton() {
   return (
     <Animated.View
       accessible
-      accessibilityLabel="Loading the thread"
+      accessibilityLabel={t("Loading the thread")}
       accessibilityRole="progressbar"
       style={[styles.column, breathe]}
     >

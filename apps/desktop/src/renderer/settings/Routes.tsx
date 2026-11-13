@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { GripVertical, Plus, X, type LucideIcon } from "lucide-react";
 import {
   useEffect,
@@ -36,7 +37,7 @@ export function routeKind(route: string): string {
     /^(f[cd]|fe80)/i.test(host) ||
     host === "localhost" ||
     host.endsWith(".local");
-  return local ? "Same network" : "Direct";
+  return local ? t("Same network") : t("Direct");
 }
 
 /**
@@ -106,14 +107,14 @@ export function FixedRoutes({
 }) {
   if (!routes.length) return null;
   return (
-    <ul aria-label={`Routes to ${name}`}>
+    <ul aria-label={t("Routes to {{name}}", { name })}>
       {routes.map((r) => (
         <RouteRow
           key={`${r.kind} ${r.address}`}
           route={r.address ?? r.kind}
           kind={r.kind}
           {...(r.address && { address: r.address })}
-          notes={[r.connected && "Connected"]}
+          notes={[r.connected && t("Connected")]}
         />
       ))}
     </ul>
@@ -206,7 +207,14 @@ export function AccountRoutes({
     if (to < 0 || to >= routes.length) return;
     focusing.current = route;
     void moveTo(route, to).then((done) => {
-      if (done) setSaid(`${nameOf(route)} moved to ${to + 1} of ${routes.length}.`);
+      if (done)
+        setSaid(
+          t("{{name}} moved to {{position}} of {{total}}.", {
+            name: nameOf(route),
+            position: to + 1,
+            total: routes.length,
+          }),
+        );
     });
   };
   const dragProps = (route: string) => ({
@@ -237,7 +245,7 @@ export function AccountRoutes({
   };
   return (
     <>
-      <ul aria-label={`Routes to ${device.name}`}>
+      <ul aria-label={t("Routes to {{name}}", { name: device.name })}>
         {shown.map((route, i) => {
           const name = nameOf(route);
           const added = device.addedRoutes?.includes(route);
@@ -247,7 +255,7 @@ export function AccountRoutes({
               route={route}
               kind={routeKind(route)}
               {...(!isRelay(route) && { address: route })}
-              notes={[added && "Added", connected && device.route === route && "Connected"]}
+              notes={[added && t("Added"), connected && device.route === route && t("Connected")]}
               dragged={drag?.route === route}
               rowProps={dragProps(route)}
               handle={
@@ -257,9 +265,9 @@ export function AccountRoutes({
                     if (el) handles.current.set(route, el);
                     else handles.current.delete(route);
                   }}
-                  aria-label={`Move ${name}`}
-                  aria-description="Drag, or press the up and down arrow keys."
-                  title="Drag to reorder"
+                  aria-label={t("Move {{name}}", { name })}
+                  aria-description={t("Drag, or press the up and down arrow keys.")}
+                  title={t("Drag to reorder")}
                   onPointerDown={() => setDrag({ route, order: routes })}
                   onPointerUp={() => setDrag((d) => (d?.started ? d : undefined))}
                   onKeyDown={(event) => onKey(event, route, i)}
@@ -279,7 +287,7 @@ export function AccountRoutes({
               ) : (
                 <RouteButton
                   icon={X}
-                  label={`Remove ${name}`}
+                  label={t("Remove {{name}}", { name })}
                   onClick={() => void edit({ remove: route })}
                 />
               )}
@@ -296,7 +304,7 @@ export function AccountRoutes({
           className="mt-2 flex flex-wrap items-center gap-2"
         >
           <input
-            aria-label="Address"
+            aria-label={t("Address")}
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
             placeholder="studio.example.com:7400"
@@ -305,7 +313,7 @@ export function AccountRoutes({
             className={`${rowField} font-mono`}
           />
           <button type="submit" className={primaryButton}>
-            Add
+            {t("Add")}
           </button>
           <button
             type="button"
@@ -316,7 +324,7 @@ export function AccountRoutes({
               setError(undefined);
             }}
           >
-            Cancel
+            {t("Cancel")}
           </button>
         </form>
       ) : (
@@ -326,7 +334,7 @@ export function AccountRoutes({
           className={`${quietButton} mt-1 -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
         >
           <Plus aria-hidden />
-          Add route
+          {t("Add route")}
         </button>
       )}
       {error && (
@@ -336,10 +344,14 @@ export function AccountRoutes({
       )}
       <p className="mt-2 text-meta text-faint-foreground">
         {adding
-          ? "A DNS name or address of this computer, with a port if it isn't 7341. It must present this computer's key before anything is sent. plxd only accepts connections from private networks, so a port forward from the internet won't connect."
+          ? t(
+              "A DNS name or address of this computer, with a port if it isn't 7341. It must present this computer's key before anything is sent. plxd only accepts connections from private networks, so a port forward from the internet won't connect.",
+            )
           : device.routesChanged
-            ? "Tried top to bottom. Saved on this device. Reset routes, in this computer's menu, undoes your changes."
-            : "Tried top to bottom. Saved on this device."}
+            ? t(
+                "Tried top to bottom. Saved on this device. Reset routes, in this computer's menu, undoes your changes.",
+              )
+            : t("Tried top to bottom. Saved on this device.")}
       </p>
     </>
   );

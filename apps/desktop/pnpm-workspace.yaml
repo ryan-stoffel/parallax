@@ -4,6 +4,8 @@
 # Electron 44 has no install script. It downloads its binary the first time
 # `electron` is required (scripts/dev.mjs does that).
 allowBuilds:
+  # i18next-cli's parser. Its postinstall only checks the prebuilt binary its platform package ships.
+  "@swc/core": false
   # Squirrel.Windows, which electron-builder only uses for a target we don't build.
   electron-winstaller: false
   # Enriched Markdown's native assets (tree-sitter grammars, RaTeX), which only the phone builds.

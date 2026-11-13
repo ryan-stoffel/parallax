@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { createElement, useEffect, useId, useRef, useState } from "react";
 
 import type { ExtensionInfo } from "../preload/bridge";
@@ -94,7 +95,9 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
   // Opens an extension's popup under the Extensions button, as Chrome does from its menu.
   const activate = (id: string) => {
     menu.current?.hidePopover();
-    const rect = bar.current?.querySelector('[aria-label="Extensions"]')?.getBoundingClientRect();
+    const rect = bar.current
+      ?.querySelector(`[aria-label="${CSS.escape(t("Extensions"))}"]`)
+      ?.getBoundingClientRect();
     if (!rect) return;
     actions()?.activate(partition, {
       eventType: "click",
@@ -122,22 +125,22 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
           class: "browser-action",
         }),
       )}
-      <IconButton label="Extensions" popoverTarget={menuId} aria-haspopup="menu">
+      <IconButton label={t("Extensions")} popoverTarget={menuId} aria-haspopup="menu">
         <Extension />
       </IconButton>
       <Menu
         ref={menu}
         id={menuId}
-        label="Extensions"
+        label={t("Extensions")}
         align="end"
         focus='[role="menuitem"]'
         className="w-80 p-1.5"
       >
         <div className="flex items-center justify-between py-1 pr-0.5 pl-2.5">
-          <p className="text-reading font-medium">Extensions</p>
+          <p className="text-reading font-medium">{t("Extensions")}</p>
           <button
             type="button"
-            aria-label="Close"
+            aria-label={t("Close")}
             onClick={() => menu.current?.hidePopover()}
             className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
           >
@@ -156,7 +159,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
           ))
         ) : (
           <p className="px-2.5 pt-1 pb-2 text-body text-muted-foreground">
-            None yet. Add one from the Chrome Web Store, such as a password manager.
+            {t("None yet. Add one from the Chrome Web Store, such as a password manager.")}
           </p>
         )}
         <hr className={toolbarMenuDivider} />
@@ -170,7 +173,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
         />
         <ToolbarMenuRow
           icon={<Settings aria-hidden />}
-          label="Manage extensions"
+          label={t("Manage extensions")}
           onClick={() => {
             menu.current?.hidePopover();
             browserSettingsAsked.set({ title: "Extensions" });
@@ -216,8 +219,12 @@ function ExtensionRow({
       </button>
       <button
         type="button"
-        aria-label={pinned ? `Unpin ${extension.name}` : `Pin ${extension.name}`}
-        title={pinned ? "Unpin from toolbar" : "Pin to toolbar"}
+        aria-label={
+          pinned
+            ? t("Unpin {{name}}", { name: extension.name })
+            : t("Pin {{name}}", { name: extension.name })
+        }
+        title={pinned ? t("Unpin from toolbar") : t("Pin to toolbar")}
         aria-pressed={pinned}
         onClick={() => onPin(!pinned)}
         className={`${rowButton} ${pinned ? "text-accent" : "text-muted-foreground hover:text-foreground"}`}
@@ -226,8 +233,8 @@ function ExtensionRow({
       </button>
       <button
         type="button"
-        aria-label={`More for ${extension.name}`}
-        title="More"
+        aria-label={t("More for {{name}}", { name: extension.name })}
+        title={t("More")}
         popoverTarget={moreId}
         aria-haspopup="menu"
         className={`${rowButton} mr-1 text-muted-foreground hover:text-foreground`}
@@ -237,7 +244,7 @@ function ExtensionRow({
       <Menu id={moreId} label={extension.name} align="end" className="w-56 p-1.5">
         <ToolbarMenuRow
           icon={<Delete aria-hidden />}
-          label="Remove from Parallax"
+          label={t("Remove from Parallax")}
           onClick={() => void window.parallax.removeExtension(extension.id).then(refresh)}
         />
       </Menu>

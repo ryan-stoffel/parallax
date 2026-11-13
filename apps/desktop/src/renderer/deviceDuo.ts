@@ -2,6 +2,7 @@
 // `duoViewer.ts` (MIT, T3 Tools Inc.): a model whose halves turn on its hinge, with a cover display
 // on one half and an inside display across both. The stream is whichever display is live.
 
+import { t } from "i18next";
 import {
   Box3,
   CanvasTexture,
@@ -58,7 +59,7 @@ export function createDuo(model: Object3D) {
     !(innerLeft instanceof Mesh) ||
     !(innerRight instanceof Mesh)
   )
-    throw new Error("The iPhone Duo model is missing its hinge or a display.");
+    throw new Error(t("The iPhone Duo model is missing its hinge or a display."));
   const meshes: Record<DuoDisplay, Mesh[]> = { 1: [cover], 3: [innerLeft, innerRight] };
   const surfaces = { 1: surface(784, 1140), 3: surface(1600, 1125) };
   // Each display's stream spans its meshes, as they lie open: the cover's seen from behind.

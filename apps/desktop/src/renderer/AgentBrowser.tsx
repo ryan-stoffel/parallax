@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Globe, Hand, MousePointer2 } from "lucide-react";
 import {
   useEffect,
@@ -164,7 +165,7 @@ export function AgentBrowser({
         <div className={addressBox}>
           {logo ?? <Globe aria-hidden />}
           <input
-            aria-label="Agent's address"
+            aria-label={t("Agent's address")}
             spellCheck={false}
             value={address ?? shortUrl(state.url)}
             onChange={(e) => setAddress(e.target.value)}
@@ -182,7 +183,7 @@ export function AgentBrowser({
           ) : (
             <Hand aria-hidden className="size-3.5" />
           )}
-          {state.human ? `Hand back to ${driver.name}` : "Take over"}
+          {state.human ? t("Hand back to {{name}}", { name: driver.name }) : t("Take over")}
         </button>
         <ViewMenu
           fit={fit}
@@ -210,12 +211,14 @@ export function AgentBrowser({
             {state.human ? (
               <>
                 <MousePointer2 aria-hidden className="size-3.5" />
-                You're browsing
+                {t("You're browsing")}
               </>
             ) : (
               <>
                 {logo}
-                {driver.name} is {state.recording ? "recording" : "browsing"}
+                {state.recording
+                  ? t("{{name}} is recording", { name: driver.name })
+                  : t("{{name}} is browsing", { name: driver.name })}
               </>
             )}
           </div>
@@ -226,7 +229,7 @@ export function AgentBrowser({
             <div
               ref={keys}
               tabIndex={0}
-              aria-label="Agent's browser tab"
+              aria-label={t("Agent's browser tab")}
               onKeyDown={key(true)}
               onKeyUp={key(false)}
               onWheel={(e) => send({ kind: "wheel", ...at(e), deltaX: e.deltaX, deltaY: e.deltaY })}
@@ -235,13 +238,13 @@ export function AgentBrowser({
               {state.loading && (
                 <div
                   role="progressbar"
-                  aria-label="Loading"
+                  aria-label={t("Loading")}
                   className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-ring"
                 />
               )}
               <img
                 ref={view}
-                alt={state.title || "The agent's page"}
+                alt={state.title || t("The agent's page")}
                 src={`data:image/jpeg;base64,${frame.data}`}
                 draggable={false}
                 onPointerDown={pointer("down")}
@@ -257,7 +260,7 @@ export function AgentBrowser({
       </PageFrame>
       {(gone || !frame) && (
         <p className="absolute inset-0 top-8 grid place-items-center text-body text-muted-foreground">
-          {gone ? "This tab closed." : "Waiting for the page…"}
+          {gone ? t("This tab closed.") : t("Waiting for the page…")}
         </p>
       )}
     </div>

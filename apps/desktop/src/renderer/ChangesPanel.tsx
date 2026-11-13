@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { GitCompare, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -26,9 +27,15 @@ type Scope = number | "all" | "branch" | "uncommitted" | `commit:${string}`;
 /** Why Claude can't go back to the end of turn `r`, in plxd's words, or nothing when it can. */
 const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
   !r.cursor
-    ? `Parallax didn't record where the conversation stood after turn ${r.ordinal}, so it can't go back there. Edit from a later turn instead, or start a new thread.`
+    ? t(
+        "Parallax didn't record where the conversation stood after turn {{ordinal}}, so it can't go back there. Edit from a later turn instead, or start a new thread.",
+        { ordinal: r.ordinal },
+      )
     : r.sessionId !== sessionId
-      ? `Turn ${r.ordinal} ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread.`
+      ? t(
+          "Turn {{ordinal}} ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread.",
+          { ordinal: r.ordinal },
+        )
       : undefined;
 
 /**
@@ -180,19 +187,27 @@ export function ChangesPanel({
   const previous = turn ? turns[turns.indexOf(turn) - 1] : undefined;
   const refusal =
     running || turns.some((t) => ["starting", "running", "waiting"].includes(t.status))
-      ? "Interrupt the current turn before reverting checkpoints."
+      ? t("Interrupt the current turn before reverting checkpoints.")
       : !["claude", "codex", "fake"].includes(backendKind)
-        ? "This provider does not support reverting conversation history. Start a new thread instead."
+        ? t(
+            "This provider does not support reverting conversation history. Start a new thread instead.",
+          )
         : previous && !ready(previous)
-          ? "The previous turn has no ready checkpoint to revert to."
+          ? t("The previous turn has no ready checkpoint to revert to.")
           : backendKind === "claude" && previous
             ? cursorRefusal(previous, sessionId)
             : undefined;
 
-  if (unavailable) return <Empty title="Changes aren't available" hint={unavailable} />;
-  if (runs && "error" in runs) return <Empty title="Couldn't load the changes" hint={runs.error} />;
+  if (unavailable) return <Empty title={t("Changes aren't available")} hint={unavailable} />;
+  if (runs && "error" in runs)
+    return <Empty title={t("Couldn't load the changes")} hint={runs.error} />;
   if (runs && latest === undefined && !review?.hasBase && !gitScope)
-    return <Empty title="No changes yet" hint="Edits from this thread show up here for review." />;
+    return (
+      <Empty
+        title={t("No changes yet")}
+        hint={t("Edits from this thread show up here for review.")}
+      />
+    );
 
   // Edit from here goes back to the turn before this one, or the thread's start.
   const editFromHere = async (restoreFiles: boolean) => {
@@ -219,20 +234,23 @@ export function ChangesPanel({
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="flex min-w-0 flex-1">
           <Picker
-            label="Show"
+            label={t("Show")}
             value={gitScope ?? String(ordinal ?? "all")}
             onChange={(v) => setShownTurn(/^\d+$/.test(v) ? Number(v) : (v as Scope))}
             options={[
-              ...(review?.hasBase ? [{ value: "branch", label: "Changes" }] : []),
-              ...(reviewScopes ? [{ value: "uncommitted", label: "Uncommitted" }] : []),
+              ...(review?.hasBase ? [{ value: "branch", label: t("Changes") }] : []),
+              ...(reviewScopes ? [{ value: "uncommitted", label: t("Uncommitted") }] : []),
               ...(review?.commits ?? []).map((c) => ({
                 value: `commit:${c.sha}`,
                 label: `${c.sha.slice(0, 7)} ${c.subject}`,
               })),
-              { value: "all", label: "All turns" },
-              ...turns.filter(ready).map((t) => ({
-                value: String(t.ordinal),
-                label: `Turn ${t.ordinal}: ${firstLine(t.text ?? (t === turns[0] ? prompt : "")) || "(no text)"}`,
+              { value: "all", label: t("All turns") },
+              ...turns.filter(ready).map((r) => ({
+                value: String(r.ordinal),
+                label: t("Turn {{ordinal}}: {{text}}", {
+                  ordinal: r.ordinal,
+                  text: firstLine(r.text ?? (r === turns[0] ? prompt : "")) || t("(no text)"),
+                }),
               })),
             ]}
             panelClassName="max-w-96 min-w-60"
@@ -250,7 +268,7 @@ export function ChangesPanel({
             className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Undo2 aria-hidden className="size-3.5" />
-            Edit from here
+            {t("Edit from here")}
           </button>
         )}
       </div>
@@ -269,16 +287,20 @@ export function ChangesPanel({
       )}
       <ConfirmDialog
         ref={dialog}
-        title="Edit from here?"
-        action="Revert files too"
-        busy={reverting ? "Reverting…" : undefined}
+        title={t("Edit from here?")}
+        action={t("Revert files too")}
+        busy={reverting ? t("Reverting…") : undefined}
         error={refusal ?? revertError}
         onConfirm={() => void editFromHere(true)}
-        alternate={{ action: "Revert and keep changes", onConfirm: () => void editFromHere(false) }}
+        alternate={{
+          action: t("Revert and keep changes"),
+          onConfirm: () => void editFromHere(false),
+        }}
       >
-        Revert chat to before turn {turn?.ordinal}. Its prompt returns to the composer. Revert files
-        too replaces the files in this thread’s worktree. Revert and keep changes leaves them as
-        they are.
+        {t(
+          "Revert chat to before turn {{ordinal}}. Its prompt returns to the composer. Revert files too replaces the files in this thread’s worktree. Revert and keep changes leaves them as they are.",
+          { ordinal: turn?.ordinal },
+        )}
       </ConfirmDialog>
     </div>
   );

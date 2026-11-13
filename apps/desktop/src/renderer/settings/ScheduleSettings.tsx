@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useCallback, useEffect, useState } from "react";
 
 import type { ScheduledTask } from "../../protocol/generated/protocol";
@@ -28,11 +29,11 @@ export function ScheduleSettings() {
   const targets = hostsOf(hosts, scope);
   return (
     <>
-      <PageTitle title="Schedules">
-        Prompts that run on a timer or a webhook, in their thread or a new one.
+      <PageTitle title={t("Schedules")}>
+        {t("Prompts that run on a timer or a webhook, in their thread or a new one.")}
       </PageTitle>
       <Section
-        title="Scheduled tasks"
+        title={t("Scheduled tasks")}
         action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
       >
         {targets.map((host) => (
@@ -93,10 +94,17 @@ export function HostTasks({ host, named }: { host: Host; named: boolean }) {
             });
     setBusy(undefined);
     if ("error" in answer) {
-      const verb = action === "pause" ? (task.enabled ? "pause" : "resume") : action;
+      const values = { title: task.title };
       notify({
         tone: "error",
-        title: `Couldn't ${verb} ${task.title}`,
+        title:
+          action === "run"
+            ? t("Couldn't run {{title}}", values)
+            : action === "delete"
+              ? t("Couldn't delete {{title}}", values)
+              : task.enabled
+                ? t("Couldn't pause {{title}}", values)
+                : t("Couldn't resume {{title}}", values),
         body: describeError(answer.error),
       });
     }
@@ -104,15 +112,15 @@ export function HostTasks({ host, named }: { host: Host; named: boolean }) {
   };
 
   const empty = !connected
-    ? "Not connected"
+    ? t("Not connected")
     : !supported
-      ? "This host's plxd can't schedule tasks."
+      ? t("This host's plxd can't schedule tasks.")
       : error && !tasks
         ? error
         : tasks === undefined
-          ? "Loading…"
+          ? t("Loading…")
           : tasks.length === 0
-            ? "No scheduled tasks. Ask an agent to schedule one."
+            ? t("No scheduled tasks. Ask an agent to schedule one.")
             : undefined;
   return (
     <>
@@ -122,16 +130,21 @@ export function HostTasks({ host, named }: { host: Host; named: boolean }) {
       ) : (
         tasks?.map((task) => {
           const when = !task.enabled
-            ? "Paused"
+            ? t("Paused")
             : task.schedule.type === "webhook"
-              ? "Listening"
+              ? t("Listening")
               : task.nextRunAt
-                ? `Next run ${nextLabel(task.nextRunAt)}`
-                : "Not scheduled";
-          const last =
-            task.lastRunStatus === "never"
-              ? ""
-              : ` · Last run ${task.lastRunStatus}${task.lastRunError ? `: ${task.lastRunError}` : ""}`;
+                ? t("Next run {{when}}", { when: nextLabel(task.nextRunAt) })
+                : t("Not scheduled");
+          const lastRun = {
+            never: "",
+            running: t("Last run running"),
+            succeeded: t("Last run succeeded"),
+            failed: t("Last run failed"),
+          }[task.lastRunStatus];
+          const last = lastRun
+            ? ` · ${lastRun}${task.lastRunError ? `: ${task.lastRunError}` : ""}`
+            : "";
           return (
             <Row
               key={task.id}
@@ -155,7 +168,7 @@ export function HostTasks({ host, named }: { host: Host; named: boolean }) {
               }
             >
               <Switch
-                label={`Enable ${task.title}`}
+                label={t("Enable {{title}}", { title: task.title })}
                 checked={task.enabled}
                 disabled={busy === task.id}
                 onChange={() => void act(task, "pause")}
@@ -167,7 +180,7 @@ export function HostTasks({ host, named }: { host: Host; named: boolean }) {
                   disabled={busy === task.id}
                   onClick={() => void act(task, "run")}
                 >
-                  Run now
+                  {t("Run now")}
                 </button>
               )}
               <button
@@ -176,7 +189,7 @@ export function HostTasks({ host, named }: { host: Host; named: boolean }) {
                 disabled={busy === task.id}
                 onClick={() => void act(task, "delete")}
               >
-                Delete
+                {t("Delete")}
               </button>
             </Row>
           );

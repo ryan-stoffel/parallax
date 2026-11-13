@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   Fragment,
   useCallback,
@@ -10,6 +11,7 @@ import {
   type ReactNode,
   type ToggleEvent,
 } from "react";
+import { Trans } from "react-i18next";
 
 import type { RpcError } from "../../preload/bridge";
 import type {
@@ -244,12 +246,12 @@ export function PullRequestView({
       tone: "error",
       title,
       body: short || describeError(failed),
-      action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
+      action: short ? { label: t("Set up GitHub"), run: onSetUpGithub } : undefined,
     });
     return false;
   };
   const act = (action: PrActionMore, extra?: PrActExtra) =>
-    run(() => prs.act(url, action, extra), "Couldn't update the pull request");
+    run(() => prs.act(url, action, extra), t("Couldn't update the pull request"));
   const write = prs.write
     ? (w: PrWrite) =>
         run(async () => {
@@ -257,7 +259,7 @@ export function PullRequestView({
           // Waited for, so what was just written shows as its box closes.
           if (!failed) await prs.refresh(url);
           return failed;
-        }, "Couldn't write to the pull request")
+        }, t("Couldn't write to the pull request"))
     : undefined;
   // A new head moves what a batch was read from.
   useEffect(() => setSuggestionBatch(new Set()), [url, pr && more(pr).headSha]);
@@ -271,7 +273,9 @@ export function PullRequestView({
         notify({
           key: `pr/${url}/viewed`,
           tone: "error",
-          title: `Couldn't mark ${path.split("/").pop()} as ${on ? "viewed" : "not viewed"}`,
+          title: on
+            ? t("Couldn't mark {{file}} as viewed", { file: path.split("/").pop() })
+            : t("Couldn't mark {{file}} as not viewed", { file: path.split("/").pop() }),
           body: describeError(error),
         }),
       [url],
@@ -279,7 +283,7 @@ export function PullRequestView({
   });
   const refresh = () => {
     viewedFiles.reread();
-    void run(() => prs.refresh(url), "Couldn't read the pull request");
+    void run(() => prs.refresh(url), t("Couldn't read the pull request"));
   };
   const compose = (text: string, send: boolean) => {
     menu.current?.hidePopover();
@@ -318,13 +322,13 @@ export function PullRequestView({
       <div className="grid flex-1 place-items-center pb-16">
         <EmptyState
           icon={<icons.error aria-hidden />}
-          title="Couldn't read this pull request"
+          title={t("Couldn't read this pull request")}
           body={<span role="alert">{failure}</span>}
           action={
             <span className="flex items-center gap-2">
               {setUp}
               <Button variant="outline" size="sm" disabled={busy} onClick={refresh}>
-                Try again
+                {t("Try again")}
               </Button>
             </span>
           }
@@ -340,7 +344,7 @@ export function PullRequestView({
   const unresolved = threads.filter((t) => !t.resolved && !t.pending);
   const open = pr.state === "open";
   const breakdown = lineBreakdown(pr)
-    .map((r) => `${r.kind}: +${r.additions} −${r.deletions}`)
+    .map((r) => `${t(r.kind)}: +${r.additions} −${r.deletions}`)
     .join("\n");
   const fixCheck = (c: Check) =>
     compose(
@@ -390,7 +394,10 @@ export function PullRequestView({
           },
         }
       : undefined;
-  const batchName = `${suggestionBatch.size} ${suggestionBatch.size === 1 ? "suggestion" : "suggestions"}`;
+  const commitBatch = t("Commit {{count}} suggestions", {
+    count: suggestionBatch.size,
+    defaultValue_one: "Commit {{count}} suggestion",
+  });
   // In the side panel the form stays over the panel, under its button, not over the chat beside it.
   const fitReviewToPanel = (e: ToggleEvent<HTMLDivElement>) => {
     const form = e.currentTarget;
@@ -404,9 +411,9 @@ export function PullRequestView({
   };
   const suggestionActions: SuggestionActions = {
     blocked: !open
-      ? "This pull request is closed"
+      ? t("This pull request is closed")
       : !more(pr).canApplySuggestions
-        ? "You can't commit to this branch"
+        ? t("You can't commit to this branch")
         : undefined,
     batch: suggestionBatch,
     onCommit: (id) => setCommitting([id]),
@@ -446,7 +453,7 @@ export function PullRequestView({
           const mine = read.result?.failures.find((f) => f.name === c.name);
           return mine
             ? { result: mine }
-            : { error: "GitHub has no failed log for this check now. It may be re-running." };
+            : { error: t("GitHub has no failed log for this check now. It may be re-running.") };
         }
       : undefined,
     onRerun: prs.actions
@@ -459,34 +466,38 @@ export function PullRequestView({
   const mine = guide?.url === url ? guide : undefined;
   const guiding = guideView(mine?.result, pr.headSha, mine?.error);
   const tabs: { id: Tab; label: string; count?: ReactNode }[] = [
-    { id: "summary", label: "Summary" },
+    { id: "summary", label: t("Summary") },
     ...(prs.guide
       ? [
           {
             id: "guide" as const,
-            label: "Guide",
+            label: t("Guide"),
             count: mine?.result?.generating ? <Spinner size="sm" /> : undefined,
           },
         ]
       : []),
     {
       id: "timeline",
-      label: "Timeline",
+      label: t("Timeline"),
       count: <Count n={pr.comments.length + unresolved.length} />,
     },
-    { id: "code", label: "Code", count: <Count n={pr.changedFiles} /> },
+    { id: "code", label: t("Code"), count: <Count n={pr.changedFiles} /> },
   ];
 
   const headerActions = (
     <>
       <IconButton
-        label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
+        label={linked?.at ? t("Refresh (synced {{ago}})", { ago: ago(linked.at) }) : t("Refresh")}
         disabled={busy}
         onClick={refresh}
       >
         <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
       </IconButton>
-      <IconButton label="Pull request actions" aria-haspopup="menu" popoverTarget={`${id}-menu`}>
+      <IconButton
+        label={t("Pull request actions")}
+        aria-haspopup="menu"
+        popoverTarget={`${id}-menu`}
+      >
         <icons.more aria-hidden />
       </IconButton>
     </>
@@ -495,13 +506,14 @@ export function PullRequestView({
     <Button
       size="sm"
       variant="outline"
-      aria-label={`Open ${pr.repo}#${pr.number} on GitHub`}
-      title={`Open ${pr.repo}#${pr.number} on GitHub`}
+      aria-label={t("Open {{pr}} on GitHub", { pr: `${pr.repo}#${pr.number}` })}
+      title={t("Open {{pr}} on GitHub", { pr: `${pr.repo}#${pr.number}` })}
       onClick={() => openOnGithub(pr.url)}
       className="rounded-full pr-2.5 pl-3"
     >
-      Open in
-      <GitHubLogo className="size-4" />
+      <Trans>
+        Open in <GitHubLogo className="size-4" />
+      </Trans>
     </Button>
   );
   const branches = (
@@ -600,7 +612,7 @@ export function PullRequestView({
             />
             <Description pr={pr} write={write} onOpen={openOnGithub} />
             {pr.labels.length > 0 && (
-              <section aria-label="Labels" className="flex flex-wrap gap-1">
+              <section aria-label={t("Labels")} className="flex flex-wrap gap-1">
                 {pr.labels.map((l) => (
                   <Badge key={l} shape="pill">
                     {l}
@@ -636,8 +648,8 @@ export function PullRequestView({
                 <CodeBar>{leading}</CodeBar>
                 <EmptyState
                   icon={<icons.diff aria-hidden />}
-                  title="Files aren't available"
-                  body="This host's plxd can't read a pull request's diff."
+                  title={t("Files aren't available")}
+                  body={t("This host's plxd can't read a pull request's diff.")}
                 />
               </>
             ) : !diff ? (
@@ -650,7 +662,7 @@ export function PullRequestView({
                 <CodeBar>{leading}</CodeBar>
                 <EmptyState
                   icon={<icons.error aria-hidden />}
-                  title="Couldn't read the diff"
+                  title={t("Couldn't read the diff")}
                   body={<span role="alert">{diff.error}</span>}
                 />
               </>
@@ -676,14 +688,14 @@ export function PullRequestView({
                         <Button
                           size="sm"
                           variant="outline"
-                          title={`Commit ${batchName}`}
+                          title={commitBatch}
                           onClick={() => setCommitting([...suggestionBatch])}
                         >
                           <icons.commit aria-hidden />
                           {fullView ? (
-                            `Commit ${batchName}`
+                            commitBatch
                           ) : (
-                            <span aria-label={`Commit ${batchName}`}>{suggestionBatch.size}</span>
+                            <span aria-label={commitBatch}>{suggestionBatch.size}</span>
                           )}
                         </Button>
                       )}
@@ -691,7 +703,7 @@ export function PullRequestView({
                       <div
                         id={`${id}-review`}
                         popover="auto"
-                        aria-label="Your review"
+                        aria-label={t("Your review")}
                         onBeforeToggle={fitReviewToPanel}
                         onToggle={(e) => {
                           if (e.newState === "open")
@@ -757,17 +769,17 @@ export function PullRequestView({
         </p>
       )}
 
-      <Menu ref={menu} id={`${id}-menu`} label="Pull request" align="end" className="w-80 p-1">
+      <Menu ref={menu} id={`${id}-menu`} label={t("Pull request")} align="end" className="w-80 p-1">
         <Item
           Icon={icons.question}
-          label="Ask a question"
-          hint="Adds the pull request to this thread's composer."
+          label={t("Ask a question")}
+          hint={t("Adds the pull request to this thread's composer.")}
           onClick={() => compose(`${url} `, false)}
         />
         <Item
           Icon={icons.info}
-          label="Explain this PR"
-          hint="A walk through the diff and what to read closely."
+          label={t("Explain this PR")}
+          hint={t("A walk through the diff and what to read closely.")}
           onClick={() =>
             compose(
               `Explain this pull request: ${url}. Walk me through the diff and point out what to read closely.`,
@@ -777,8 +789,8 @@ export function PullRequestView({
         />
         <Item
           Icon={icons.agent}
-          label="Fix findings in this thread"
-          hint="Review threads and failed checks, fixed and answered."
+          label={t("Fix findings in this thread")}
+          hint={t("Review threads and failed checks, fixed and answered.")}
           onClick={() =>
             compose(
               `Fix the review findings on this pull request: ${url}. Read its review threads and checks with pull_request_status and failed checks' logs with ci_failure_log, fix what they found, push, and answer each thread you fixed with reply_to_review_thread.`,
@@ -789,25 +801,29 @@ export function PullRequestView({
         {separator}
         <Item
           Icon={pr.draft ? icons.pullRequest : icons.draftPullRequest}
-          label={pr.draft ? "Ready for review" : "Convert to draft"}
+          label={pr.draft ? t("Ready for review") : t("Convert to draft")}
           disabled={busy || !open}
           onClick={() => act(pr.draft ? "ready" : "draft")}
         />
         {separator}
         <Item
           Icon={icons.external}
-          label="Open on GitHub"
+          label={t("Open on GitHub")}
           onClick={() => {
             menu.current?.hidePopover();
             openOnGithub(pr.url);
           }}
         />
-        <Item Icon={icons.copy} label="Copy link" onClick={() => copy(pr.url)} />
-        <Item Icon={icons.copy} label="Copy PR number" onClick={() => copy(String(pr.number))} />
+        <Item Icon={icons.copy} label={t("Copy link")} onClick={() => copy(pr.url)} />
+        <Item
+          Icon={icons.copy}
+          label={t("Copy PR number")}
+          onClick={() => copy(String(pr.number))}
+        />
         {separator}
         <Item
           Icon={icons.closedPullRequest}
-          label="Close pull request"
+          label={t("Close pull request")}
           danger
           disabled={busy || !open}
           onClick={() => {
@@ -819,14 +835,16 @@ export function PullRequestView({
 
       <ConfirmDialog
         ref={closeDialog}
-        title={`Close pull request #${pr.number}?`}
-        action="Close pull request"
+        title={t("Close pull request #{{number}}?", { number: pr.number })}
+        action={t("Close pull request")}
         onConfirm={() => {
           closeDialog.current?.close();
           void act("close");
         }}
       >
-        “{pr.title}” closes without merging. It can be reopened on GitHub.
+        {t("“{{title}}” closes without merging. It can be reopened on GitHub.", {
+          title: pr.title,
+        })}
       </ConfirmDialog>
 
       {shots && (
@@ -879,7 +897,7 @@ function Tabs({
     <div
       ref={list}
       role="tablist"
-      aria-label="Pull request"
+      aria-label={t("Pull request")}
       onKeyDown={(e) => {
         const at = tabs.findIndex((t) => t.id === tab);
         const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
@@ -937,18 +955,18 @@ function Description({
     setSaving(false);
   };
   return (
-    <section aria-label="Description" className="min-w-0">
+    <section aria-label={t("Description")} className="min-w-0">
       <div className="mb-2 flex h-7 items-center gap-2">
-        <h3 className="min-w-0 flex-1 text-reading font-semibold">Description</h3>
+        <h3 className="min-w-0 flex-1 text-reading font-semibold">{t("Description")}</h3>
         {write && draft === undefined && (
-          <IconButton label="Edit description" onClick={() => setDraft(pr.body)}>
+          <IconButton label={t("Edit description")} onClick={() => setDraft(pr.body)}>
             <icons.edit aria-hidden />
           </IconButton>
         )}
       </div>
       {draft !== undefined ? (
         <form
-          aria-label="Edit description"
+          aria-label={t("Edit description")}
           className="overflow-hidden rounded-xl border border-border bg-surface focus-within:border-faint-foreground/60"
           onSubmit={(e) => {
             e.preventDefault();
@@ -956,7 +974,7 @@ function Description({
           }}
         >
           <textarea
-            aria-label="Description"
+            aria-label={t("Description")}
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -969,7 +987,7 @@ function Description({
           />
           <div className="flex justify-end gap-1.5 border-t border-border px-2 py-2">
             <Button size="sm" disabled={saving} onClick={() => setDraft(undefined)}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               size="sm"
@@ -977,14 +995,14 @@ function Description({
               type="submit"
               disabled={saving || draft === pr.body}
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("Saving…") : t("Save")}
             </Button>
           </div>
         </form>
       ) : pr.body.trim() ? (
         <GithubMarkdown text={pr.body} repo={pr.repo} onOpen={onOpen} />
       ) : (
-        <p className="text-body text-faint-foreground">No description provided.</p>
+        <p className="text-body text-faint-foreground">{t("No description provided.")}</p>
       )}
     </section>
   );
@@ -1012,12 +1030,12 @@ function CodeTab({
   const [show, setShow] = useState<"files" | "commits">("files");
   const leading = commits.length > 0 && (
     <Segmented
-      label="Show"
+      label={t("Show")}
       value={show}
       onChange={setShow}
       options={[
-        { value: "files", name: `Files ${files}` },
-        { value: "commits", name: `Commits ${commits.length}` },
+        { value: "files", name: t("Files {{count}}", { count: files }) },
+        { value: "commits", name: t("Commits {{count}}", { count: commits.length }) },
       ]}
     />
   );
@@ -1026,7 +1044,7 @@ function CodeTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <CodeBar>{leading}</CodeBar>
-      <ol aria-label="Commits" className="min-h-0 flex-1 overflow-y-auto p-1">
+      <ol aria-label={t("Commits")} className="min-h-0 flex-1 overflow-y-auto p-1">
         {commits.map((c) => (
           <li
             key={c.oid}
@@ -1077,22 +1095,56 @@ function CommentCard({
           onClick={() => setFull(true)}
           className="mt-2 text-body text-muted-foreground hover:text-foreground"
         >
-          Show full comment
+          {t("Show full comment")}
         </button>
       )}
     </div>
   );
 }
 
-/** A review verdict in words, and its icon. A plain "commented" review shows as its comment. */
-const verdicts: Record<string, { Icon: typeof icons.success; color: string; text: string }> = {
-  commented: { Icon: icons.comment, color: "text-muted-foreground", text: "reviewed" },
-  approved: { Icon: icons.success, color: "text-added", text: "approved these changes" },
-  changesRequested: { Icon: icons.error, color: "text-danger", text: "requested changes" },
+/**
+ * A review verdict, its icon, and its line with the reviewer's name. A plain "commented" review
+ * shows as its comment.
+ */
+const verdicts: Record<
+  string,
+  { Icon: typeof icons.success; color: string; title: (author: string) => ReactNode }
+> = {
+  commented: {
+    Icon: icons.comment,
+    color: "text-muted-foreground",
+    title: (author) => (
+      <Trans values={{ author }}>
+        <span className="font-medium">{"{{author}}"}</span> reviewed
+      </Trans>
+    ),
+  },
+  approved: {
+    Icon: icons.success,
+    color: "text-added",
+    title: (author) => (
+      <Trans values={{ author }}>
+        <span className="font-medium">{"{{author}}"}</span> approved these changes
+      </Trans>
+    ),
+  },
+  changesRequested: {
+    Icon: icons.error,
+    color: "text-danger",
+    title: (author) => (
+      <Trans values={{ author }}>
+        <span className="font-medium">{"{{author}}"}</span> requested changes
+      </Trans>
+    ),
+  },
   dismissed: {
     Icon: icons.skipped,
     color: "text-faint-foreground",
-    text: "had a review dismissed",
+    title: (author) => (
+      <Trans values={{ author }}>
+        <span className="font-medium">{"{{author}}"}</span> had a review dismissed
+      </Trans>
+    ),
   },
 };
 
@@ -1155,8 +1207,10 @@ function Activity({
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="flex flex-col gap-5 px-4 pt-3 pb-6">
         {unresolved.length > 0 && (
-          <section aria-label="Unresolved threads">
-            <GroupHeading className="px-0!">Unresolved threads · {unresolved.length}</GroupHeading>
+          <section aria-label={t("Unresolved threads")}>
+            <GroupHeading className="px-0!">
+              {t("Unresolved threads · {{count}}", { count: unresolved.length })}
+            </GroupHeading>
             <div className="flex flex-col gap-2">
               {unresolved.map((t, i) => (
                 <Fragment key={t.id ?? i}>{renderThread(t)}</Fragment>
@@ -1164,17 +1218,17 @@ function Activity({
             </div>
           </section>
         )}
-        <section aria-label="Timeline">
+        <section aria-label={t("Timeline")}>
           <GroupHeading
             className="px-0!"
             action={
               <Button size="sm" onClick={() => setOldestFirst(!oldestFirst)}>
                 <icons.expand aria-hidden className={oldestFirst ? "rotate-180" : ""} />
-                {oldestFirst ? "Oldest first" : "Newest first"}
+                {oldestFirst ? t("Oldest first") : t("Newest first")}
               </Button>
             }
           >
-            Timeline
+            {t("Timeline")}
           </GroupHeading>
           {events.length ? (
             <ol>
@@ -1183,7 +1237,7 @@ function Activity({
               ))}
             </ol>
           ) : (
-            <p className="text-meta text-faint-foreground">Nothing yet.</p>
+            <p className="text-meta text-faint-foreground">{t("Nothing yet.")}</p>
           )}
         </section>
         <ReviewForm
@@ -1210,9 +1264,9 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
           Icon={icons.pullRequest}
           color="text-added"
           title={
-            <>
-              <span className="font-medium">{pr.author}</span> opened this pull request
-            </>
+            <Trans values={{ author: pr.author }}>
+              <span className="font-medium">{"{{author}}"}</span> opened this pull request
+            </Trans>
           }
           sub={ago(pr.createdAt)}
         />
@@ -1244,7 +1298,9 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
           Icon={icons.comment}
           title={
             <>
-              <span className="font-medium">{c.author}</span> commented
+              <Trans values={{ author: c.author }}>
+                <span className="font-medium">{"{{author}}"}</span> commented
+              </Trans>
               <span className="text-meta text-faint-foreground"> · {ago(c.createdAt)}</span>
             </>
           }
@@ -1265,11 +1321,7 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
         <TimelineEvent
           Icon={verdict.Icon}
           color={verdict.color}
-          title={
-            <>
-              <span className="font-medium">{r.author}</span> {verdict.text}
-            </>
-          }
+          title={verdict.title(r.author)}
           sub={ago(r.submittedAt)}
         />
       ),
@@ -1285,11 +1337,17 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
           Icon={icons.merged}
           color="text-project-violet"
           title={
-            <>
-              <span className="font-medium">{pr.mergedBy ?? "Someone"}</span> merged{" "}
-              <span className="font-mono">{pr.headBranch}</span> into{" "}
-              <span className="font-mono">{pr.baseBranch}</span>
-            </>
+            <Trans
+              values={{
+                who: pr.mergedBy ?? t("Someone"),
+                head: pr.headBranch,
+                base: pr.baseBranch,
+              }}
+            >
+              <span className="font-medium">{"{{who}}"}</span> merged{" "}
+              <span className="font-mono">{"{{head}}"}</span> into{" "}
+              <span className="font-mono">{"{{base}}"}</span>
+            </Trans>
           }
           sub={ago(end)}
         />
@@ -1297,7 +1355,7 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
         <TimelineEvent
           Icon={icons.closedPullRequest}
           color="text-danger"
-          title="Closed without merging"
+          title={t("Closed without merging")}
           sub={ago(end)}
         />
       ),
@@ -1354,7 +1412,7 @@ function Skeleton() {
   return (
     <div
       role="status"
-      aria-label="Loading the pull request"
+      aria-label={t("Loading the pull request")}
       className="flex min-h-0 flex-1 flex-col"
     >
       <div className="border-b border-border px-4 pt-4 pb-3">
@@ -1379,7 +1437,7 @@ function Skeleton() {
 /** The Code tab while its diff is read. */
 function DiffSkeleton() {
   return (
-    <div role="status" aria-label="Loading the diff" className="flex flex-col gap-2 px-3 py-3">
+    <div role="status" aria-label={t("Loading the diff")} className="flex flex-col gap-2 px-3 py-3">
       {[0, 1, 2].map((i) => (
         <div key={i} className="overflow-hidden rounded-lg border border-border">
           <div className={`${bone} h-10 rounded-none`} />

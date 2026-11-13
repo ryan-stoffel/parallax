@@ -1,5 +1,9 @@
+import { t } from "i18next";
 import { Activity, KeyRound, Plus, Terminal } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { Trans } from "react-i18next";
+
+import { msg } from "../../i18n";
 
 import type { ConnectState } from "../../preload/bridge";
 import type {
@@ -30,20 +34,25 @@ import {
 /** A SHA-256 fingerprint in hex as browsers show it: `AB CD …`. */
 const fingerprint = (hex: string) => hex.toUpperCase().match(/../g)!.join(" ");
 
-/** What a paired computer can do, said where a pairing code is shown. */
-const GRANTS =
-  "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers, until you make it read-only. Share the code only with your own computers.";
+/** What a paired computer can do, said where a pairing code is shown. Shown with `t`. */
+const GRANTS = msg(
+  "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers, until you make it read-only. Share the code only with your own computers.",
+);
 
-/** Why read-only is for good: it belongs to the device's key, and only a new key has full access (0091). */
-const READ_ONLY_FOR_GOOD =
-  "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.";
+/**
+ * Why read-only is for good: it belongs to the device's key, and only a new key has full access
+ * (0091). Shown with `t`.
+ */
+const READ_ONLY_FOR_GOOD = msg(
+  "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.",
+);
 
-/** How the connection check names a part. */
+/** How the connection check names a part. Shown with `t`. */
 const CHECK_PARTS: Record<RelayCheckPart, string> = {
-  signIn: "Sign-in",
+  signIn: msg("Sign-in"),
   relay: "Parallax Connect",
-  listener: "Listener",
-  stream: "Stream",
+  listener: msg("Listener"),
+  stream: msg("Stream"),
 };
 
 /** How many computers an account's relay holds. */
@@ -62,7 +71,7 @@ export function useAccountSignIn() {
     setSigningIn(true);
     const failed = await window.parallax.signIn(false);
     setSigningIn(false);
-    if (failed) notify({ tone: "error", title: "Couldn't sign in", body: failed });
+    if (failed) notify({ tone: "error", title: t("Couldn't sign in"), body: failed });
   };
   return {
     signedIn: !!profile,
@@ -187,7 +196,10 @@ export function useLocalAccess() {
       retry();
       const answer = await window.parallax.request(localId, "host/settings/set", { remote: next });
       if ("error" in answer)
-        return failed(`Couldn't turn pairing ${next ? "on" : "off"}`, answer.error.message);
+        return failed(
+          next ? t("Couldn't turn pairing on") : t("Couldn't turn pairing off"),
+          answer.error.message,
+        );
       setOn(answer.result.remote);
       setAgentWork(answer.result.agentWork);
       setCode(undefined);
@@ -199,7 +211,10 @@ export function useLocalAccess() {
         agentWork: next,
       });
       if ("error" in answer)
-        return failed(`Couldn't turn agent work ${next ? "on" : "off"}`, answer.error.message);
+        return failed(
+          next ? t("Couldn't turn agent work on") : t("Couldn't turn agent work off"),
+          answer.error.message,
+        );
       setAgentWork(answer.result.agentWork);
       setOn(answer.result.remote);
       void readSessions();
@@ -211,7 +226,7 @@ export function useLocalAccess() {
       });
       if ("error" in answer)
         return failed(
-          `Couldn't turn Open in a browser ${next ? "on" : "off"}`,
+          next ? t("Couldn't turn Open in a browser on") : t("Couldn't turn Open in a browser off"),
           answer.error.message,
         );
       setWeb(answer.result.remoteWeb);
@@ -219,7 +234,9 @@ export function useLocalAccess() {
     // On, it registers this computer under the signed-in account first: main sends the token to plxd.
     toggleRelay: async (next: boolean) => {
       retry();
-      const title = `Couldn't turn Parallax Connect ${next ? "on" : "off"}`;
+      const title = next
+        ? t("Couldn't turn Parallax Connect on")
+        : t("Couldn't turn Parallax Connect off");
       const registered = next ? await window.parallax.registerRelay() : undefined;
       if (registered) return failed(title, registered);
       const answer = await window.parallax.request(localId, "host/settings/set", { relay: next });
@@ -229,7 +246,8 @@ export function useLocalAccess() {
     },
     toggleTailscale: async (next: boolean) => {
       const answer = await window.parallax.setConnect(next);
-      if (answer) failed(`Couldn't turn Tailscale ${next ? "on" : "off"}`, answer);
+      if (answer)
+        failed(next ? t("Couldn't turn Tailscale on") : t("Couldn't turn Tailscale off"), answer);
     },
     /** Takes a computer the app can't list off the account. Resolves to why not. */
     removeRelayHost: async (hostId: string) => {
@@ -241,7 +259,7 @@ export function useLocalAccess() {
     pair: async () => {
       retry();
       const answer = await window.parallax.request(localId, "remote/pair", {});
-      if ("error" in answer) return failed("Couldn't make a pairing code", answer.error.message);
+      if ("error" in answer) return failed(t("Couldn't make a pairing code"), answer.error.message);
       setCode({ ...answer.result, before: sessions.length });
       void readSessions();
     },
@@ -249,14 +267,15 @@ export function useLocalAccess() {
     revoke: async (id: string) => {
       retry();
       const answer = await window.parallax.revokeDevice(id);
-      if (typeof answer === "string") return failed("Couldn't revoke the computer", answer);
+      if (typeof answer === "string") return failed(t("Couldn't revoke the computer"), answer);
       setStatus(answer);
     },
     // It reaches every computer this app reaches, closes the device's connections, and can't be undone.
     makeReadOnly: async (id: string) => {
       retry();
       const answer = await window.parallax.makeDeviceReadOnly(id);
-      if (typeof answer === "string") return failed("Couldn't make the computer read-only", answer);
+      if (typeof answer === "string")
+        return failed(t("Couldn't make the computer read-only"), answer);
       setStatus(answer);
     },
   };
@@ -267,11 +286,11 @@ export type LocalAccess = ReturnType<typeof useLocalAccess>;
 /** A line under a setting's description saying what it's doing now. */
 const statusLine = "mt-1 block text-meta text-foreground";
 
-/** Where SSH is turned on, on this computer's OS, for people. */
+/** Where SSH is turned on, on this computer's OS, for people. Shown with `t`. */
 const SSH_SETTING: Record<string, string> = {
-  darwin: "Remote Login in System Settings › General › Sharing",
-  win32: "OpenSSH Server in Windows' optional features",
-  linux: "the OpenSSH server (sshd)",
+  darwin: msg("Remote Login in System Settings › General › Sharing"),
+  win32: msg("OpenSSH Server in Windows' optional features"),
+  linux: msg("the OpenSSH server (sshd)"),
 };
 
 /**
@@ -319,15 +338,16 @@ export function ConnectCard({
           <div className="min-w-0 flex-1">
             <h2 className="text-reading font-semibold">Parallax Connect</h2>
             <p className="mt-0.5 text-meta text-muted-foreground">
-              Reach this computer from your phone and your other computers, wherever they are.
-              Parallax Connect can't read your threads.
+              {t(
+                "Reach this computer from your phone and your other computers, wherever they are. Parallax Connect can't read your threads.",
+              )}
             </p>
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {access.relay === undefined ? null : signedOut && !relay ? (
             <button type="button" disabled={signingIn} onClick={onSignIn} className={primaryButton}>
-              {signingIn ? "Waiting for your browser…" : "Sign in"}
+              {signingIn ? t("Waiting for your browser…") : t("Sign in")}
             </button>
           ) : (
             <Switch
@@ -344,11 +364,15 @@ export function ConnectCard({
             <span role="status" className="flex items-center gap-2 text-body">
               <StatusDot tone={linked ? "on" : status?.relay?.problem ? "error" : "off"} />
               <span>
-                {linked ? "Connected" : (status?.relay?.problem ?? "Connecting…")}
+                {linked ? t("Connected") : (status?.relay?.problem ?? t("Connecting…"))}
                 {!!relayHosts?.length && (
                   <span className="text-muted-foreground">
                     {" "}
-                    · {relayHosts.length} of {ACCOUNT_COMPUTERS} computers on your account
+                    ·{" "}
+                    {t("{{used}} of {{count}} computers on your account", {
+                      used: relayHosts.length,
+                      count: ACCOUNT_COMPUTERS,
+                    })}
                   </span>
                 )}
               </span>
@@ -356,12 +380,16 @@ export function ConnectCard({
             {(checking || result !== undefined) && (
               <span role="status" className={statusLine}>
                 {checking
-                  ? "Checking…"
+                  ? t("Checking…")
                   : typeof result === "string"
                     ? result
                     : report?.failed
-                      ? `${CHECK_PARTS[report.failed]} failed. ${report.problem} ${report.fix}`
-                      : `Working. The connection took ${report?.roundTripMs} ms.`}
+                      ? t("{{part}} failed. {{problem}} {{fix}}", {
+                          part: t(CHECK_PARTS[report.failed]),
+                          problem: report.problem,
+                          fix: report.fix,
+                        })
+                      : t("Working. The connection took {{ms}} ms.", { ms: report?.roundTripMs })}
               </span>
             )}
           </div>
@@ -372,29 +400,29 @@ export function ConnectCard({
                 className={quietButton}
                 onClick={() => copy(report.diagnostics)}
               >
-                {copied ? "Copied" : "Copy diagnostics"}
+                {copied ? t("Copied") : t("Copy diagnostics")}
               </button>
             )}
             <button
               type="button"
               className={outlineButton}
               disabled={checking}
-              title="Opens a real connection through Parallax Connect back to this computer."
+              title={t("Opens a real connection through Parallax Connect back to this computer.")}
               onClick={() => void check()}
             >
               <Activity aria-hidden />
-              Check connection
+              {t("Check connection")}
             </button>
           </div>
         </div>
       )}
       <div className="border-t border-border/40">
         <AccessRow
-          title="Setup code"
+          title={t("Setup code")}
           description={
             onShowCode
-              ? "Adding this computer from another one? Show this code there."
-              : "Sign in first, then show this code on the computer adding this one."
+              ? t("Adding this computer from another one? Show this code there.")
+              : t("Sign in first, then show this code on the computer adding this one.")
           }
         >
           <button
@@ -404,7 +432,7 @@ export function ConnectCard({
             className={outlineButton}
           >
             <KeyRound aria-hidden />
-            Show setup code
+            {t("Show setup code")}
           </button>
         </AccessRow>
       </div>
@@ -417,7 +445,8 @@ export function ConnectCard({
  * change whether SSH is on here, so it says where that is, and what Add computer does.
  */
 export function SshCard() {
-  const where = SSH_SETTING[window.parallax.platform] ?? "an SSH server";
+  const setting = SSH_SETTING[window.parallax.platform];
+  const where = setting ? t(setting) : t("an SSH server");
   return (
     <section aria-label="SSH" data-setting="ssh" className={`${card} mb-10`}>
       <div className="flex items-start gap-3.5 px-4 py-4">
@@ -427,10 +456,13 @@ export function SshCard() {
         <div className="min-w-0 flex-1">
           <h2 className="text-reading font-semibold">SSH</h2>
           <p className="mt-0.5 text-meta text-muted-foreground">
-            Add this computer from another one: there, choose Add computer, then Over SSH, and enter
-            your user and this computer's address. Parallax installs plxd here if it's missing.
+            {t(
+              "Add this computer from another one: there, choose Add computer, then Over SSH, and enter your user and this computer's address. Parallax installs plxd here if it's missing.",
+            )}
           </p>
-          <p className="mt-1 text-meta text-muted-foreground">Turn on {where} first.</p>
+          <p className="mt-1 text-meta text-muted-foreground">
+            {t("Turn on {{where}} first.", { where })}
+          </p>
         </div>
       </div>
     </section>
@@ -452,16 +484,18 @@ export function MoreWaysIn({
   connect: ConnectState | undefined;
 }) {
   const { web, on, status, showing } = access;
-  const addresses = (showing?.addresses ?? ["this computer's address"])
+  const addresses = (showing?.addresses ?? [t("this computer's address")])
     .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
     .join(", ");
   return (
-    <section aria-label="More ways in" className="mb-10">
-      <h2 className="mb-3 text-body font-medium text-muted-foreground">More ways in</h2>
+    <section aria-label={t("More ways in")} className="mb-10">
+      <h2 className="mb-3 text-body font-medium text-muted-foreground">{t("More ways in")}</h2>
       <div className={card}>
         <AccessRow
-          title="Pair on this network"
-          description="Let a computer, phone or browser on the same network pair with a one-time code. Use it without a Parallax account."
+          title={t("Pair on this network")}
+          description={t(
+            "Let a computer, phone or browser on the same network pair with a one-time code. Use it without a Parallax account.",
+          )}
           status={
             on &&
             status?.problem && (
@@ -472,7 +506,7 @@ export function MoreWaysIn({
           }
         >
           <Switch
-            label="Pair on this network"
+            label={t("Pair on this network")}
             checked={!!on}
             disabled={on === undefined}
             onChange={(next) => void access.toggle(next)}
@@ -480,19 +514,21 @@ export function MoreWaysIn({
         </AccessRow>
         {web !== undefined && (
           <AccessRow
-            title="Open in a browser"
+            title={t("Open in a browser")}
             description={
               !on || !web ? (
-                "Use Parallax from a web browser on another device on this network. It pairs like a computer, so it needs Pair on this network."
+                t(
+                  "Use Parallax from a web browser on another device on this network. It pairs like a computer, so it needs Pair on this network.",
+                )
               ) : (
-                <>
-                  Open <span className="font-mono text-foreground">{addresses}</span> and pair with
-                  a code from Pair a device. Use the Tailscale address where you can. On this
+                <Trans values={{ addresses }}>
+                  Open <span className="font-mono text-foreground">{"{{addresses}}"}</span> and pair
+                  with a code from Pair a device. Use the Tailscale address where you can. On this
                   network the browser warns about this computer's certificate: continue only if it
                   shows this SHA-256 fingerprint, or trust the certificate in your OS first.
                   Otherwise someone on the network could pose as this computer. Turning this off
                   disconnects paired browsers.
-                </>
+                </Trans>
               )
             }
             status={
@@ -500,7 +536,7 @@ export function MoreWaysIn({
               web &&
               status?.fingerprint && (
                 <span
-                  aria-label="Certificate fingerprint"
+                  aria-label={t("Certificate fingerprint")}
                   className="mt-1 block font-mono text-meta break-all text-foreground"
                 >
                   {fingerprint(status.fingerprint)}
@@ -509,7 +545,7 @@ export function MoreWaysIn({
             }
           >
             <Switch
-              label="Open in a browser"
+              label={t("Open in a browser")}
               checked={!!on && web}
               disabled={!on}
               onChange={(next) => void access.toggleWeb(next)}
@@ -518,17 +554,21 @@ export function MoreWaysIn({
         )}
         {access.canAgentWork && (
           <AccessRow
-            title="Agents can work here"
-            description="Let agents on your other computers run commands on this one, as you. Use it to hand work to this computer. Needs Parallax Connect, and turns on pairing."
+            title={t("Agents can work here")}
+            description={t(
+              "Let agents on your other computers run commands on this one, as you. Use it to hand work to this computer. Needs Parallax Connect, and turns on pairing.",
+            )}
             status={
               access.agentWork &&
               !access.relay && (
-                <span className="mt-1 block text-meta text-warning">Needs Parallax Connect</span>
+                <span className="mt-1 block text-meta text-warning">
+                  {t("Needs Parallax Connect")}
+                </span>
               )
             }
           >
             <Switch
-              label="Let agents on my other computers work here"
+              label={t("Let agents on my other computers work here")}
               checked={!!access.agentWork}
               onChange={(next) => void access.toggleAgentWork(next)}
             />
@@ -537,7 +577,9 @@ export function MoreWaysIn({
         {connect?.on && (
           <AccessRow
             title="Tailscale"
-            description="On from an older setup. Parallax Connect and SSH reach this computer without it. Turn it off unless you use Tailscale devices in Parallax."
+            description={t(
+              "On from an older setup. Parallax Connect and SSH reach this computer without it. Turn it off unless you use Tailscale devices in Parallax.",
+            )}
           >
             <Switch
               label="Tailscale"
@@ -566,9 +608,10 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
   const canPair = !!access.on && !!access.status?.listening;
   return (
     <CollapsibleCard
-      title="Devices with access"
+      title={t("Devices with access")}
       summary={
-        sessions.length > 0 && (sessions.length === 1 ? "1 device" : `${sessions.length} devices`)
+        sessions.length > 0 &&
+        t("{{count}} devices", { count: sessions.length, defaultValue_one: "{{count}} device" })
       }
       // A code on show is never hidden.
       open={!!showing}
@@ -582,7 +625,7 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
             className={outlineButton}
           >
             <Plus aria-hidden />
-            Pair a device
+            {t("Pair a device")}
           </button>
         )
       }
@@ -591,28 +634,28 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
       <div data-setting={canPair || showing ? undefined : "pair-a-device"}>
         {showing && (
           <AccessRow
-            title="Pair a device"
+            title={t("Pair a device")}
             description={
-              <>
+              <Trans values={{ name: showing.name, grants: t(GRANTS) }}>
                 On the other computer, choose Add computer, then On this network, pick{" "}
-                <span className="text-foreground">{showing.name}</span>, and enter this code. It
-                works once, for 5 minutes. {GRANTS}
-              </>
+                <span className="text-foreground">{"{{name}}"}</span>, and enter this code. It works
+                once, for 5 minutes. {"{{grants}}"}
+              </Trans>
             }
           >
             <span
-              aria-label="Pairing code"
+              aria-label={t("Pairing code")}
               className="font-mono text-heading font-semibold tracking-widest"
             >
               {showing.code}
             </span>
             <button type="button" className={quietButton} onClick={() => void access.pair()}>
-              New code
+              {t("New code")}
             </button>
           </AccessRow>
         )}
         {sessions.map((s) => {
-          const paired = `Paired ${new Date(s.createdAt).toLocaleDateString()}`;
+          const paired = t("Paired {{date}}", { date: new Date(s.createdAt).toLocaleDateString() });
           return (
             <div
               key={s.id}
@@ -620,23 +663,26 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
             >
               <div className="min-w-[min(14rem,100%)] flex-1">
                 <span className="flex items-center gap-2 text-body font-medium">
-                  <span className="truncate">{s.name || "Unnamed computer"}</span>
+                  <span className="truncate">{s.name || t("Unnamed computer")}</span>
                   {s.readOnly && (
-                    <span className={`${badge} text-muted-foreground`}>Read-only</span>
+                    <span className={`${badge} text-muted-foreground`}>{t("Read-only")}</span>
                   )}
                 </span>
                 <span className="mt-0.5 block text-meta text-muted-foreground">
                   {confirming === s.id
-                    ? `Make this computer read-only on all your computers? It can read threads but not change anything. ${READ_ONLY_FOR_GOOD}`
+                    ? `${t("Make this computer read-only on all your computers? It can read threads but not change anything.")} ${t(READ_ONLY_FOR_GOOD)}`
                     : s.readOnly
-                      ? `${paired}. It reads threads and can't change anything. For full access, revoke it, then pair it again or choose Start over with a new key on that device.`
+                      ? t(
+                          "{{paired}}. It reads threads and can't change anything. For full access, revoke it, then pair it again or choose Start over with a new key on that device.",
+                          { paired },
+                        )
                       : paired}
                 </span>
               </div>
               <div className="ml-auto flex shrink-0 items-center gap-2">
                 {confirming === s.id ? (
                   <ConfirmRemove
-                    label="Make read-only"
+                    label={t("Make read-only")}
                     onRemove={() => {
                       setConfirming(undefined);
                       void access.makeReadOnly(s.id);
@@ -651,7 +697,7 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
                         className={quietButton}
                         onClick={() => setConfirming(s.id)}
                       >
-                        Make read-only
+                        {t("Make read-only")}
                       </button>
                     )}
                     <button
@@ -659,7 +705,7 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
                       className={quietButton}
                       onClick={() => void access.revoke(s.id)}
                     >
-                      Revoke
+                      {t("Revoke")}
                     </button>
                   </>
                 )}
@@ -669,8 +715,8 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
         })}
         {!sessions.length && !showing && (
           <p className="px-4 py-3 text-body text-muted-foreground">
-            Nothing has access yet.
-            {!canPair && " Turn on Pair on this network to pair a device."}
+            {t("Nothing has access yet.")}
+            {!canPair && ` ${t("Turn on Pair on this network to pair a device.")}`}
           </p>
         )}
       </div>
@@ -724,16 +770,17 @@ export function PairDialog({ onDone }: { onDone: () => void }) {
       >
         <div>
           <h2 id={titleId} className="text-reading font-semibold">
-            Add a computer on this network
+            {t("Add a computer on this network")}
           </h2>
           <p className="mt-1.5 text-body text-muted-foreground">
-            On the other computer, turn on Pair on this network in Settings › Sharing & access and
-            choose Pair a device. Then enter the code it shows. Pair only your own computers.
+            {t(
+              "On the other computer, turn on Pair on this network in Settings › Sharing & access and choose Pair a device. Then enter the code it shows. Pair only your own computers.",
+            )}
           </p>
         </div>
         {typing ? (
           <input
-            aria-label="Address"
+            aria-label={t("Address")}
             placeholder="192.168.1.20"
             className={`${rowField} font-mono`}
             value={address}
@@ -743,18 +790,18 @@ export function PairDialog({ onDone }: { onDone: () => void }) {
         ) : (
           <div
             role="radiogroup"
-            aria-label="Computers showing a code"
+            aria-label={t("Computers showing a code")}
             className="flex flex-wrap gap-1.5"
           >
             {found === undefined && (
-              <span className="text-body text-muted-foreground">Looking for computers…</span>
+              <span className="text-body text-muted-foreground">{t("Looking for computers…")}</span>
             )}
             {typeof found === "string" && <span className="text-body text-danger">{found}</span>}
             {Array.isArray(found) && !found.length && (
               <span className="text-body text-muted-foreground">
-                No computer on this network is showing a code.{" "}
+                {t("No computer on this network is showing a code.")}{" "}
                 <button type="button" className="underline" onClick={() => void look()}>
-                  Look again
+                  {t("Look again")}
                 </button>
               </span>
             )}
@@ -775,14 +822,14 @@ export function PairDialog({ onDone }: { onDone: () => void }) {
         )}
         <div className="flex flex-wrap items-center gap-2">
           <input
-            aria-label="Code"
+            aria-label={t("Code", { context: "pairing code" })}
             placeholder="7KQ-4M2"
             className={`${rowField.replace("w-56", "w-32")} font-mono uppercase`}
             value={code}
             onChange={(e) => setCode(e.target.value)}
           />
-          <button type="button" className={quietButton} onClick={() => setTyping((t) => !t)}>
-            {typing ? "Find computers instead" : "Enter an address instead"}
+          <button type="button" className={quietButton} onClick={() => setTyping((was) => !was)}>
+            {typing ? t("Find computers instead") : t("Enter an address instead")}
           </button>
         </div>
         {error && (
@@ -792,14 +839,14 @@ export function PairDialog({ onDone }: { onDone: () => void }) {
         )}
         <div className="flex justify-end gap-2">
           <button type="button" className={quietButton} onClick={() => dialog.current?.close()}>
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="submit"
             className={primaryButton}
             disabled={pairing || !target || !code.trim()}
           >
-            {pairing ? "Pairing…" : "Pair"}
+            {pairing ? t("Pairing…") : t("Pair")}
           </button>
         </div>
       </form>

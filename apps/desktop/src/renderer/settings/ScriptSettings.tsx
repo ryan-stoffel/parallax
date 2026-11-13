@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RepoScript } from "../../protocol/generated/protocol";
@@ -60,7 +61,7 @@ export function RepoScripts({
     if ("error" in answer)
       return notify({
         tone: "error",
-        title: `Couldn't save ${repo.name}'s scripts`,
+        title: t("Couldn't save {{name}}'s scripts", { name: repo.name }),
         body: describeError(answer.error),
       });
     setSaved(answer.result.scripts);
@@ -72,16 +73,16 @@ export function RepoScripts({
   edited.current = saved !== undefined && dirty;
 
   const empty = !connected
-    ? "Not connected"
+    ? t("Not connected")
     : !supported
-      ? "This host's plxd can't run setup scripts."
+      ? t("This host's plxd can't run setup scripts.")
       : saved === undefined
-        ? (error ?? "Loading…")
+        ? (error ?? t("Loading…"))
         : undefined;
   return (
     <>
       <Section
-        title="Scripts"
+        title={t("Scripts")}
         action={
           !empty && (
             <button
@@ -89,7 +90,7 @@ export function RepoScripts({
               className={quietButton}
               onClick={() => setScripts([...scripts, blank])}
             >
-              Add script
+              {t("Add script")}
             </button>
           )
         }
@@ -98,15 +99,15 @@ export function RepoScripts({
           <p className="px-4 py-3 text-body text-muted-foreground">{empty}</p>
         ) : scripts.length === 0 ? (
           <p className="px-4 py-3 text-body text-muted-foreground">
-            No scripts. Add one, or import one from parallax.json.
+            {t("No scripts. Add one, or import one from parallax.json.")}
           </p>
         ) : (
           scripts.map((script, i) => (
             <div key={i} className="border-border px-4 py-3 not-last:border-b">
               <div className="flex items-center gap-2">
                 <input
-                  aria-label="Name"
-                  placeholder="Name"
+                  aria-label={t("Name")}
+                  placeholder={t("Name")}
                   value={script.name}
                   onChange={(e) => edit(i, { name: e.target.value })}
                   className={`${field} mt-0 font-medium`}
@@ -116,11 +117,11 @@ export function RepoScripts({
                   className={quietButton}
                   onClick={() => setScripts(scripts.filter((_, j) => j !== i))}
                 >
-                  Remove
+                  {t("Remove")}
                 </button>
               </div>
               <textarea
-                aria-label="Command"
+                aria-label={t("Command")}
                 placeholder="pnpm install"
                 rows={2}
                 value={script.command}
@@ -130,29 +131,41 @@ export function RepoScripts({
               <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-body text-muted-foreground">
                 <span className="flex items-center gap-2">
                   <Switch
-                    label={`Run ${script.name || "it"} on a new worktree`}
+                    label={
+                      script.name
+                        ? t("Run {{name}} on a new worktree", { name: script.name })
+                        : t("Run it on a new worktree")
+                    }
                     checked={script.runOnWorktreeCreate ?? false}
                     onChange={(on) => edit(i, { runOnWorktreeCreate: on })}
                   />
-                  On a new worktree
+                  {t("On a new worktree")}
                 </span>
                 {script.runOnWorktreeCreate && (
                   <span className="flex items-center gap-2">
                     <Switch
-                      label={`Hold the agent until ${script.name || "it"} finishes`}
+                      label={
+                        script.name
+                          ? t("Hold the agent until {{name}} finishes", { name: script.name })
+                          : t("Hold the agent until it finishes")
+                      }
                       checked={script.async === false}
                       onChange={(on) => edit(i, { async: on ? false : undefined })}
                     />
-                    Agent waits for it
+                    {t("Agent waits for it")}
                   </span>
                 )}
                 <span className="flex items-center gap-2">
                   <Switch
-                    label={`Run ${script.name || "it"} when a thread settles`}
+                    label={
+                      script.name
+                        ? t("Run {{name}} when a thread settles", { name: script.name })
+                        : t("Run it when a thread settles")
+                    }
                     checked={script.runOnSettle ?? false}
                     onChange={(on) => edit(i, { runOnSettle: on })}
                   />
-                  When a thread settles
+                  {t("When a thread settles")}
                 </span>
               </div>
             </div>
@@ -166,7 +179,7 @@ export function RepoScripts({
               disabled={!dirty || busy}
               onClick={() => setScripts(saved ?? [])}
             >
-              Discard
+              {t("Discard")}
             </button>
             <button
               type="button"
@@ -174,16 +187,17 @@ export function RepoScripts({
               disabled={!dirty || busy}
               onClick={() => void save()}
             >
-              Save
+              {t("Save")}
             </button>
           </div>
         )}
       </Section>
       {!empty && (file?.error || (file?.scripts.length ?? 0) > 0) && (
-        <Section title="From parallax.json">
+        <Section title={t("From parallax.json")}>
           <p className="border-b border-border px-4 py-3 text-body text-muted-foreground">
-            The repository&apos;s parallax.json declares these. They run only once you import and
-            save them.
+            {t(
+              "The repository's parallax.json declares these. They run only once you import and save them.",
+            )}
           </p>
           {file?.error && (
             <p role="alert" className="px-4 py-3 text-body text-danger">
@@ -211,7 +225,7 @@ export function RepoScripts({
                 className={quietButton}
                 onClick={() => setScripts([...scripts, script])}
               >
-                Import
+                {t("Import")}
               </button>
             </div>
           ))}

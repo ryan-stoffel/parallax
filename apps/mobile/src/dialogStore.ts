@@ -1,6 +1,7 @@
 // What the app's own dialogs, menus, and notices (Dialogs.tsx) show. Called like iOS's Alert from
 // anywhere, including code outside a component. Dialogs and menus wait their turn, one at a time.
 // A notice doesn't block anything, so the latest replaces the last. Pure, for the test.
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 
 export interface DialogButton {
@@ -92,7 +93,7 @@ export function showPrompt(
 ) {
   const buttons: DialogButton[] = Array.isArray(answer)
     ? answer
-    : [{ text: "Cancel", style: "cancel" }, { text: "OK", onPress: (text) => answer?.(text ?? "") }];
+    : [{ text: t("Cancel"), style: "cancel" }, { text: t("OK"), onPress: (text) => answer?.(text ?? "") }];
   open({ kind: "prompt", title, message, buttons, secure: type === "secure-text", value, keyboardType });
 }
 

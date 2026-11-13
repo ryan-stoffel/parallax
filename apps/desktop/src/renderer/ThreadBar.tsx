@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Folder, FolderGit2, GitBranch, GitPullRequestArrow, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
@@ -49,7 +50,7 @@ export function ThreadBar({
 }) {
   const [opening, setOpening] = useState(false);
   const urls = run.pullRequests ?? [];
-  const place = run.checkout ? "Local checkout" : "Worktree";
+  const place = run.checkout ? t("Local checkout") : t("Worktree");
   // Neutral in a pane that isn't focused, which reads no pull requests' state.
   const most = prs ? majorityLook(prs) : lookOf();
   const openPr = async () => {
@@ -64,9 +65,9 @@ export function ThreadBar({
     const short = onSetUpGithub && githubProblem(answer.error);
     notify({
       tone: "error",
-      title: "Couldn't create the pull request",
+      title: t("Couldn't create the pull request"),
       body: short || describeError(answer.error),
-      action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
+      action: short ? { label: t("Set up GitHub"), run: onSetUpGithub } : undefined,
     });
   };
   return (
@@ -81,7 +82,7 @@ export function ThreadBar({
       </span>
       <span className="flex min-w-0 items-center gap-1">
         {run.branch && (
-          <span className={item} title={`Branch: ${run.branch}`}>
+          <span className={item} title={t("Branch: {{branch}}", { branch: run.branch })}>
             <GitBranch aria-hidden />
             <span className="truncate">{run.branch}</span>
           </span>
@@ -111,7 +112,10 @@ export function ThreadBar({
             ) : (
               <button
                 type="button"
-                aria-label={`${urls.length} pull requests`}
+                aria-label={t("{{count}} pull requests", {
+                  count: urls.length,
+                  defaultValue_one: "{{count}} pull request",
+                })}
                 title={urls.map((url) => `#${numberOf(url)}`).join(", ")}
                 onClick={onOpenPrs}
                 className={`${item} shrink-0 hover:bg-hover`}
@@ -132,7 +136,7 @@ export function ThreadBar({
             ) : (
               <GitPullRequestArrow aria-hidden />
             )}
-            {opening ? "Creating PR…" : "Create PR"}
+            {opening ? t("Creating PR…") : t("Create PR")}
           </button>
         )}
       </span>

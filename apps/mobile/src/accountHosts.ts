@@ -7,6 +7,7 @@
 // as `plxd dial`'s `device_key`, each host's session, the hosts it trusts, and its request limits.
 
 import * as SecureStore from "expo-secure-store";
+import { t } from "i18next";
 
 import { openRelay, PinnedSocket, randomBytes, request } from "../modules/pinned-tls";
 import {
@@ -26,6 +27,7 @@ import {
   type Known,
   type Lists,
 } from "./access";
+import { msg } from "../../desktop/src/i18n";
 import type { KeyStanding } from "../../desktop/src/preload/bridge";
 import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
 import { relayCapNotice } from "../../desktop/src/renderer/relayCap";
@@ -127,14 +129,14 @@ export const relayCap = (name: string, usage: RelayUsage | undefined) =>
  */
 export function relayProblem(status: number | undefined, usage?: RelayUsage): string | undefined {
   if (status === undefined) return undefined;
-  if (status === 503) return "That computer is offline or asleep.";
+  if (status === 503) return t("That computer is offline or asleep.");
   if (status === 429) {
-    const cap = relayCap("That computer", usage);
-    return cap?.reached ? cap.body : "Too many connections to that computer this minute. Try again shortly.";
+    const cap = relayCap(t("That computer"), usage);
+    return cap?.reached ? cap.body : t("Too many connections to that computer this minute. Try again shortly.");
   }
-  if (status === 401 || status === 403) return "Parallax Connect didn't take this phone's sign-in.";
-  if (status === 404) return "Parallax Connect doesn't know that computer. Run npx plx-cli connect --channel nightly on it.";
-  return `Parallax Connect refused the connection (${status}).`;
+  if (status === 401 || status === 403) return t("Parallax Connect didn't take this phone's sign-in.");
+  if (status === 404) return t("Parallax Connect doesn't know that computer. Run npx plx-cli connect --channel nightly on it.");
+  return t("Parallax Connect refused the connection ({{status}}).", { status });
 }
 
 /** What the account's list last said of each host's cap, for a refusal of its stream. */
@@ -429,7 +431,7 @@ export class AccountHosts {
       };
     }
     const token = await this.token();
-    if (!token) throw new Error("Sign in to reach your computers through Parallax Connect.");
+    if (!token) throw new Error(t("Sign in to reach your computers through Parallax Connect."));
     const relay = RELAY_URL.replace(/^http/, "ws");
     const bridge = await openRelay(`${relay}/v1/hosts/${hostId}/connect`, token);
     return {
@@ -453,8 +455,8 @@ export class AccountHosts {
   ) {
     const answer = await request(`${at.base}${path}`, method, headers, body, at.pin, timeout).catch(
       (e: { code?: string; message?: string }) => {
-        if (e.code === "ERR_WRONG_HOST") throw new WrongHost("Another computer answered for that one.");
-        throw new Error(at.problem() ?? "Couldn't reach that computer.");
+        if (e.code === "ERR_WRONG_HOST") throw new WrongHost(t("Another computer answered for that one."));
+        throw new Error(at.problem() ?? t("Couldn't reach that computer."));
       },
     );
     let json: Record<string, unknown> = {};
@@ -467,7 +469,7 @@ export class AccountHosts {
   /** The descriptor at `at`, which sends no credential: how a route proves it reaches the host. */
   private async describe(at: Endpoint): Promise<Described> {
     const { status, json, fingerprint } = await this.call(at, "GET", "/.well-known/parallax", {});
-    if (status !== 200) throw new Error(`That computer answered ${status}.`);
+    if (status !== 200) throw new Error(t("That computer answered {{status}}.", { status }));
     const routes = Array.isArray(json["routes"]) ? (json["routes"] as string[]) : [];
     return { name: String(json["name"] ?? ""), routes, fingerprint };
   }
@@ -545,7 +547,7 @@ export class AccountHosts {
       if (saved) {
         const upgraded = await this.upgrade(at, saved);
         if ("socket" in upgraded) return opened(upgraded.socket);
-        if (upgraded.status !== 401) throw new Error(at.problem() ?? "Couldn't reach that computer.");
+        if (upgraded.status !== 401) throw new Error(at.problem() ?? t("Couldn't reach that computer."));
         // plxd no longer knows the session, as after a restore: sign in again.
         await this.setSession(hostId, undefined);
       }
@@ -556,7 +558,7 @@ export class AccountHosts {
       }
       const upgraded = await this.upgrade(at, signed.session);
       if ("socket" in upgraded) return opened(upgraded.socket);
-      throw new Error(at.problem() ?? "That computer refused this phone's new session.");
+      throw new Error(at.problem() ?? t("That computer refused this phone's new session."));
     } catch (e) {
       at.close();
       // A refusal won't change by retrying, so it waits for the user.
@@ -607,12 +609,12 @@ export class AccountHosts {
     const { status, json } = await this.inTurn(async () => {
       // The one place a sign-in gets a token, so it holds however the caller got here, as when a
       // computer held its descriptor's answer across starting over.
-      if (this.heldBack(hostId)) throw new Refused(HELD_BACK);
+      if (this.heldBack(hostId)) throw new Refused(t(HELD_BACK));
       const key = this.stored.key;
       const token = await this.token(true);
-      if (!token) throw new Error("Sign in to Parallax again.");
+      if (!token) throw new Error(t("Sign in to Parallax again."));
       // Starting over replaced the key meanwhile, and decides which computers get a token.
-      if (this.stored.key !== key) throw new Error("This phone started over.");
+      if (this.stored.key !== key) throw new Error(t("This phone started over."));
       const answer = await this.call(
         at,
         "POST",
@@ -621,21 +623,21 @@ export class AccountHosts {
         { token, clientLabel: this.label },
       );
       // That answer is for the old key, and says nothing of the new one.
-      if (this.stored.key !== key) throw new Error("This phone started over.");
+      if (this.stored.key !== key) throw new Error(t("This phone started over."));
       return answer;
     });
     // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
     // this phone asked, and was allowed while it couldn't hear. That Allow may have come from any
     // of them, as it covers them all.
-    if (status === 200 && compare) throw new Denied(NO_CODE);
+    if (status === 200 && compare) throw new Denied(t(NO_CODE));
     if (status === 200) return this.approved(hostId, json, this.askedAny);
     if (status === 401 || status === 403) {
       // Any computer this phone's own record doesn't prove may be a fake one.
       if (status === 403 && describeRefusal(json) === DEVICE_REMOVED && this.isVerified(hostId))
         this.mark("removed");
-      throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
+      throw new Refused(describeRefusal(json) ?? t("That computer refused this phone's sign-in."));
     }
-    if (status !== 202) throw new Error(describeRefusal(json) ?? `That computer answered ${status}.`);
+    if (status !== 202) throw new Error(describeRefusal(json) ?? t("That computer answered {{status}}.", { status }));
     const requestId = String(json["request"]);
     const committed = String(json["commitment"]);
     const now = Date.now();
@@ -645,24 +647,24 @@ export class AccountHosts {
     } catch (e) {
       if (!ask || !(e instanceof WrongHost)) throw e;
       // A new request there means the one this phone kept ended, denied while it couldn't hear.
-      throw new Denied("That request wasn't allowed.");
+      throw new Denied(t("That request wasn't allowed."));
     }
     if (!value) {
       if (!ask) return { gate: { kind: "setup" } };
       // One this phone kept has lapsed, so it ended while the phone couldn't hear.
-      if (this.asked(hostId)) throw new Denied("That request wasn't allowed in time.");
+      if (this.asked(hostId)) throw new Denied(t(LAPSED));
       const started = newRequest(this.book(hostId), requestId, committed, now, randomBytes);
       await this.setBook(hostId, started.book);
       value = started.value;
     }
     const step = await this.approval(at, { request: requestId, value: base64url(value) });
     if ("session" in step) {
-      if (compare) throw new Denied(NO_CODE);
+      if (compare) throw new Denied(t(NO_CODE));
       return this.approved(hostId, step.session, true);
     }
     // Only now does the host show its value, which must be the one it committed to.
     const hostValue = fromBase64url(String(step.pending["value"] ?? ""));
-    if (commitment(hostValue) !== committed) throw new WrongHost("Another computer answered for that one.");
+    if (commitment(hostValue) !== committed) throw new WrongHost(t("Another computer answered for that one."));
     const code = approvalCode(hostValue, value, hostId, this.thumbprint);
     return { gate: { kind: "waiting", code }, request: requestId };
   }
@@ -684,7 +686,7 @@ export class AccountHosts {
     );
     if (status === 200) return { session: json };
     if (status === 202) return { pending: json };
-    throw new Denied(describeRefusal(json) ?? "That request wasn't allowed.");
+    throw new Denied(describeRefusal(json) ?? t("That request wasn't allowed."));
   }
 
   /**
@@ -701,7 +703,7 @@ export class AccountHosts {
     how?: "tapped" | "typed",
   ) {
     const session = String(answer["accessToken"] ?? "");
-    if (!session) throw new Error("That computer sent no session.");
+    if (!session) throw new Error(t("That computer sent no session."));
     const { trusted, books, allowed = [] } = this.stored;
     this.stored = {
       ...this.stored,
@@ -739,9 +741,9 @@ export class AccountHosts {
       if ("session" in signed) {
         if (this.trusts(hostId)) return;
         // Asking again can't change this, and each try leaves a session there.
-        throw new Denied("That computer already approved this phone. Run plx connect on it, and type the code it shows.");
+        throw new Denied(t("That computer already approved this phone. Run plx connect on it, and type the code it shows."));
       }
-      if (signed.gate.kind !== "waiting" || !signed.request) throw new Error("That computer didn't start a request.");
+      if (signed.gate.kind !== "waiting" || !signed.request) throw new Error(t("That computer didn't start a request."));
       const request = signed.request;
       let tapped = false;
       let fromAllow: (session: Record<string, unknown>) => void = () => {};
@@ -761,7 +763,7 @@ export class AccountHosts {
       });
       const giveUp = requestDeadline();
       for (;;) {
-        if (Date.now() >= giveUp) throw new Denied(LAPSED);
+        if (Date.now() >= giveUp) throw new Denied(t(LAPSED));
         const step = await Promise.race([this.approval(at, { request }, true), allowedHere]);
         if ("session" in step) {
           await this.approved(hostId, step.session, true, tapped ? "tapped" : undefined);
@@ -793,17 +795,17 @@ export class AccountHosts {
     try {
       const signed = await this.signIn(at, hostId, true, true);
       if (!("gate" in signed) || signed.gate.kind !== "waiting" || !signed.request)
-        throw new Error("That computer didn't start a request.");
+        throw new Error(t("That computer didn't start a request."));
       const request = signed.request;
       if (!(await decide(signed.gate.code))) {
         await this.approval(at, { request, deny: true }).catch(() => {});
-        throw new Denied("You didn't allow it.");
+        throw new Denied(t("You didn't allow it."));
       }
       let step = await this.approval(at, { request, allow: true });
       if ("pending" in step) onConfirm();
       const giveUp = requestDeadline();
       while (!("session" in step)) {
-        if (Date.now() >= giveUp) throw new Denied(LAPSED);
+        if (Date.now() >= giveUp) throw new Denied(t(LAPSED));
         step = await this.approval(at, { request }, true);
       }
       await this.approved(hostId, step.session, true, "tapped");
@@ -838,9 +840,12 @@ export class AccountHosts {
   }
 }
 
-const NO_CODE = "That computer showed no code to compare. Type the code it shows.";
-const LAPSED = "That request wasn't allowed in time.";
-const HELD_BACK = "This phone's new key hasn't been allowed yet. Type the code that computer shows, or allow this phone first.";
+// Shown with `t`.
+const NO_CODE = msg("That computer showed no code to compare. Type the code it shows.");
+const LAPSED = msg("That request wasn't allowed in time.");
+const HELD_BACK = msg(
+  "This phone's new key hasn't been allowed yet. Type the code that computer shows, or allow this phone first.",
+);
 
 /** When this phone stops waiting on a request: a real computer drops one by then, and a fake mustn't hold it. */
 const requestDeadline = () => Date.now() + REQUEST_LIFETIME_MS + 10_000;

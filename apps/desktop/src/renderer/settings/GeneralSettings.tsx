@@ -1,7 +1,11 @@
+import { t } from "i18next";
 import { useEffect, useState } from "react";
 
 import type { CommandStatus, OpenApp, TerminalApp } from "../../preload/bridge";
+import { isLanguage, languages, matchLanguage } from "../../i18n";
 import { localId } from "../hosts";
+import { chooseLanguage, languageChoice } from "../language";
+import { locale } from "../locale";
 import { appIcon, OPEN_TARGET_KEY, TERMINAL_CHOSEN, terminalIcon } from "../OpenMenu";
 import { behaviorPrefs, setBehaviorPrefs, type BehaviorPrefs } from "../prefs";
 import { Picker } from "../ui";
@@ -31,16 +35,23 @@ function TerminalCommand() {
   };
   const description = {
     installed: status.onPath
-      ? `Type parallax in a terminal to open Parallax there. Installed at ${status.path}.`
-      : `Installed at ${status.path}, but its folder isn't on your PATH yet. Add it there, or sign out and back in, then open a new terminal.`,
-    stale: `The command at ${status.path} is for another copy of Parallax.`,
-    missing: "Type parallax in a terminal to open Parallax there.",
-    other: `Something else named parallax is at ${status.path}, so Parallax leaves it alone.`,
+      ? t("Type parallax in a terminal to open Parallax there. Installed at {{path}}.", {
+          path: status.path,
+        })
+      : t(
+          "Installed at {{path}}, but its folder isn't on your PATH yet. Add it there, or sign out and back in, then open a new terminal.",
+          { path: status.path },
+        ),
+    stale: t("The command at {{path}} is for another copy of Parallax.", { path: status.path }),
+    missing: t("Type parallax in a terminal to open Parallax there."),
+    other: t("Something else named parallax is at {{path}}, so Parallax leaves it alone.", {
+      path: status.path,
+    }),
   }[status.state];
   const action =
     status.state === "installed" ? "Remove" : status.state === "other" ? undefined : "Install";
   return (
-    <Row title="Terminal command" description={error ?? description}>
+    <Row title={t("Terminal command")} description={error ?? description}>
       {action && (
         <button
           type="button"
@@ -48,7 +59,11 @@ function TerminalCommand() {
           onClick={() => void act(action === "Install")}
           className={quietButton}
         >
-          {status.state === "stale" ? "Reinstall" : action}
+          {status.state === "stale"
+            ? t("Reinstall")
+            : action === "Install"
+              ? t("Install")
+              : t("Remove")}
         </button>
       )}
     </Row>
@@ -64,35 +79,41 @@ function Updates() {
   const prefs = updatePrefs.use();
   const set = (change: Partial<UpdatePrefs>) => updatePrefs.set({ ...prefs, ...change });
   return (
-    <Section title="Updates">
+    <Section title={t("Updates")}>
       {window.parallax.updatable && (
         <Row
-          title="Download updates automatically"
-          description="Download a new Parallax release as soon as it's out, so updating only restarts the app."
+          title={t("Download updates automatically")}
+          description={t(
+            "Download a new Parallax release as soon as it's out, so updating only restarts the app.",
+          )}
         >
           <Switch
-            label="Download updates automatically"
+            label={t("Download updates automatically")}
             checked={prefs.autoDownload}
             onChange={(autoDownload) => set({ autoDownload })}
           />
         </Row>
       )}
       <Row
-        title="Check for provider updates"
-        description="Check each computer's Claude Code and Codex for new releases every 30 minutes, and list them under Update."
+        title={t("Check for provider updates")}
+        description={t(
+          "Check each computer's Claude Code and Codex for new releases every 30 minutes, and list them under Update.",
+        )}
       >
         <Switch
-          label="Check for provider updates"
+          label={t("Check for provider updates")}
           checked={prefs.providers}
           onChange={(providers) => set({ providers })}
         />
       </Row>
       <Row
-        title="Update providers automatically"
-        description="Update Claude Code and Codex as soon as a new release is found. Running threads keep going."
+        title={t("Update providers automatically")}
+        description={t(
+          "Update Claude Code and Codex as soon as a new release is found. Running threads keep going.",
+        )}
       >
         <Switch
-          label="Update providers automatically"
+          label={t("Update providers automatically")}
           checked={prefs.providers && prefs.autoProviders}
           disabled={!prefs.providers}
           onChange={(autoProviders) => set({ autoProviders })}
@@ -103,7 +124,41 @@ function Updates() {
 }
 
 /**
- * Settings > General: where Open sends a folder, notifications, the clock and send key, and how the
+ * The language the app shows (0105): the OS's, when Parallax has it, or one picked here. Picking
+ * reloads the window into it.
+ */
+function Language() {
+  const choice = languageChoice.use();
+  const system = languages.find((language) => language.code === matchLanguage([locale()]));
+  return (
+    <Section title={t("Language")}>
+      <Row
+        title={t("Language")}
+        description={t("The language Parallax shows its menus and text in.")}
+      >
+        <Picker
+          field
+          label={t("Language")}
+          value={choice}
+          onChange={(value) => chooseLanguage(isLanguage(value) ? value : "system")}
+          options={[
+            { value: "system", label: t("System"), hint: system?.name },
+            ...languages.map((language, index) => ({
+              value: language.code,
+              label: language.name,
+              divider: index === 0,
+            })),
+          ]}
+          align="end"
+          className="w-56"
+        />
+      </Row>
+    </Section>
+  );
+}
+
+/**
+ * Settings > General: the language, where Open sends a folder, notifications, the clock and send key, and how the
  * app updates.
  */
 export function GeneralSettings() {
@@ -129,18 +184,19 @@ export function GeneralSettings() {
 
   return (
     <>
-      <PageTitle title="General">
-        How Parallax opens folders, tells you what happened, and keeps itself up to date.
+      <PageTitle title={t("General")}>
+        {t("How Parallax opens folders, tells you what happened, and keeps itself up to date.")}
       </PageTitle>
-      <Section title="Open">
+      <Language />
+      <Section title={t("Open")}>
         <Row
-          title="Open folders in"
-          description="What Open and its shortcut use, until you pick another from its menu."
+          title={t("Open folders in")}
+          description={t("What Open and its shortcut use, until you pick another from its menu.")}
         >
           {current ? (
             <Picker
               field
-              label="Open folders in"
+              label={t("Open folders in")}
               value={current.target}
               onChange={(value) => {
                 localStorage.setItem(OPEN_TARGET_KEY, value);
@@ -155,13 +211,16 @@ export function GeneralSettings() {
               className="w-56"
             />
           ) : (
-            targets && <span className="text-body text-muted-foreground">No apps found</span>
+            targets && <span className="text-body text-muted-foreground">{t("No apps found")}</span>
           )}
         </Row>
-        <Row title="Terminal" description="The terminal used to open folders on this computer.">
+        <Row
+          title={t("Terminal")}
+          description={t("The terminal used to open folders on this computer.")}
+        >
           <Picker
             field
-            label="Terminal"
+            label={t("Terminal")}
             value={terminals.find((app) => app.name === terminal)?.path ?? "none"}
             onChange={(value) => void chooseTerminal(value)}
             options={
@@ -171,7 +230,7 @@ export function GeneralSettings() {
                     label: app.name,
                     icon: terminalIcon(app),
                   }))
-                : [{ value: "none", label: "No terminals found", icon: terminalIcon() }]
+                : [{ value: "none", label: t("No terminals found"), icon: terminalIcon() }]
             }
             align="end"
             className="w-56"
@@ -191,65 +250,74 @@ function Behavior() {
   const mac = window.parallax.platform === "darwin";
   return (
     <>
-      <Section title="Notifications">
+      <Section title={t("Notifications")}>
         <Row
-          title="System notifications"
-          description="An alert from your computer when a thread finishes, fails, or needs you while Parallax isn't in front."
+          title={t("System notifications")}
+          description={t(
+            "An alert from your computer when a thread finishes, fails, or needs you while Parallax isn't in front.",
+          )}
         >
           <Switch
-            label="System notifications"
+            label={t("System notifications")}
             checked={prefs.systemNotifications}
             onChange={(systemNotifications) => setBehaviorPrefs({ systemNotifications })}
           />
         </Row>
         <Row
-          title="In-app notifications"
-          description="A toast when a thread finishes, fails, or needs you."
+          title={t("In-app notifications")}
+          description={t("A toast when a thread finishes, fails, or needs you.")}
         >
           <Switch
-            label="In-app notifications"
+            label={t("In-app notifications")}
             checked={prefs.inAppNotifications}
             onChange={(inAppNotifications) => setBehaviorPrefs({ inAppNotifications })}
           />
         </Row>
       </Section>
-      <Section title="Preferences">
+      <Section title={t("Preferences")}>
         <Row
-          title="Clean up dictation"
-          description="A small model from your providers removes filler words, fixes punctuation, and restores code names. It receives the text and the names of files you mention, and your audio stays on this computer. Off, dictation goes in as transcribed."
+          title={t("Clean up dictation")}
+          description={t(
+            "A small model from your providers removes filler words, fixes punctuation, and restores code names. It receives the text and the names of files you mention, and your audio stays on this computer. Off, dictation goes in as transcribed.",
+          )}
         >
           <Switch
-            label="Clean up dictation"
+            label={t("Clean up dictation")}
             checked={prefs.cleanDictation}
             onChange={(cleanDictation) => setBehaviorPrefs({ cleanDictation })}
           />
         </Row>
-        <Row title="Time format" description="System default follows your OS clock preference.">
+        <Row
+          title={t("Time format")}
+          description={t("System default follows your OS clock preference.")}
+        >
           <Picker
             field
-            label="Time format"
+            label={t("Time format")}
             value={prefs.timeFormat}
             onChange={(v) => setBehaviorPrefs({ timeFormat: v as BehaviorPrefs["timeFormat"] })}
             options={[
-              { value: "system", label: "System default" },
-              { value: "12", label: "12-hour" },
-              { value: "24", label: "24-hour" },
+              { value: "system", label: t("System default") },
+              { value: "12", label: t("12-hour") },
+              { value: "24", label: t("24-hour") },
             ]}
             className="w-48"
             panelClassName="min-w-48"
           />
         </Row>
         <Row
-          title="Send shortcut"
+          title={t("Send shortcut")}
           description={
             prefs.sendKey === "enter"
-              ? "Enter sends. Shift+Enter starts a new line."
-              : `${mac ? "⌘ Enter" : "Ctrl+Enter"} sends. Enter starts a new line.`
+              ? t("Enter sends. Shift+Enter starts a new line.")
+              : t("{{keys}} sends. Enter starts a new line.", {
+                  keys: mac ? "⌘ Enter" : "Ctrl+Enter",
+                })
           }
         >
           <Picker
             field
-            label="Send shortcut"
+            label={t("Send shortcut")}
             value={prefs.sendKey}
             onChange={(v) => setBehaviorPrefs({ sendKey: v as BehaviorPrefs["sendKey"] })}
             options={[

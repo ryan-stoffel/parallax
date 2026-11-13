@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronLeft, Circle, CircleCheck, FileText, Folder, GitMerge } from "lucide-react";
 import { useEffect, useState, type SVGProps } from "react";
 import Markdown, { type Components } from "react-markdown";
@@ -136,7 +137,7 @@ function ContextMarkdown({ text, components }: { text: string; components: Compo
 // link with its alt text, which opens externally like any link.
 const noImage: Components["img"] = ({ src, alt }) => (
   <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
-    {alt || "Image"}
+    {alt || t("Image")}
   </a>
 );
 
@@ -217,7 +218,10 @@ const boardHeadings: Components = {
 function when(at: string): string {
   const time = Date.parse(at);
   const day = dayLabel(time, Date.now(), { month: "short", day: "numeric" });
-  return `${day} at ${new Date(time).toLocaleTimeString(locale(), clockOptions())}`;
+  return t("{{day}} at {{time}}", {
+    day,
+    time: new Date(time).toLocaleTimeString(locale(), clockOptions()),
+  });
 }
 
 /** An orchestrator's context files as a tree: each folder once, above its files, by path. */
@@ -261,7 +265,7 @@ export function AllFiles({
   onOpen: (path: string) => void;
 }) {
   return (
-    <ul aria-label="All files" className="flex flex-col gap-1">
+    <ul aria-label={t("All files")} className="flex flex-col gap-1">
       {fileTree(files).map((row) => {
         const inner = (
           <>
@@ -342,9 +346,12 @@ const inlineIcon = "mr-1 inline size-3.5 align-[-0.15em]";
 /** A task's checkbox as an open or a check circle. */
 const taskIcon: Components["input"] = ({ type, checked }) =>
   type !== "checkbox" ? null : checked ? (
-    <CircleCheck aria-label="Done" className={`${inlineIcon} text-faint-foreground`} />
+    <CircleCheck
+      aria-label={t("Done", { context: "task" })}
+      className={`${inlineIcon} text-faint-foreground`}
+    />
   ) : (
-    <Circle aria-label="Open" className={inlineIcon} />
+    <Circle aria-label={t("Open", { context: "task" })} className={inlineIcon} />
   );
 
 /** The Markdown mark (dcurtis/markdown-mark, CC0), sized like a lucide icon. */

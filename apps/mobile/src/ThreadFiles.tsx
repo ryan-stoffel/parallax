@@ -3,10 +3,12 @@
 // as plain text in the sheet. An image, or a file that's binary or too large to show here, shows its
 // card instead, which opens it in Quick Look. Changing files stays on the desktop.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import { ChevronLeft, File, FileSymlink, Folder } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, View } from "react-native";
 
+import { msg } from "../../desktop/src/i18n";
 import type { RpcError } from "../../desktop/src/preload/bridge";
 import type { AgentEntry } from "../../desktop/src/protocol/generated/protocol";
 import { describeError } from "../../desktop/src/renderer/errors";
@@ -20,7 +22,10 @@ import { Icon, Row, T, useColors } from "./ui";
 /** Where the sheet is: a folder, "" for the thread's own, or a file. */
 type At = { path: string; file: boolean };
 
-/** What's there: a folder's entries, a file's lines, what to say and offer instead, or plxd's refusal. */
+/**
+ * What's there: a folder's entries, a file's lines, what to say (shown with `t`) and offer instead,
+ * or plxd's refusal.
+ */
 type Shown =
   | { entries: AgentEntry[]; truncated: boolean }
   | { lines: string[] }
@@ -33,8 +38,8 @@ type Shown =
  */
 const shownBytes = 256 * 1024;
 
-const tooLarge: Shown = { note: "This file is too large to show here.", card: true };
-const gone: Shown = { note: "This file isn't there anymore." };
+const tooLarge: Shown = { note: msg("This file is too large to show here."), card: true };
+const gone: Shown = { note: msg("This file isn't there anymore.") };
 
 /** plxd's reason it refused, without JSON-RPC's prefix. */
 const refusal = (error: RpcError): Shown => ({ error: describeError(error).replace(/^Invalid params: /, "") });
@@ -59,7 +64,7 @@ async function readFile(hostId: string, runId: string, path: string): Promise<Sh
   if (!read.result.exists) return gone;
   if (read.result.tooLarge || read.result.content == null) return tooLarge;
   const text = textOf(read.result.content);
-  return text === undefined ? { note: "This is a binary file.", card: true } : { lines: linesOf(text) };
+  return text === undefined ? { note: msg("This is a binary file."), card: true } : { lines: linesOf(text) };
 }
 
 export function ThreadFilesScreen({ route }: NativeStackScreenProps<Screens, "ThreadFiles">) {
@@ -92,12 +97,12 @@ export function ThreadFilesScreen({ route }: NativeStackScreenProps<Screens, "Th
     <>
       <View collapsable={false} style={styles.top}>
         {!!at.path && (
-          <GlassButton label="Back" onPress={() => setAt({ path: parentOf(at.path), file: false })}>
+          <GlassButton label={t("Back")} onPress={() => setAt({ path: parentOf(at.path), file: false })}>
             <Icon icon={ChevronLeft} size={22} />
           </GlassButton>
         )}
         <T medium numberOfLines={1} ellipsizeMode="head" style={styles.title}>
-          {at.path || "Files"}
+          {at.path || t("Files")}
         </T>
       </View>
       <FlatList
@@ -130,12 +135,12 @@ export function ThreadFilesScreen({ route }: NativeStackScreenProps<Screens, "Th
                 {shown.error}
               </T>
             ) : "entries" in shown ? (
-              <T muted>This folder is empty.</T>
+              <T muted>{t("This folder is empty.")}</T>
             ) : "lines" in shown ? (
-              <T muted>This file is empty.</T>
+              <T muted>{t("This file is empty.")}</T>
             ) : (
               <>
-                {!!shown.note && <T muted>{shown.note}</T>}
+                {!!shown.note && <T muted>{t(shown.note)}</T>}
                 {shown.card && <FileCard source={{ hostId, runId, path: at.path, name: nameOf(at.path) }} />}
               </>
             )}
@@ -144,7 +149,7 @@ export function ThreadFilesScreen({ route }: NativeStackScreenProps<Screens, "Th
         ListFooterComponent={
           shown && "entries" in shown && shown.truncated ? (
             <T muted style={styles.more}>
-              More files not shown.
+              {t("More files not shown.")}
             </T>
           ) : null
         }

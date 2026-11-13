@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { CircleAlert, Clock, FileText, Lightbulb } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { msg } from "../i18n";
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { outlineButton, quietButton } from "./Approval";
@@ -17,16 +19,16 @@ export type Memory = MemoryFile & { scope: MemoryScope; stale?: boolean };
 
 /** The entry groups, in 0044's order. A kind a newer plxd adds isn't shown. */
 const kindGroups: { kind: MemoryKind; label: string; one: string }[] = [
-  { kind: "preference", label: "Preferences", one: "Preference" },
-  { kind: "convention", label: "Conventions", one: "Convention" },
-  { kind: "decision", label: "Decisions", one: "Decision" },
-  { kind: "gotcha", label: "Gotchas", one: "Gotcha" },
+  { kind: "preference", label: msg("Preferences"), one: msg("Preference") },
+  { kind: "convention", label: msg("Conventions"), one: msg("Convention") },
+  { kind: "decision", label: msg("Decisions"), one: msg("Decision") },
+  { kind: "gotcha", label: msg("Gotchas"), one: msg("Gotcha") },
 ];
 
 const scopeLabels: Record<MemoryScope["kind"], string> = {
-  you: "You",
-  repo: "Repo",
-  orchestrator: "Orchestrator",
+  you: msg("You"),
+  repo: msg("Repo"),
+  orchestrator: msg("Orchestrator"),
 };
 
 /** The scopes a view shows, You first, as plxd orders its index (0044). */
@@ -79,7 +81,7 @@ const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace
 /** "today", "yesterday", or "Oct 20": the day of `at`, in milliseconds. */
 const dayWords = (at: number, now = Date.now()) => {
   const label = dayLabel(at, now, { month: "short", day: "numeric" });
-  return label === "Today" || label === "Yesterday" ? label.toLowerCase() : label;
+  return label === t("Today") ? t("today") : label === t("Yesterday") ? t("yesterday") : label;
 };
 
 /** The day of `date`, `YYYY-MM-DD` as an entry's header gives it, in words (`dayWords`). */
@@ -178,7 +180,14 @@ function memoryCalls(hostId: string) {
     const failed = await write(to.scope, to.path, text, file);
     if (failed) return failed;
     const left = await remove(file);
-    return left && `${done}, but couldn't remove it from ${scopeLabels[file.scope.kind]}: ${left}`;
+    return (
+      left &&
+      t("{{done}}, but couldn't remove it from {{scope}}: {{error}}", {
+        done,
+        scope: t(scopeLabels[file.scope.kind]),
+        error: left,
+      })
+    );
   };
   /** Writes an entry over itself, which dates it today, so it leaves the review list. */
   const keep = async (file: Memory): Result => {
@@ -379,7 +388,7 @@ export function MemoryPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
         {start?.(files ?? [])}
-        {list("To review", sections?.proposals, "proposal")}
+        {list(t("To review"), sections?.proposals, "proposal")}
         {orchestrator && sections && (
           <Brief
             orchestrator={orchestrator}
@@ -389,12 +398,12 @@ export function MemoryPanel({
           />
         )}
         {entries.length > 0 && (
-          <section aria-label="Memory">
-            <Heading label="Memory" />
+          <section aria-label={t("Memory")}>
+            <Heading label={t("Memory")} />
             {entries.map((g, i) => (
-              <section key={g.kind} aria-label={g.label} className={i > 0 ? "pt-4" : undefined}>
+              <section key={g.kind} aria-label={t(g.label)} className={i > 0 ? "pt-4" : undefined}>
                 <h4 className="flex items-baseline px-1 pb-2 text-meta text-muted-foreground">
-                  {g.label}
+                  {t(g.label)}
                   <span className="ml-1.5 text-faint-foreground tabular-nums">
                     {g.files.length}
                   </span>
@@ -404,11 +413,11 @@ export function MemoryPanel({
             ))}
           </section>
         )}
-        {list("Unused or stale", sections?.review, "review")}
-        {list("Documents", sections?.knowledge, "document")}
+        {list(t("Unused or stale"), sections?.review, "review")}
+        {list(t("Documents"), sections?.knowledge, "document")}
         {empty && (
           <p className="px-1 pt-6 text-body text-muted-foreground">
-            No memory yet. Agents propose lasting facts as they work.
+            {t("No memory yet. Agents propose lasting facts as they work.")}
           </p>
         )}
         {error && (
@@ -459,27 +468,27 @@ function Brief({
   }, [file, calls]);
   const scope: MemoryScope = { kind: "orchestrator", id: orchestrator };
   const brief: Memory = file ?? { scope, path: "brief.md", size: 0, modifiedAt: "" };
-  const edited = file && `Edited ${dayWords(Date.parse(file.modifiedAt))}`;
+  const edited = file && t("Edited {{day}}", { day: dayWords(Date.parse(file.modifiedAt)) });
 
   return (
-    <section aria-label="Brief">
-      <Heading label="Brief" end={edited}>
+    <section aria-label={t("Brief")}>
+      <Heading label={t("Brief")} end={edited}>
         {file && !editing && (
           <button
             ref={opener}
             type="button"
-            aria-label="Edit the brief"
+            aria-label={t("Edit the brief")}
             disabled={content === undefined}
             onClick={open}
             className="rounded-sm px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
-            Edit
+            {t("Edit")}
           </button>
         )}
       </Heading>
       {editing ? (
         <Editor
-          label="Brief"
+          label={t("Brief")}
           initial={content ?? ""}
           onCancel={close}
           onSave={async (text) => {
@@ -505,7 +514,7 @@ function Brief({
           }}
           className="px-1 text-body text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          Write the orchestrator's goal, scope, and constraints
+          {t("Write the orchestrator's goal, scope, and constraints")}
         </button>
       )}
       {error && (
@@ -588,25 +597,26 @@ function MemoryRow({
     return failed;
   };
   const move = (to: Target | undefined, done: string, text?: string) => {
-    if (!to) return changeFailed("This proposal has no kind.");
+    if (!to) return changeFailed(t("This proposal has no kind."));
     if (taken(to)) return setReplacing({ to, done, content: text });
     void act(() => calls.move(file, to, done, text));
   };
 
-  const kindName = kindGroups.find((g) => g.kind === file.kind)?.one;
+  const one = kindGroups.find((g) => g.kind === file.kind)?.one;
+  const kindName = one && t(one);
   const scope = proposal ? (savedAs(file, repo)?.scope ?? file.scope) : file.scope;
   const from = sourceOf(file, titles);
   const why = file.stale
-    ? "names a file that's gone"
+    ? t("names a file that's gone")
     : file.lastUsed
-      ? `last used ${dayOf(file.lastUsed)}`
+      ? t("last used {{day}}", { day: dayOf(file.lastUsed) })
       : file.date
-        ? `not used since ${dayOf(file.date)}`
-        : "not used yet";
+        ? t("not used since {{day}}", { day: dayOf(file.date) })
+        : t("not used yet");
   const line = [
-    proposal ? (kindName ?? "Brief") : kind === "review" ? kindName : undefined,
-    scopeLabels[scope.kind],
-    kind === "review" ? why : from && `from ${from}`,
+    proposal ? (kindName ?? t("Brief")) : kind === "review" ? kindName : undefined,
+    t(scopeLabels[scope.kind]),
+    kind === "review" ? why : from && t("from {{source}}", { source: from }),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -623,18 +633,20 @@ function MemoryRow({
   const end =
     kind === "entry"
       ? file.lastUsed
-        ? `Last used ${dayOf(file.lastUsed)}`
-        : "Not used yet"
+        ? t("Last used {{day}}", { day: dayOf(file.lastUsed) })
+        : t("Not used yet")
       : kind === "document"
         ? dayLabel(Date.parse(file.modifiedAt), Date.now(), { month: "short", day: "numeric" })
         : undefined;
 
   // An edit stays open under it until the move succeeds, so a failure keeps the edited text.
   const replace = replacing && (
-    <div role="group" aria-label="Replace" className="mt-2">
+    <div role="group" aria-label={t("Replace")} className="mt-2">
       <p className="text-body text-muted-foreground">
-        {scopeLabels[replacing.to.scope.kind]} already has {replacing.to.path}. Replace it with this
-        one?
+        {t("{{scope}} already has {{path}}. Replace it with this one?", {
+          scope: t(scopeLabels[replacing.to.scope.kind]),
+          path: replacing.to.path,
+        })}
       </p>
       <div className="mt-1 flex gap-1.5">
         <button
@@ -648,10 +660,10 @@ function MemoryRow({
           }}
           className={outlineButton}
         >
-          Replace
+          {t("Replace")}
         </button>
         <button type="button" onClick={() => setReplacing(undefined)} className={quietButton}>
-          Cancel
+          {t("Cancel")}
         </button>
       </div>
     </div>
@@ -663,10 +675,10 @@ function MemoryRow({
       <button
         type="button"
         disabled={busy}
-        onClick={() => move(savedAs(file, repo), "Saved")}
+        onClick={() => move(savedAs(file, repo), t("Saved"))}
         className={outlineButton}
       >
-        Accept
+        {t("Accept")}
       </button>
       <button
         ref={opener}
@@ -678,7 +690,7 @@ function MemoryRow({
         }}
         className={quietButton}
       >
-        Edit
+        {t("Edit")}
       </button>
       <button
         type="button"
@@ -686,7 +698,7 @@ function MemoryRow({
         onClick={() => void act(() => calls.remove(file))}
         className={quietButton}
       >
-        Dismiss
+        {t("Dismiss")}
       </button>
     </div>
   ) : kind === "review" ? (
@@ -697,7 +709,7 @@ function MemoryRow({
         onClick={() => void act(() => calls.keep(file))}
         className={outlineButton}
       >
-        Keep
+        {t("Keep")}
       </button>
       <button
         type="button"
@@ -705,7 +717,7 @@ function MemoryRow({
         onClick={() => void act(() => calls.remove(file))}
         className={quietButton}
       >
-        Retire
+        {t("Retire")}
       </button>
       {open && (
         <button
@@ -715,7 +727,7 @@ function MemoryRow({
           onClick={startEditing}
           className={quietButton}
         >
-          Edit
+          {t("Edit")}
         </button>
       )}
     </div>
@@ -729,18 +741,21 @@ function MemoryRow({
           onClick={startEditing}
           className={outlineButton}
         >
-          Edit
+          {t("Edit")}
         </button>
         {next && (
           <button
             type="button"
             disabled={busy}
             onClick={() =>
-              move({ scope: next, path: file.path }, `Copied to ${scopeLabels[next.kind]}`)
+              move(
+                { scope: next, path: file.path },
+                t("Copied to {{scope}}", { scope: t(scopeLabels[next.kind]) }),
+              )
             }
             className={quietButton}
           >
-            Promote to {scopeLabels[next.kind]}
+            {t("Promote to {{scope}}", { scope: t(scopeLabels[next.kind]) })}
           </button>
         )}
         <button
@@ -749,7 +764,7 @@ function MemoryRow({
           onClick={() => void act(() => calls.remove(file))}
           className={quietButton}
         >
-          Delete
+          {t("Delete")}
         </button>
       </div>
     )
@@ -796,12 +811,12 @@ function MemoryRow({
                 if (proposal) {
                   // The editor stays open with the text until the move succeeds.
                   const to = savedAs(file, repo);
-                  if (!to) return "This proposal has no kind.";
+                  if (!to) return t("This proposal has no kind.");
                   if (taken(to)) {
-                    setReplacing({ to, done: "Saved", content: text });
+                    setReplacing({ to, done: t("Saved"), content: text });
                     return undefined;
                   }
-                  const failed = await calls.move(file, to, "Saved", text);
+                  const failed = await calls.move(file, to, t("Saved"), text);
                   // A failed delete still wrote, so the list reloads either way.
                   onChanged();
                   if (!failed) stopEditing();
@@ -845,7 +860,7 @@ function MemoryRow({
 
 /** Says why a change to a memory file failed. */
 const changeFailed = (body: string) =>
-  notify({ key: "memory", tone: "error", title: "Couldn't change the memory", body });
+  notify({ key: "memory", tone: "error", title: t("Couldn't change the memory"), body });
 
 /**
  * A text box with Save and Cancel, saying why in a notification when the save fails, which keeps
@@ -872,12 +887,17 @@ function Editor({
         const failed = await onSave(text);
         setBusy(false);
         if (failed)
-          notify({ key: "memory", tone: "error", title: `Couldn't save ${label}`, body: failed });
+          notify({
+            key: "memory",
+            tone: "error",
+            title: t("Couldn't save {{name}}", { name: label }),
+            body: failed,
+          });
         else dismiss("memory");
       }}
     >
       <textarea
-        aria-label={`Edit ${label}`}
+        aria-label={t("Edit {{name}}", { name: label })}
         autoFocus
         rows={6}
         value={text}
@@ -895,10 +915,10 @@ function Editor({
       />
       <div className="mt-1 flex justify-end gap-1.5">
         <button type="button" disabled={busy} onClick={onCancel} className={quietButton}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button type="submit" disabled={busy} className={outlineButton}>
-          Save
+          {t("Save")}
         </button>
       </div>
     </form>

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useState } from "react";
 
 import { icons } from "../icons";
@@ -54,13 +55,15 @@ export function ReviewThread({
   };
   const lines = thread.startLine ? `${thread.startLine}-${thread.line}` : thread.line;
   const where = thread.path && `${thread.path}${lines ? `:${lines}` : ""}`;
-  const span = thread.startLine && `Lines ${thread.startLine} to ${thread.line}`;
+  const span =
+    thread.startLine &&
+    t("Lines {{start}} to {{end}}", { start: thread.startLine, end: thread.line });
   const canAct = (onReply || onResolve) && !thread.resolved && !thread.pending && thread.id;
   const writing = replying || !!reply;
   const first = thread.comments[0];
   return (
     <article
-      aria-label={where ? `Thread on ${where}` : "Review thread"}
+      aria-label={where ? t("Thread on {{where}}", { where }) : t("Review thread")}
       className="rounded-xl border border-border bg-surface font-sans shadow-xs"
     >
       {(!bare || span || thread.outdated || thread.resolved) && (
@@ -71,7 +74,7 @@ export function ReviewThread({
             <button
               type="button"
               aria-expanded={open}
-              aria-label={open ? "Hide resolved thread" : "Show resolved thread"}
+              aria-label={open ? t("Hide resolved thread") : t("Show resolved thread")}
               onClick={() => setOpen(!open)}
               className="grid size-5 shrink-0 place-items-center rounded-md hover:bg-hover"
             >
@@ -82,7 +85,7 @@ export function ReviewThread({
             </button>
           )}
           <span className="min-w-0 flex-1 truncate">
-            {bare ? span : <span className="font-mono">{where ?? "Conversation"}</span>}
+            {bare ? span : <span className="font-mono">{where ?? t("Conversation")}</span>}
             {!open && first && (
               <span className="text-muted-foreground">
                 {bare && span ? " · " : !bare ? " · " : ""}
@@ -90,8 +93,8 @@ export function ReviewThread({
               </span>
             )}
           </span>
-          {thread.outdated && <Badge tone="warning">Outdated</Badge>}
-          {thread.resolved && <Badge tone="success">Resolved</Badge>}
+          {thread.outdated && <Badge tone="warning">{t("Outdated")}</Badge>}
+          {thread.resolved && <Badge tone="success">{t("Resolved")}</Badge>}
         </header>
       )}
       {open && (
@@ -115,13 +118,13 @@ export function ReviewThread({
           {onReply && (
             <Button size="sm" onClick={() => setReplying(true)}>
               <icons.reply aria-hidden />
-              Reply
+              {t("Reply", { context: "verb" })}
             </Button>
           )}
           {onResolve && (
             <Button size="sm" disabled={!!sending} onClick={() => void send("resolve")}>
               <icons.done aria-hidden />
-              {sending === "resolve" ? "Resolving…" : "Resolve"}
+              {sending === "resolve" ? t("Resolving…") : t("Resolve")}
             </Button>
           )}
         </div>
@@ -135,8 +138,8 @@ export function ReviewThread({
           }}
         >
           <textarea
-            aria-label="Reply"
-            placeholder="Reply…"
+            aria-label={t("Reply", { context: "noun" })}
+            placeholder={t("Reply…")}
             autoFocus
             rows={2}
             value={reply}
@@ -157,10 +160,10 @@ export function ReviewThread({
                 setReplying(false);
               }}
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button size="sm" variant="primary" type="submit" disabled={!reply.trim() || !!sending}>
-              {sending === "reply" ? "Replying…" : "Reply"}
+              {sending === "reply" ? t("Replying…") : t("Reply", { context: "verb" })}
             </Button>
           </div>
         </form>
@@ -208,29 +211,29 @@ function ThreadComment({
     <li>
       <div className="group/comment flex min-h-5 items-center gap-1.5 text-meta">
         <Avatar login={c.author ?? "?"} />
-        <span className="font-medium text-foreground">{c.author ?? "Someone"}</span>
+        <span className="font-medium text-foreground">{c.author ?? t("Someone")}</span>
         {c.pending ? (
-          <Badge tone="warning">Pending</Badge>
+          <Badge tone="warning">{t("Pending")}</Badge>
         ) : (
           c.createdAt && <span className="text-faint-foreground">{ago(c.createdAt)}</span>
         )}
         <span className="flex-1" />
         {c.url && !c.pending && (
           <span className="opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100">
-            <IconButton size="sm" label="Open on GitHub" onClick={() => onOpen(c.url!)}>
+            <IconButton size="sm" label={t("Open on GitHub")} onClick={() => onOpen(c.url!)}>
               <icons.external aria-hidden />
             </IconButton>
           </span>
         )}
         {mine && onEdit && draft === undefined && (
-          <IconButton size="sm" label="Edit comment" onClick={() => setDraft(c.body)}>
+          <IconButton size="sm" label={t("Edit comment")} onClick={() => setDraft(c.body)}>
             <icons.edit aria-hidden />
           </IconButton>
         )}
         {mine && onDelete && draft === undefined && (
           <IconButton
             size="sm"
-            label="Delete comment"
+            label={t("Delete comment")}
             disabled={busy}
             onClick={() => void act(() => onDelete(c.id!))}
           >
@@ -247,7 +250,7 @@ function ThreadComment({
           }}
         >
           <textarea
-            aria-label="Edit comment"
+            aria-label={t("Edit comment")}
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -259,10 +262,10 @@ function ThreadComment({
           />
           <div className="flex justify-end gap-1.5">
             <Button size="sm" disabled={busy} onClick={() => setDraft(undefined)}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button size="sm" variant="primary" type="submit" disabled={!draft.trim() || busy}>
-              {busy ? "Saving…" : "Save"}
+              {busy ? t("Saving…") : t("Save")}
             </Button>
           </div>
         </form>

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -6,6 +7,7 @@ import {
   type ThemePreference,
   type WindowMaterial,
 } from "../../preload/bridge";
+import { msg } from "../../i18n";
 import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
 import { chatPrefs, setChatPrefs, type ChatPrefs } from "../prefs";
@@ -93,10 +95,11 @@ function ThemeIcon({ theme, extension }: { theme: ColorTheme; extension?: AddedE
   );
 }
 
-const materials: { value: WindowMaterial; name: string }[] = [
-  { value: "opaque", name: "Opaque" },
-  { value: "clear", name: "Clear" },
-  { value: "blur", name: "Blurred" },
+/** The window's backgrounds, named in the app's language. */
+const materials = (): { value: WindowMaterial; name: string }[] => [
+  { value: "opaque", name: t("Opaque") },
+  { value: "clear", name: t("Clear", { context: "see-through" }) },
+  { value: "blur", name: t("Blurred") },
 ];
 
 /**
@@ -146,11 +149,11 @@ export function AppearanceSettings({
     return (
       <Picker
         field
-        label={mode === "light" ? "Light theme" : "Dark theme"}
+        label={mode === "light" ? t("Light theme") : t("Dark theme")}
         value={picked[mode]}
         onChange={(id) => slot(mode, id)}
         options={options}
-        search={options.length > 8 ? "Search themes" : undefined}
+        search={options.length > 8 ? t("Search themes") : undefined}
         align="end"
         className="w-64"
         panelClassName="w-72"
@@ -164,7 +167,7 @@ export function AppearanceSettings({
             }}
           >
             <Plus aria-hidden />
-            Add a theme from Open VSX…
+            {t("Add a theme from Open VSX…")}
           </button>
         )}
       />
@@ -176,17 +179,17 @@ export function AppearanceSettings({
 
   return (
     <>
-      <PageTitle title="Appearance">
-        Make Parallax yours: its themes and colors, the window, and its text.
+      <PageTitle title={t("Appearance")}>
+        {t("Make Parallax yours: its themes and colors, the window, and its text.")}
       </PageTitle>
 
-      <Section title="Theme">
+      <Section title={t("Theme")}>
         <div className="grid grid-cols-2 gap-3 border-b border-border p-4">
           {(["light", "dark"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
-              aria-label={`Use the ${mode} theme`}
+              aria-label={mode === "light" ? t("Use the light theme") : t("Use the dark theme")}
               aria-pressed={theme === mode}
               onClick={() => onThemeChange(mode)}
               className="group flex flex-col gap-2 text-left"
@@ -197,36 +200,39 @@ export function AppearanceSettings({
                 <SchemePreview mode={mode} theme={picked[mode]} />
               </span>
               <span className="flex items-baseline gap-1.5 text-body">
-                <span className="font-medium capitalize">{mode}</span>
+                <span className="font-medium">{mode === "light" ? t("Light") : t("Dark")}</span>
                 <span className="truncate text-muted-foreground">{nameOf(mode)}</span>
               </span>
             </button>
           ))}
         </div>
-        <Row title="Color scheme" description="Which theme shows. System follows your OS.">
+        <Row
+          title={t("Color scheme")}
+          description={t("Which theme shows. System follows your OS.")}
+        >
           <Segmented
-            label="Color scheme"
+            label={t("Color scheme")}
             options={[
-              { value: "system", name: "System" },
-              { value: "light", name: "Light" },
-              { value: "dark", name: "Dark" },
+              { value: "system", name: t("System") },
+              { value: "light", name: t("Light") },
+              { value: "dark", name: t("Dark") },
             ]}
             value={theme}
             onChange={onThemeChange}
           />
         </Row>
-        <Row title="Light theme" description="Shown in light mode.">
+        <Row title={t("Light theme")} description={t("Shown in light mode.")}>
           {themePicker("light")}
         </Row>
-        <Row title="Dark theme" description="Shown in dark mode.">
+        <Row title={t("Dark theme")} description={t("Shown in dark mode.")}>
           {themePicker("dark")}
         </Row>
         <div data-setting="installed-themes" className="px-4 py-3">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <span className="block text-body font-medium">Installed themes</span>
+              <span className="block text-body font-medium">{t("Installed themes")}</span>
               <span className="block text-meta text-muted-foreground">
-                VS Code themes from Open VSX. Each one&apos;s variants join the menus above.
+                {t("VS Code themes from Open VSX. Each one's variants join the menus above.")}
               </span>
             </div>
             <button
@@ -235,11 +241,11 @@ export function AppearanceSettings({
               onClick={() => setAdding(showing("light") ? "light" : "dark")}
             >
               <Plus aria-hidden className="size-3.5" />
-              Add theme
+              {t("Add theme")}
             </button>
           </div>
           {added.length > 0 && (
-            <ul aria-label="Installed themes" className="mt-3 flex flex-col gap-1">
+            <ul aria-label={t("Installed themes")} className="mt-3 flex flex-col gap-1">
               {added.map((e) => (
                 <li
                   key={e.id}
@@ -258,7 +264,10 @@ export function AppearanceSettings({
                       {e.themes.map((t) => t.name).join(", ")}
                     </span>
                   </span>
-                  <IconButton label={`Remove ${e.name}`} onClick={() => removeExtension(e.id)}>
+                  <IconButton
+                    label={t("Remove {{name}}", { name: e.name })}
+                    onClick={() => removeExtension(e.id)}
+                  >
                     <Trash2 />
                   </IconButton>
                 </li>
@@ -285,20 +294,22 @@ export function AppearanceSettings({
       />
 
       {canSet && (
-        <Section title="Window">
+        <Section title={t("Window")}>
           <Row
-            title="Background"
+            title={t("Background")}
             description={
               !window.parallax.canBlur
-                ? "Clear lets the desktop show through the window."
+                ? t("Clear lets the desktop show through the window.")
                 : window.parallax.platform === "linux"
-                  ? "Clear lets the desktop show through the window. Blurred asks your compositor, such as Hyprland or KDE, to frost it."
-                  : "Clear lets the desktop show through the window. Blurred frosts it."
+                  ? t(
+                      "Clear lets the desktop show through the window. Blurred asks your compositor, such as Hyprland or KDE, to frost it.",
+                    )
+                  : t("Clear lets the desktop show through the window. Blurred frosts it.")
             }
           >
             <Segmented
-              label="Window background"
-              options={materials.filter((m) => m.value !== "blur" || window.parallax.canBlur)}
+              label={t("Window background")}
+              options={materials().filter((m) => m.value !== "blur" || window.parallax.canBlur)}
               value={
                 appearance.windowMaterial === "blur" && !window.parallax.canBlur
                   ? "opaque"
@@ -310,8 +321,8 @@ export function AppearanceSettings({
           {needsTransparentWindow(appearance.windowMaterial, window.parallax.platform) &&
             !window.parallax.transparent && (
               <Row
-                title="Restart to finish"
-                description="Your OS makes a window see-through only when it opens."
+                title={t("Restart to finish")}
+                description={t("Your OS makes a window see-through only when it opens.")}
               >
                 <button
                   type="button"
@@ -319,18 +330,18 @@ export function AppearanceSettings({
                   onClick={() => window.parallax.relaunch?.()}
                 >
                   <RotateCw aria-hidden className="size-3.5" />
-                  Restart Parallax
+                  {t("Restart Parallax")}
                 </button>
               </Row>
             )}
           <Row
-            title="Background opacity"
-            description="How much of the theme covers what shows through. Text stays solid."
+            title={t("Background opacity")}
+            description={t("How much of the theme covers what shows through. Text stays solid.")}
           >
             <span className={`flex items-center gap-3 ${through ? "" : "opacity-50"}`}>
               <input
                 type="range"
-                aria-label="Background opacity"
+                aria-label={t("Background opacity")}
                 min={0}
                 max={100}
                 step={5}
@@ -357,10 +368,10 @@ export function AppearanceSettings({
 }
 
 const toolCalls: { value: ChatPrefs["toolCalls"]; label: string }[] = [
-  { value: "showAll", label: "Show all" },
-  { value: "hideSuccessful", label: "Hide successful" },
-  { value: "hideAll", label: "Hide all" },
-  { value: "zen", label: "Zen" },
+  { value: "showAll", label: msg("Show all") },
+  { value: "hideSuccessful", label: msg("Hide successful") },
+  { value: "hideAll", label: msg("Hide all") },
+  { value: "zen", label: msg("Zen") },
 ];
 
 /**
@@ -370,37 +381,39 @@ const toolCalls: { value: ChatPrefs["toolCalls"]; label: string }[] = [
 function ChatSettings() {
   const prefs = chatPrefs.use();
   return (
-    <Section title="Chat">
+    <Section title={t("Chat")}>
       <Row
-        title="Rich text composer"
-        description="Format Markdown as you type. Off, the box shows it as typed."
+        title={t("Rich text composer")}
+        description={t("Format Markdown as you type. Off, the box shows it as typed.")}
       >
         <Switch
-          label="Rich text composer"
+          label={t("Rich text composer")}
           checked={prefs.richComposer}
           onChange={(richComposer) => setChatPrefs({ richComposer })}
         />
       </Row>
       <Row
-        title="Render math"
-        description="Typeset LaTeX, such as $x^2$, in messages. Off, it shows as its source."
+        title={t("Render math")}
+        description={t("Typeset LaTeX, such as $x^2$, in messages. Off, it shows as its source.")}
       >
         <Switch
-          label="Render math"
+          label={t("Render math")}
           checked={prefs.math}
           onChange={(math) => setChatPrefs({ math })}
         />
       </Row>
       <Row
-        title="Tool calls"
-        description="The commands, edits, and searches a thread shows. Hide successful keeps the ones that failed. Zen shows only each turn's answer. Approvals, questions, and errors always show."
+        title={t("Tool calls")}
+        description={t(
+          "The commands, edits, and searches a thread shows. Hide successful keeps the ones that failed. Zen shows only each turn's answer. Approvals, questions, and errors always show.",
+        )}
       >
         <Picker
           field
-          label="Tool calls"
+          label={t("Tool calls")}
           value={prefs.toolCalls}
           onChange={(v) => setChatPrefs({ toolCalls: v as ChatPrefs["toolCalls"] })}
-          options={toolCalls}
+          options={toolCalls.map((o) => ({ ...o, label: t(o.label) }))}
           className="w-48"
           panelClassName="min-w-48"
         />
@@ -410,8 +423,8 @@ function ChatSettings() {
 }
 
 const modes: { value: SidebarMode; name: string }[] = [
-  { value: "inbox", name: "Inbox" },
-  { value: "traditional", name: "Traditional" },
+  { value: "inbox", name: msg("Inbox") },
+  { value: "traditional", name: msg("Traditional") },
 ];
 
 /**
@@ -423,44 +436,55 @@ function SidebarSettings() {
   const nav = { ...navDefaults, ...sidebarNav.use() };
   const prefs = sidebarPrefs.use();
   return (
-    <Section title="Sidebar">
+    <Section title={t("Sidebar")}>
       <Row
-        title="Layout"
-        description="Inbox lists your threads by activity, newest first. Traditional groups them in a folder per repo."
+        title={t("Layout")}
+        description={t(
+          "Inbox lists your threads by activity, newest first. Traditional groups them in a folder per repo.",
+        )}
       >
         <Segmented
-          label="Sidebar layout"
-          options={modes}
+          label={t("Sidebar layout")}
+          options={modes.map((m) => ({ ...m, name: t(m.name) }))}
           value={mode}
           onChange={(next) => sidebarMode.set(next)}
         />
       </Row>
       {/* Traditional's head rows. They show in Inbox too, so search finds them, and apply on switching. */}
       {navChoices.map(({ id, label }) => (
-        <Row key={id} title={label} description="In Traditional's head. Off, it waits under More.">
+        <Row
+          key={id}
+          title={t(label)}
+          description={t("In Traditional's head. Off, it waits under More.")}
+        >
           <Switch
-            label={`Show ${label} in the sidebar`}
+            label={t("Show {{page}} in the sidebar", { page: t(label) })}
             checked={nav[id]}
             onChange={(show) => sidebarNav.set({ ...nav, [id]: show })}
           />
         </Row>
       ))}
       <Row
-        title="Working section"
-        description="While a thread is working, list it under Working, above Archived. Off keeps it in the list."
+        title={t("Working section")}
+        description={t(
+          "While a thread is working, list it under Working, above Archived. Off keeps it in the list.",
+        )}
       >
         <Switch
-          label="Working section"
+          label={t("Working section")}
           checked={prefs.workingSection}
           onChange={(workingSection) => sidebarPrefs.set({ ...sidebarPrefs.get(), workingSection })}
         />
       </Row>
       <Row
-        title="Archive pages"
-        description={`Show ${archivePageSize} archived threads at a time, with Show more for the rest. Off lists them all.`}
+        title={t("Archive pages")}
+        description={t(
+          "Show {{count}} archived threads at a time, with Show more for the rest. Off lists them all.",
+          { count: archivePageSize },
+        )}
       >
         <Switch
-          label="Archive pages"
+          label={t("Archive pages")}
           checked={prefs.pageArchived}
           onChange={(pageArchived) => sidebarPrefs.set({ ...sidebarPrefs.get(), pageArchived })}
         />

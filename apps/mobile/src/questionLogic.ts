@@ -1,5 +1,7 @@
 // What the phone's question card and transcript work out without drawing, as the desktop's
 // Question.tsx and Approval.tsx do, which render DOM and can't be imported here.
+import { t } from "i18next";
+
 import { isAnswered, questionsOf, type Choice, type Question } from "../../desktop/src/renderer/questions";
 import type { Approval } from "../../desktop/src/renderer/transcript";
 
@@ -22,11 +24,13 @@ export const nextOpen = (choices: readonly Choice[], step: number) =>
     .map((_, i) => (step + 1 + i) % choices.length)
     .find((i) => i !== step && !isAnswered(choices[i]!));
 
-/** How a question came out, in the desktop's words. */
-function verbOf({ resolved }: Approval) {
-  if (!resolved) return "Waiting for your answer:";
-  if (resolved.decision === "allowed") return "Answered";
-  return resolved.decision === "denied" && resolved.by === "user" ? "Skipped" : "Question ended";
+/** How a question came out, in the desktop's words, followed by what it asked. */
+function titleOf({ resolved }: Approval, asked: string) {
+  if (!resolved) return t("Waiting for your answer: {{asked}}", { asked });
+  if (resolved.decision === "allowed") return t("Answered {{asked}}", { asked });
+  return resolved.decision === "denied" && resolved.by === "user"
+    ? t("Skipped {{asked}}", { asked })
+    : t("Question ended {{asked}}", { asked });
 }
 
 /**
@@ -36,6 +40,9 @@ function verbOf({ resolved }: Approval) {
 export function questionLine(approval: Approval): { title: string; answers?: string } | undefined {
   const questions = questionsOf(approval.request);
   if (questions.length === 0) return undefined;
-  const asked = questions.length === 1 ? questions[0]!.text : `${questions.length} questions`;
-  return { title: `${verbOf(approval)} ${asked}`, answers: approval.resolved?.answers?.join(" · ") };
+  const asked =
+    questions.length === 1
+      ? questions[0]!.text
+      : t("{{count}} questions", { count: questions.length, defaultValue_one: "{{count}} question" });
+  return { title: titleOf(approval, asked), answers: approval.resolved?.answers?.join(" · ") };
 }

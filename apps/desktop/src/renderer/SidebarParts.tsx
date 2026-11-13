@@ -1,30 +1,33 @@
 // Pieces of the sidebar (0075): its View options, and the small parts the sidebar shares.
+import { t } from "i18next";
 import type { ReactNode } from "react";
 
+import { msg } from "../i18n";
 import type { TodayGroup } from "./pins";
 
 /** Today's auto-archive choices, in hours, and never. */
 const quietChoices = [
-  [null, "Off"],
-  [12, "12h"],
-  [24, "1d"],
-  [72, "3d"],
-  [168, "1w"],
+  [null, msg("Off")],
+  [12, msg("12h")],
+  [24, msg("1d")],
+  [72, msg("3d")],
+  [168, msg("1w")],
 ] as const;
 
 /** An auto-archive choice in words, for a toast: "a day", "3 days". */
 export const quietFor = (hours: number) =>
   hours === 24
-    ? "a day"
+    ? t("a day")
     : hours === 168
-      ? "a week"
+      ? t("a week")
       : hours < 24
-        ? `${hours} hours`
-        : `${hours / 24} days`;
+        ? t("{{count}} hours", { count: hours, defaultValue_one: "{{count}} hour" })
+        : t("{{count}} days", { count: hours / 24, defaultValue_one: "{{count}} day" });
 
 /**
  * A row of choices whose thumb slides to the chosen one, as a radio group: Left and Right move the
- * choice, and only the chosen option takes Tab.
+ * choice, and only the chosen option takes Tab. Each option's text is English marked with `msg`,
+ * shown through `t`.
  */
 function Segmented<T extends string | number | boolean | null>({
   label,
@@ -74,7 +77,7 @@ function Segmented<T extends string | number | boolean | null>({
           onClick={() => onChange(v)}
           className="relative h-6 rounded-sm px-1.5 text-meta font-medium whitespace-nowrap text-faint-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-checked:text-foreground"
         >
-          {text}
+          {t(text)}
         </button>
       ))}
     </div>
@@ -103,43 +106,43 @@ export function ViewOptions({
   onGroup: (group: TodayGroup) => void;
 }) {
   return (
-    <div role="group" aria-label="View" className="flex flex-col gap-2.5">
+    <div role="group" aria-label={t("View")} className="flex flex-col gap-2.5">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5">
         {group !== undefined && (
           <>
-            <span className="text-body text-muted-foreground">Group</span>
+            <span className="text-body text-muted-foreground">{t("Group")}</span>
             <Segmented
-              label="Group"
+              label={t("Group")}
               value={group}
               options={[
-                ["none", "None"],
-                ["repo", "Repo"],
-                ["day", "Day"],
+                ["none", msg("None")],
+                ["repo", msg("Repo")],
+                ["day", msg("Day")],
               ]}
               onChange={onGroup}
             />
           </>
         )}
-        <span className="text-body text-muted-foreground">Rows</span>
+        <span className="text-body text-muted-foreground">{t("Rows")}</span>
         <Segmented
-          label="Rows"
+          label={t("Rows")}
           value={compact}
           options={[
-            [false, "Full"],
-            [true, "One line"],
+            [false, msg("Full")],
+            [true, msg("One line")],
           ]}
           onChange={onCompact}
         />
       </div>
-      <p className="text-body text-muted-foreground">Archive finished threads after</p>
+      <p className="text-body text-muted-foreground">{t("Archive finished threads after")}</p>
       <Segmented
-        label="Archive finished threads after"
+        label={t("Archive finished threads after")}
         value={autoHours}
         options={quietChoices}
         onChange={onAutoHours}
       />
       <p className="text-meta leading-snug text-faint-foreground">
-        Only threads you've seen. Pinned threads stay.
+        {t("Only threads you've seen. Pinned threads stay.")}
       </p>
     </div>
   );

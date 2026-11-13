@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowRight,
   Check,
@@ -64,8 +65,8 @@ function ItemIcon({ item }: { item: UpdateItem }) {
 
 /** What the app's own row says about its download, which main reports. */
 function appLine({ progress }: UpdateState, downloaded: string | undefined) {
-  if (progress !== undefined) return `Downloading… ${progress}%`;
-  if (downloaded) return "Downloaded. Parallax restarts to install it.";
+  if (progress !== undefined) return t("Downloading… {{progress}}%", { progress });
+  if (downloaded) return t("Downloaded. Parallax restarts to install it.");
   return undefined;
 }
 
@@ -103,7 +104,10 @@ function ItemRow({
           {item.from && (
             <>
               <span>{item.from}</span>
-              <ArrowRight aria-label="to" className="mx-1 size-3 shrink-0" />
+              <ArrowRight
+                aria-label={t("to", { context: "from one version to another" })}
+                className="mx-1 size-3 shrink-0"
+              />
             </>
           )}
           <span className="text-foreground">
@@ -121,13 +125,13 @@ function ItemRow({
       <span className="grid size-4 shrink-0 place-items-center" aria-live="polite">
         {running ? (
           <LoaderCircle
-            aria-label="Updating"
+            aria-label={t("Updating")}
             className="size-4 animate-spin text-muted-foreground"
           />
         ) : status?.state === "done" ? (
-          <CircleCheck aria-label="Updated" className="size-4 text-added" />
+          <CircleCheck aria-label={t("Updated")} className="size-4 text-added" />
         ) : status?.state === "failed" ? (
-          <CircleAlert aria-label="Failed" className="size-4 text-danger" />
+          <CircleAlert aria-label={t("Failed")} className="size-4 text-danger" />
         ) : null}
       </span>
     </li>
@@ -139,13 +143,13 @@ function Changelog({ available }: { available: NonNullable<UpdateState["availabl
   return (
     <div className="mt-2 rounded-md border border-border bg-background/60 p-2.5">
       <div className="mb-1 flex items-baseline justify-between gap-3">
-        <h3 className="text-meta font-medium">What's new in Parallax</h3>
+        <h3 className="text-meta font-medium">{t("What's new in Parallax")}</h3>
         <a href={available.url} className="shrink-0 text-meta text-accent hover:underline">
-          Full changelog
+          {t("Full changelog")}
         </a>
       </div>
       <p className="max-h-40 overflow-y-auto text-body whitespace-pre-line text-muted-foreground">
-        {available.notes || "No notes for this release."}
+        {available.notes || t("No notes for this release.")}
       </p>
     </div>
   );
@@ -282,18 +286,21 @@ export function UpdateButton() {
 
   const onlyApp = items.length === 1 && items[0]!.kind === "app";
   const label = downloading
-    ? `Downloading Parallax ${available?.version}: ${progress}%`
+    ? t("Downloading Parallax {{version}}: {{progress}}%", {
+        version: available?.version,
+        progress,
+      })
     : busy
-      ? "Updating…"
+      ? t("Updating…")
       : onlyApp && downloaded
-        ? `Restart to install Parallax ${downloaded}`
+        ? t("Restart to install Parallax {{version}}", { version: downloaded })
         : onlyApp
-          ? `Update available: Parallax ${available?.version}`
+          ? t("Update available: Parallax {{version}}", { version: available?.version })
           : items.length > 0
-            ? `Update ${planSummary(plans)}`
+            ? t("Update {{summary}}", { summary: planSummary(plans) })
             : ready
-              ? `Update ready: ${ready}`
-              : (note ?? "Update Parallax");
+              ? t("Update ready: {{version}}", { version: ready })
+              : (note ?? t("Update Parallax"));
   const showHost = new Set(rows.map((item) => item.hostId)).size > 1;
   const line = (item: UpdateItem) => (item.kind === "app" ? appLine(state, downloaded) : undefined);
   return (
@@ -339,7 +346,7 @@ export function UpdateButton() {
         ref={card}
         id={id}
         popover="manual"
-        aria-label="Update"
+        aria-label={t("Update", { context: "noun" })}
         onPointerEnter={() => open()}
         onPointerLeave={close}
         onFocus={() => open()}
@@ -350,8 +357,11 @@ export function UpdateButton() {
           <>
             <h2 className="text-body font-medium">
               {busy
-                ? "Updating…"
-                : `${items.length} ${items.length === 1 ? "update" : "updates"} available`}
+                ? t("Updating…")
+                : t("{{count}} updates available", {
+                    count: items.length,
+                    defaultValue_one: "{{count}} update available",
+                  })}
             </h2>
             <ul className="mt-1">
               {items.map((item) => (
@@ -368,7 +378,7 @@ export function UpdateButton() {
             {downloading && (
               <div
                 role="progressbar"
-                aria-label="Download"
+                aria-label={t("Download", { context: "noun" })}
                 aria-valuenow={progress}
                 className="mt-2 h-1 overflow-hidden rounded-full bg-selected"
               >
@@ -383,11 +393,13 @@ export function UpdateButton() {
                 {note}
               </p>
             )}
-            <p className="mt-2 text-meta text-muted-foreground">Click to review and update.</p>
+            <p className="mt-2 text-meta text-muted-foreground">
+              {t("Click to review and update.")}
+            </p>
           </>
         ) : (
           <p role="status" className="text-body text-muted-foreground">
-            {answer ?? note ?? "Up to date"}
+            {(updating ? t("Updating…") : answer) ?? note ?? t("Up to date")}
           </p>
         )}
       </div>
@@ -400,16 +412,16 @@ export function UpdateButton() {
       >
         <div className="px-5 pt-4 pb-3">
           <h2 id={`${id}-confirm`} className="text-reading font-semibold">
-            {settled ? "Updates finished" : busy ? "Updating…" : "Updates available"}
+            {settled ? t("Updates finished") : busy ? t("Updating…") : t("Updates available")}
           </h2>
           <p className="mt-1 text-body text-muted-foreground">
             {settled
               ? Object.values(statuses).some((s) => s.state === "failed")
-                ? "Some updates failed. Try them again from Update."
-                : "Everything you chose is up to date."
+                ? t("Some updates failed. Try them again from Update.")
+                : t("Everything you chose is up to date.")
               : taken
-                ? "You can close this; updates keep going."
-                : "Choose what to update. Parallax restarts last, if it's chosen."}
+                ? t("You can close this; updates keep going.")
+                : t("Choose what to update. Parallax restarts last, if it's chosen.")}
           </p>
           <ul className="mt-2 divide-y divide-border">
             {rows.map((item) => (
@@ -418,14 +430,19 @@ export function UpdateButton() {
                 item={item}
                 status={statuses[item.key]}
                 line={
-                  line(item) ?? (statuses[item.key]?.state === "waiting" ? "Waiting…" : undefined)
+                  line(item) ??
+                  (statuses[item.key]?.state === "waiting" ? t("Waiting…") : undefined)
                 }
                 showHost={showHost}
               >
                 {!taken && (
                   <input
                     type="checkbox"
-                    aria-label={`Update ${item.name}${showHost ? ` on ${item.host}` : ""}`}
+                    aria-label={
+                      showHost
+                        ? t("Update {{name}} on {{host}}", { name: item.name, host: item.host })
+                        : t("Update {{name}}", { name: item.name })
+                    }
                     checked={!unticked.has(item.key)}
                     onChange={(e) => tick(item.key, e.target.checked)}
                   />
@@ -439,7 +456,10 @@ export function UpdateButton() {
           {!taken && running > 0 && (
             <>
               <p className="mt-4 text-body">
-                {running} running {running === 1 ? "thread" : "threads"} will be interrupted.
+                {t("{{count}} running threads will be interrupted.", {
+                  count: running,
+                  defaultValue_one: "{{count}} running thread will be interrupted.",
+                })}
               </p>
               <label className="mt-2 flex items-center gap-2 text-body text-muted-foreground">
                 <input
@@ -447,7 +467,7 @@ export function UpdateButton() {
                   checked={continueThreads ?? restart.continueThreads}
                   onChange={(e) => setContinueThreads(e.target.checked)}
                 />
-                Continue threads after restarts
+                {t("Continue threads after restarts")}
               </label>
             </>
           )}
@@ -460,7 +480,7 @@ export function UpdateButton() {
               onClick={() => confirm.current?.close()}
               className="rounded-md px-3 py-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
             >
-              {taken ? "Close" : "Cancel"}
+              {taken ? t("Close") : t("Cancel")}
             </button>
           )}
           <button
@@ -473,12 +493,12 @@ export function UpdateButton() {
           >
             {busy && <LoaderCircle className="size-3.5 animate-spin" />}
             {settled
-              ? "Done"
+              ? t("Done")
               : busy
-                ? "Updating…"
+                ? t("Updating…")
                 : chosen.length === items.length
-                  ? "Update all"
-                  : `Update ${chosen.length} selected`}
+                  ? t("Update all")
+                  : t("Update {{count}} selected", { count: chosen.length })}
           </button>
         </div>
       </dialog>
@@ -509,12 +529,12 @@ export function useUpdateAlarms() {
       notify({
         key: "update",
         tone: "success",
-        title: "Update downloaded",
-        body: "Restart the app from the update button to install it.",
-        action: url ? { label: "Read more", href: url } : undefined,
+        title: t("Update downloaded"),
+        body: t("Restart the app from the update button to install it."),
+        action: url ? { label: t("Read more"), href: url } : undefined,
         sticky: true,
       });
     } else if (wasBusy && progress === undefined && note)
-      notify({ key: "update", tone: "error", title: "Update failed", body: note });
+      notify({ key: "update", tone: "error", title: t("Update failed"), body: note });
   }, [downloaded, url, progress, note]);
 }

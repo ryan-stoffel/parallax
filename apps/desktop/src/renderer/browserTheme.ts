@@ -1,6 +1,7 @@
 import { argbFromHex, Hct, hexFromArgb, TonalPalette } from "@material/material-color-utilities";
 import { useSyncExternalStore, type CSSProperties } from "react";
 
+import { msg } from "../i18n";
 import { stored } from "./stored";
 
 // The browser's themes (PLX-973): Helium's, Chrome's Customize Chrome colors, or the app's own.
@@ -27,7 +28,10 @@ export interface BrowserColors {
 type Fixed = { light: BrowserColors; dark: BrowserColors };
 type Seeded = { seed: string; variant: "tonal" | "neutral" };
 
-/** A theme: the app's own colors, a fixed set, or a seed Chrome builds a palette from. */
+/**
+ * A theme: the app's own colors, a fixed set, or a seed Chrome builds a palette from. Its name is
+ * English, shown through `t`.
+ */
 interface BrowserTheme {
   id: string;
   name: string;
@@ -45,7 +49,7 @@ const chromeDark: BrowserColors = {
 };
 
 export const browserThemes: readonly BrowserTheme[] = [
-  { id: "parallax", name: "Match Parallax" },
+  { id: "parallax", name: msg("Match Parallax") },
   {
     id: "helium",
     name: "Helium",
@@ -73,7 +77,7 @@ export const browserThemes: readonly BrowserTheme[] = [
   },
   {
     id: "default",
-    name: "Default",
+    name: msg("Default"),
     colors: {
       light: {
         frame: "#D3E3FD",
@@ -89,7 +93,7 @@ export const browserThemes: readonly BrowserTheme[] = [
   },
   {
     id: "grey",
-    name: "Grey",
+    name: msg("Grey"),
     colors: {
       light: {
         frame: "#E3E3E3",
@@ -105,18 +109,18 @@ export const browserThemes: readonly BrowserTheme[] = [
   },
   ...(
     [
-      ["blue", "Blue", "#8CABE4", "tonal"],
-      ["aqua", "Aqua", "#26A69A", "tonal"],
-      ["green", "Green", "#00FF00", "tonal"],
-      ["citron", "Citron", "#FADF73", "tonal"],
-      ["orange", "Orange", "#FF8000", "tonal"],
-      ["rose", "Rose", "#F3B2BE", "tonal"],
-      ["fuchsia", "Fuchsia", "#FF00FF", "tonal"],
-      ["violet", "Violet", "#E5D5FC", "tonal"],
-      ["coolGrey", "Cool grey", "#8CABE4", "neutral"],
-      ["viridian", "Viridian", "#87BA81", "neutral"],
-      ["apricot", "Apricot", "#FCDBC9", "neutral"],
-      ["pink", "Pink", "#F3B2BE", "neutral"],
+      ["blue", msg("Blue"), "#8CABE4", "tonal"],
+      ["aqua", msg("Aqua"), "#26A69A", "tonal"],
+      ["green", msg("Green"), "#00FF00", "tonal"],
+      ["citron", msg("Citron"), "#FADF73", "tonal"],
+      ["orange", msg("Orange"), "#FF8000", "tonal"],
+      ["rose", msg("Rose"), "#F3B2BE", "tonal"],
+      ["fuchsia", msg("Fuchsia"), "#FF00FF", "tonal"],
+      ["violet", msg("Violet"), "#E5D5FC", "tonal"],
+      ["coolGrey", msg("Cool grey"), "#8CABE4", "neutral"],
+      ["viridian", msg("Viridian"), "#87BA81", "neutral"],
+      ["apricot", msg("Apricot"), "#FCDBC9", "neutral"],
+      ["pink", msg("Pink"), "#F3B2BE", "neutral"],
     ] as const
   ).map(([id, name, seed, variant]) => ({
     id,

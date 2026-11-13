@@ -2,6 +2,7 @@
 // computer, and its first message, which plxd needs to start it. Creating starts it and makes its
 // chat the main view. It takes the desktop form's default access and plxd's default autonomy.
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { useRef, useState } from "react";
 import { ScrollView, StyleSheet, TextInput } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -70,36 +71,36 @@ export function NewOrchestratorScreen() {
       automaticallyAdjustKeyboardInsets
     >
       <T accessibilityRole="header" style={styles.title}>
-        New orchestrator
+        {t("New orchestrator")}
       </T>
-      <Section title="Name">
+      <Section title={t("Name")}>
         <TextInput
-          accessibilityLabel="Name"
+          accessibilityLabel={t("Name")}
           value={typed ?? place?.repo.name ?? ""}
           onChangeText={setTyped}
-          placeholder="New orchestrator"
+          placeholder={t("New orchestrator")}
           placeholderTextColor={c.faintForeground}
           selectionColor={c.accent}
           autoCorrect={false}
           style={[styles.input, { color: c.foreground }]}
         />
       </Section>
-      <Section title="Repository">
+      <Section title={t("Repository")}>
         <Row
           leading={place && <RepoIcon repo={place.repo} shared={shared} size={28} />}
-          title={place?.repo.name ?? "No repository"}
+          title={place?.repo.name ?? t("No repository")}
           detail={place && `${place.computer.machine.name} · ${homeless(place.repo.path)}`}
           chevron={places.length > 1}
           onPress={places.length > 1 ? () => setPicking(true) : undefined}
           last
         />
       </Section>
-      <Section title="First message">
+      <Section title={t("First message")}>
         <TextInput
-          accessibilityLabel="First message"
+          accessibilityLabel={t("First message")}
           value={message}
           onChangeText={setMessage}
-          placeholder="Describe a feature or a bug"
+          placeholder={t("Describe a feature or a bug")}
           placeholderTextColor={c.faintForeground}
           selectionColor={c.accent}
           multiline
@@ -112,13 +113,13 @@ export function NewOrchestratorScreen() {
         </T>
       )}
       <Button
-        label={creating ? "Creating…" : "Create orchestrator"}
+        label={creating ? t("Creating…") : t("Create orchestrator")}
         primary
         disabled={!place || !name || !prompt || creating}
         onPress={() => void create()}
       />
       <Choices
-        title="Repository"
+        title={t("Repository")}
         open={picking}
         value={place && keyOf(place)}
         options={places.map((p) => ({

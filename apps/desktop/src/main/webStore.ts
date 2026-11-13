@@ -5,6 +5,7 @@ import {
   type IpcMainInvokeEvent,
   type Session,
 } from "electron";
+import { t } from "i18next";
 
 import { installExtension, removeExtension } from "./extensions";
 import { broadcast } from "./windows";
@@ -68,8 +69,8 @@ export async function answerStore(
       const extension = session.extensions.getExtension(id);
       if (!extension) return "success";
       const confirmed = await confirm(event, {
-        message: `Remove “${extension.name}”?`,
-        button: "Remove",
+        message: t("Remove “{{name}}”?", { name: extension.name }),
+        button: t("Remove"),
       });
       if (!confirmed) return "user_cancelled";
       await removeExtension(session, id);
@@ -89,11 +90,13 @@ async function begin(session: Session, event: IpcMainInvokeEvent, details: unkno
   if (installing.has(id)) return { result: "install_in_progress" };
   installing.add(id);
   try {
-    const name = typeof localizedName === "string" ? localizedName : "this extension";
     const confirmed = await confirm(event, {
-      message: `Add “${name}”?`,
-      detail: "It runs in Parallax's browser, as it would in Chrome.",
-      button: "Add Extension",
+      message:
+        typeof localizedName === "string"
+          ? t("Add “{{name}}”?", { name: localizedName })
+          : t("Add this extension?"),
+      detail: t("It runs in Parallax's browser, as it would in Chrome."),
+      button: t("Add Extension"),
     });
     if (!confirmed) return { result: "user_cancelled" };
     const answer = await installExtension(session, id);
@@ -117,7 +120,7 @@ async function confirm(
     type: "question" as const,
     message: ask.message,
     ...(ask.detail && { detail: ask.detail }),
-    buttons: [ask.button, "Cancel"],
+    buttons: [ask.button, t("Cancel")],
     defaultId: 0,
     cancelId: 1,
   };

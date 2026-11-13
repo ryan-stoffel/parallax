@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useMemo, useState } from "react";
 
 import type { ConnectState, DeviceHost, DeviceIcon, SavedHost } from "../preload/bridge";
@@ -32,7 +33,7 @@ export function useConnect(): ConnectState | undefined {
 export function useHosts(): Host[] {
   const [saved, setSaved] = useState<SavedHost[]>([]);
   const [devices, setDevices] = useState<DeviceHost[]>([]);
-  const [localName, setLocalName] = useState("This computer");
+  const [localName, setLocalName] = useState(() => t("This computer"));
   const connect = useConnect();
   useEffect(() => {
     const stop = window.parallax.onHosts(setSaved);

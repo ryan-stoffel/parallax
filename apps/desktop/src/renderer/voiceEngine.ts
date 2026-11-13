@@ -1,10 +1,11 @@
+import { t } from "i18next";
 import { createWhistle, type Whistle } from "cactus-needle/browser";
 
 /** Bundled, checksum-verified weights and a local WASM worker. No runtime download or API key. */
 export async function loadVoiceEngine(signal: AbortSignal): Promise<Whistle> {
   const response = await fetch(new URL("./voice-assets/whistle.cact", import.meta.url), { signal });
   if (!response.ok)
-    throw new Error("The bundled voice model could not be loaded. Reinstall Parallax.");
+    throw new Error(t("The bundled voice model could not be loaded. Reinstall Parallax."));
   const model = await response.arrayBuffer();
   signal.throwIfAborted();
   // Byte input avoids the wrapper's HTTP-only URL validation on Electron's secure app:// origin.

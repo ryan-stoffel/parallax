@@ -1,5 +1,6 @@
 // Pairing on the LAN (0065), for a computer not on the account: pick a computer showing a code on
 // this network, or type its address, then the code from its Settings > Connections > Pair a device.
+import { t } from "i18next";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -59,21 +60,22 @@ export function Pairing({
     >
       <Mark size={36} />
       <T medium style={{ fontSize: 22, lineHeight: 30, marginTop: 8 }}>
-        Pair with your computer
+        {t("Pair with your computer")}
       </T>
       <T muted>
-        On your computer, open Settings, then Connections, and choose Pair a device. Pick it here
-        and enter the code it shows. A paired phone has full control of that computer.
+        {t(
+          "On your computer, open Settings, then Connections, and choose Pair a device. Pick it here and enter the code it shows. A paired phone has full control of that computer.",
+        )}
       </T>
 
       <View style={styles.section}>
         <View style={styles.row}>
           <T muted style={{ fontSize: 13 }}>
-            On this network
+            {t("On this network")}
           </T>
           {found ? (
             <Pressable onPress={look} accessibilityRole="button">
-              <T style={{ fontSize: 13, color: c.accent }}>Look again</T>
+              <T style={{ fontSize: 13, color: c.accent }}>{t("Look again")}</T>
             </Pressable>
           ) : (
             <ActivityIndicator size="small" />
@@ -81,7 +83,7 @@ export function Pairing({
         </View>
         {found?.length === 0 && (
           <T muted style={{ fontSize: 13 }}>
-            No computer is showing a code. Type its address below.
+            {t("No computer is showing a code. Type its address below.")}
           </T>
         )}
         {found?.map((host) => (
@@ -106,14 +108,14 @@ export function Pairing({
       </View>
 
       <Input
-        accessibilityLabel="Address"
-        placeholder="Address, such as 192.168.1.20"
+        accessibilityLabel={t("Address")}
+        placeholder={t("Address, such as 192.168.1.20")}
         value={route}
         onChangeText={setRoute}
         keyboardType="numbers-and-punctuation"
       />
       <Input
-        accessibilityLabel="Code"
+        accessibilityLabel={t("Code", { context: "pairing code" })}
         placeholder="7KQ-4M2"
         onChangeText={setCode}
         autoCapitalize="characters"
@@ -123,7 +125,7 @@ export function Pairing({
         style={styles.code}
       />
       <Button
-        label={busy ? "Pairing…" : "Pair"}
+        label={busy ? t("Pairing…") : t("Pair")}
         primary
         disabled={busy || !route.trim() || code.length < 6}
         onPress={() => void submit()}
@@ -134,7 +136,7 @@ export function Pairing({
         </T>
       )}
       <Pressable accessibilityRole="button" onPress={onCancel} style={{ alignSelf: "center", padding: 10 }}>
-        <T style={{ fontSize: 14, color: c.accent }}>Cancel</T>
+        <T style={{ fontSize: 14, color: c.accent }}>{t("Cancel")}</T>
       </Pressable>
     </ScrollView>
   );

@@ -1,6 +1,8 @@
 // The pull request screens' pure pieces: the list's filters over the desktop's search, a unified
 // diff split into rows with line numbers, the checks' and reviews' one-line summaries, and the
 // activity timeline, as T3 Code's mobile app summarizes them. Pure, for the test.
+import { t } from "i18next";
+
 import type { PrCheck, PrReview, PrReviewState, PullRequest } from "../../desktop/src/protocol/generated/protocol";
 import { matches, sortRows, type PrRow } from "../../desktop/src/renderer/pullRequestSearch";
 
@@ -92,11 +94,16 @@ export type Tone = "success" | "danger" | "warning" | "muted";
 export function checksSummary(checks: PrCheck[]): { title: string; value: string; tone: Tone } {
   const count = (state: PrCheck["state"]) => checks.filter((c) => c.state === state).length;
   const [failed, pending, passed] = [count("failed"), count("pending"), count("passed")];
-  const of = `${passed} of ${checks.length}`;
-  if (failed) return { title: `${failed} ${failed === 1 ? "check" : "checks"} failing`, value: of, tone: "danger" };
-  if (pending) return { title: "Checks running", value: `${pending} pending`, tone: "warning" };
-  if (passed === checks.length) return { title: "All checks passed", value: of, tone: "success" };
-  return { title: "Checks completed", value: of, tone: passed ? "success" : "muted" };
+  const of = t("{{done}} of {{total}}", { done: passed, total: checks.length });
+  if (failed)
+    return {
+      title: t("{{count}} checks failing", { count: failed, defaultValue_one: "{{count}} check failing" }),
+      value: of,
+      tone: "danger",
+    };
+  if (pending) return { title: t("Checks running"), value: t("{{count}} pending", { count: pending }), tone: "warning" };
+  if (passed === checks.length) return { title: t("All checks passed"), value: of, tone: "success" };
+  return { title: t("Checks completed"), value: of, tone: passed ? "success" : "muted" };
 }
 
 /** Each reviewer's latest verdict, a verdict over a comment, without dismissed ones. */
@@ -118,18 +125,22 @@ export function reviewsSummary(pr: Pick<PullRequest, "reviews" | "reviewRequests
   const latest = latestReviews(pr.reviews ?? []);
   const changes = latest.filter((r) => r.state === "changesRequested");
   const approved = latest.filter((r) => r.state === "approved");
-  const people = (n: number) => `${n} ${n === 1 ? "reviewer" : "reviewers"}`;
-  if (changes.length) return { title: "Changes requested", value: people(changes.length), tone: "danger" };
+  const people = (n: number) => t("{{count}} reviewers", { count: n, defaultValue_one: "{{count}} reviewer" });
+  if (changes.length) return { title: t("Changes requested"), value: people(changes.length), tone: "danger" };
   if (approved.length)
     return {
-      title: approved.length === 1 ? `Approved by ${approved[0]!.author}` : "Reviews approved",
-      value: `${approved.length} approved`,
+      title: approved.length === 1 ? t("Approved by {{author}}", { author: approved[0]!.author }) : t("Reviews approved"),
+      value: t("{{count}} approved", { count: approved.length }),
       tone: "success",
     };
   if (pr.reviewRequests.length)
-    return { title: "Awaiting review", value: `${pr.reviewRequests.length} requested`, tone: "muted" };
-  if (latest.length) return { title: "Reviews", value: `${latest.length} commented`, tone: "muted" };
-  return { title: "No reviews", value: "None requested", tone: "muted" };
+    return {
+      title: t("Awaiting review"),
+      value: t("{{count}} requested", { count: pr.reviewRequests.length }),
+      tone: "muted",
+    };
+  if (latest.length) return { title: t("Reviews"), value: t("{{count}} commented", { count: latest.length }), tone: "muted" };
+  return { title: t("No reviews"), value: t("None requested"), tone: "muted" };
 }
 
 export type Activity =

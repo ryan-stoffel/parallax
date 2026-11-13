@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useId, type ComponentProps, type ReactNode, type Ref } from "react";
 
 import { Button } from "./controls";
@@ -77,7 +78,7 @@ export function ConfirmDialog({
         )}
         <div className="mt-4 flex justify-end gap-2">
           <Button type="submit" value="cancel">
-            Cancel
+            {t("Cancel")}
           </Button>
           {alternate && (
             <Button variant="outline" disabled={!!busy} onClick={alternate.onConfirm}>

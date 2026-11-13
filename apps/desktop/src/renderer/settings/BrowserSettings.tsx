@@ -1,3 +1,4 @@
+import i18next, { t } from "i18next";
 import { useRef, useState } from "react";
 
 import { pageFit, ThemePicker } from "../Browser";
@@ -36,45 +37,51 @@ export function BrowserSettings() {
 
   return (
     <>
-      <PageTitle title="Browser">
-        The browser tabs in the side panel. These apply to all of them.
+      <PageTitle title={t("Browser")}>
+        {t("The browser tabs in the side panel. These apply to all of them.")}
       </PageTitle>
 
-      <Section title="Appearance">
+      <Section title={t("Appearance")}>
         {/* Its tiles take the row's width, under its title. */}
         <div data-setting="theme" className="border-b border-border">
           <div className="px-4 pt-3 pb-2">
-            <span className="block text-body font-medium">Theme</span>
+            <span className="block text-body font-medium">{t("Theme")}</span>
             <span className="block text-meta text-muted-foreground">
-              The colors of the browser's tabs and toolbar
+              {t("The colors of the browser's tabs and toolbar")}
             </span>
           </div>
           <ThemePicker />
         </div>
-        <Row title="Show bookmarks bar" description="Under the toolbar, while there are bookmarks">
+        <Row
+          title={t("Show bookmarks bar")}
+          description={t("Under the toolbar, while there are bookmarks")}
+        >
           <Switch
-            label="Show bookmarks bar"
+            label={t("Show bookmarks bar")}
             checked={showBookmarks}
             onChange={(on) => bookmarksBar.set(on)}
           />
         </Row>
-        <Row title="Page size" description="Desktop lays a page out as on a monitor, scaled to fit">
+        <Row
+          title={t("Page size")}
+          description={t("Desktop lays a page out as on a monitor, scaled to fit")}
+        >
           <Picker
-            label="Page size"
+            label={t("Page size")}
             value={fit}
             onChange={(v) => pageFit.set(v as "panel" | "monitor")}
             options={[
-              { value: "panel", label: "Fill the space" },
-              { value: "monitor", label: "Desktop" },
+              { value: "panel", label: t("Fill the space") },
+              { value: "monitor", label: t("Desktop") },
             ]}
           />
         </Row>
       </Section>
 
-      <Section title="Search engine">
-        <Row title="Search engine" description="What the address bar searches with">
+      <Section title={t("Search engine")}>
+        <Row title={t("Search engine")} description={t("What the address bar searches with")}>
           <Picker
-            label="Search engine"
+            label={t("Search engine")}
             value={engine}
             onChange={(v) => searchEngine.set(v)}
             options={searchEngines.map((e) => ({ value: e.id, label: e.name }))}
@@ -82,31 +89,33 @@ export function BrowserSettings() {
         </Row>
       </Section>
 
-      <Section title="On startup">
+      <Section title={t("On startup")}>
         <Row
-          title="Continue where you left off"
-          description="Each side panel opens the browser tabs it had. Off, they don't come back."
+          title={t("Continue where you left off")}
+          description={t(
+            "Each side panel opens the browser tabs it had. Off, they don't come back.",
+          )}
         >
           <Switch
-            label="Continue where you left off"
+            label={t("Continue where you left off")}
             checked={restore}
             onChange={(on) => restoreTabs.set(on)}
           />
         </Row>
       </Section>
 
-      <Section title="Home button">
-        <Row title="Show home button" description="In the toolbar, beside Reload">
+      <Section title={t("Home button")}>
+        <Row title={t("Show home button")} description={t("In the toolbar, beside Reload")}>
           <Switch
-            label="Show home button"
+            label={t("Show home button")}
             checked={home.show}
             onChange={(show) => homeButton.set({ ...home, show })}
           />
         </Row>
-        <Row title="Home page" description="Empty opens a new tab">
+        <Row title={t("Home page")} description={t("Empty opens a new tab")}>
           <input
-            aria-label="Home page"
-            placeholder="New tab"
+            aria-label={t("Home page")}
+            placeholder={t("New tab")}
             spellCheck={false}
             value={home.url}
             onChange={(e) => homeButton.set({ ...home, url: e.target.value })}
@@ -115,15 +124,15 @@ export function BrowserSettings() {
         </Row>
       </Section>
 
-      <Section title="Downloads">
-        <Row title="Location" description={downloadsTo.dir || "Your Downloads folder"}>
+      <Section title={t("Downloads")}>
+        <Row title={t("Location")} description={downloadsTo.dir || t("Your Downloads folder")}>
           {downloadsTo.dir && (
             <button
               type="button"
               className={quietButton}
               onClick={() => setDownloadPrefs({ ...downloadsTo, dir: "" })}
             >
-              Reset
+              {t("Reset")}
             </button>
           )}
           <button
@@ -135,46 +144,52 @@ export function BrowserSettings() {
               })
             }
           >
-            Change…
+            {t("Change…")}
           </button>
         </Row>
         <Row
-          title="Ask where to save each file before downloading"
-          description="Off, each file goes straight to the location"
+          title={t("Ask where to save each file before downloading")}
+          description={t("Off, each file goes straight to the location")}
         >
           <Switch
-            label="Ask where to save each file before downloading"
+            label={t("Ask where to save each file before downloading")}
             checked={downloadsTo.ask}
             onChange={(ask) => setDownloadPrefs({ ...downloadsTo, ask })}
           />
         </Row>
       </Section>
 
-      <Section title="Privacy">
-        <Row title="Browsing history" description="Every page in History">
+      <Section title={t("Privacy")}>
+        <Row title={t("Browsing history")} description={t("Every page in History")}>
           <Switch
-            label="Browsing history"
+            label={t("Browsing history")}
             checked={clear.history}
             onChange={(history) => setClear({ ...clear, history })}
           />
         </Row>
-        <Row title="Cookies and other site data" description="Signs you out of most sites">
+        <Row
+          title={t("Cookies and other site data")}
+          description={t("Signs you out of most sites")}
+        >
           <Switch
-            label="Cookies and other site data"
+            label={t("Cookies and other site data")}
             checked={clear.siteData}
             onChange={(siteData) => setClear({ ...clear, siteData })}
           />
         </Row>
-        <Row title="Cached images and files" description="Pages load slower the next time">
+        <Row
+          title={t("Cached images and files")}
+          description={t("Pages load slower the next time")}
+        >
           <Switch
-            label="Cached images and files"
+            label={t("Cached images and files")}
             checked={clear.cache}
             onChange={(cache) => setClear({ ...clear, cache })}
           />
         </Row>
         <Row
-          title="Clear browsing data"
-          description="All time, for every browser. Extensions keep theirs."
+          title={t("Clear browsing data")}
+          description={t("All time, for every browser. Extensions keep theirs.")}
         >
           <button
             type="button"
@@ -182,13 +197,13 @@ export function BrowserSettings() {
             onClick={() => confirm.current?.showModal()}
             className={`${quietButton} border border-border disabled:opacity-50`}
           >
-            {clearing ? "Clearing…" : "Clear data"}
+            {clearing ? t("Clearing…") : t("Clear data")}
           </button>
         </Row>
       </Section>
 
       <Section
-        title="Extensions"
+        title={t("Extensions")}
         action={
           <button
             type="button"
@@ -200,11 +215,11 @@ export function BrowserSettings() {
               })
             }
           >
-            Load unpacked…
+            {t("Load unpacked…")}
           </button>
         }
       >
-        <Row title="Add from a link" description="A Chrome Web Store page's address">
+        <Row title={t("Add from a link")} description={t("A Chrome Web Store page's address")}>
           <form
             className="flex gap-2"
             onSubmit={(e) => {
@@ -222,7 +237,7 @@ export function BrowserSettings() {
             }}
           >
             <input
-              aria-label="Chrome Web Store link"
+              aria-label={t("Chrome Web Store link")}
               placeholder="chromewebstore.google.com/detail/…"
               spellCheck={false}
               value={link}
@@ -234,7 +249,7 @@ export function BrowserSettings() {
               disabled={adding || !link.trim()}
               className={`${quietButton} border border-border disabled:opacity-50`}
             >
-              {adding ? "Adding…" : "Add"}
+              {adding ? t("Adding…") : t("Add")}
             </button>
           </form>
         </Row>
@@ -248,30 +263,32 @@ export function BrowserSettings() {
                   {extension.name}
                 </span>
               }
-              description={`Version ${extension.version}`}
+              description={t("Version {{version}}", { version: extension.version })}
             >
               <button
                 type="button"
-                aria-label={`Remove ${extension.name}`}
+                aria-label={t("Remove {{name}}", { name: extension.name })}
                 onClick={() => void window.parallax.removeExtension(extension.id).then(refresh)}
                 className={quietButton}
               >
-                Remove
+                {t("Remove")}
               </button>
             </Row>
           ))
         ) : (
           <Row
-            title="No extensions yet"
-            description="Add one from the Chrome Web Store in the browser, such as a password manager."
+            title={t("No extensions yet")}
+            description={t(
+              "Add one from the Chrome Web Store in the browser, such as a password manager.",
+            )}
           />
         )}
       </Section>
 
       <ConfirmDialog
         ref={confirm}
-        title="Clear browsing data?"
-        action="Clear data"
+        title={t("Clear browsing data?")}
+        action={t("Clear data")}
         onConfirm={() => {
           confirm.current?.close();
           setClearing(true);
@@ -279,32 +296,30 @@ export function BrowserSettings() {
           void window.parallax
             .clearBrowsingData({ siteData: clear.siteData, cache: clear.cache })
             .then(() =>
-              notify({ key: "browsing-data", tone: "success", title: "Browsing data cleared" }),
+              notify({ key: "browsing-data", tone: "success", title: t("Browsing data cleared") }),
             )
             .finally(() => setClearing(false));
         }}
       >
-        {listed(
-          [
-            clear.history && "browsing history",
-            clear.siteData && "cookies and other site data",
-            clear.cache && "cached images and files",
-          ].filter((x): x is string => !!x),
-        )}{" "}
-        go for every browser in Parallax. Extensions keep their own.
+        {t("{{items}} go for every browser in Parallax. Extensions keep their own.", {
+          items: listed(
+            [
+              clear.history && t("browsing history"),
+              clear.siteData && t("cookies and other site data"),
+              clear.cache && t("cached images and files"),
+            ].filter((x): x is string => !!x),
+          ),
+        })}
       </ConfirmDialog>
     </>
   );
 }
 
 const extensionFailed = (body: string) =>
-  notify({ key: "extension", tone: "error", title: "Couldn't add the extension", body });
+  notify({ key: "extension", tone: "error", title: t("Couldn't add the extension"), body });
 
-/** "a, b, and c", capitalized: what Clear browsing data clears, for its confirm. */
+/** "a, b, and c" in the app's language, capitalized: what Clear browsing data clears, for its confirm. */
 function listed(items: string[]): string {
-  const text =
-    items.length < 3
-      ? items.join(" and ")
-      : `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+  const text = new Intl.ListFormat(i18next.language, { type: "conjunction" }).format(items);
   return text.charAt(0).toUpperCase() + text.slice(1);
 }

@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { ChevronDown, Zap } from "lucide-react";
 import { useId, useState, type CSSProperties } from "react";
 
+import { msg } from "../i18n";
 import type { AgentEffort } from "../protocol/generated/protocol";
 import { effortLevels as levels } from "./catalog";
 import { menuButton, menuPanel, Picker } from "./ui";
@@ -55,10 +57,11 @@ function EffortGauge({ value }: { value: AgentEffort }) {
 /** A context window's size, such as `200K` or `1M`. */
 export const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
 
-// What each kind of instance with fast mode calls it, and its two settings. Cursor has none (0036).
+// What each kind of instance with fast mode calls it, and its two settings, in English for `t`.
+// Cursor has none (0036).
 const fastNames: Partial<Record<string, { label: string; on: string; off: string }>> = {
-  claude: { label: "Fast mode", on: "On", off: "Off" },
-  codex: { label: "Speed", on: "Fast", off: "Standard" },
+  claude: { label: msg("Fast mode"), on: msg("On"), off: msg("Off") },
+  codex: { label: msg("Speed"), on: msg("Fast"), off: msg("Standard") },
 };
 
 /**
@@ -92,7 +95,9 @@ export function EffortMenu({
 }) {
   const id = useId();
   const level = levels.findIndex((l) => l.value === value);
-  const { name, blurb, speed } = levels[level]!;
+  const name = t(levels[level]!.name);
+  const blurb = t(levels[level]!.blurb);
+  const speed = levels[level]!.speed;
   const full = level === last;
   const names = fastMode && fastNames[fastMode];
   const row = "mt-4 flex items-center justify-between gap-2 text-body text-muted-foreground";
@@ -102,7 +107,11 @@ export function EffortMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="dialog"
-        aria-label={`Reasoning effort: ${name}${fast ? ", fast" : ""}`}
+        aria-label={
+          fast
+            ? t("Reasoning effort: {{name}}, fast", { name })
+            : t("Reasoning effort: {{name}}", { name })
+        }
         className={menuButton}
       >
         <EffortGauge value={value} />
@@ -117,7 +126,7 @@ export function EffortMenu({
       >
         <div className="mb-4 min-w-0">
           <div className="text-reading">
-            Reasoning <span className="text-muted-foreground">{name}</span>
+            {t("Reasoning")} <span className="text-muted-foreground">{name}</span>
           </div>
           <div className="truncate text-meta text-faint-foreground">{blurb}</div>
         </div>
@@ -147,7 +156,7 @@ export function EffortMenu({
             max={last}
             step={1}
             value={level}
-            aria-label="Reasoning effort"
+            aria-label={t("Reasoning effort")}
             aria-valuetext={name}
             onChange={(e) => onChange(levels[Number(e.target.value)]!.value)}
             className="effort-slider peer absolute inset-x-0 top-1/2 m-0 h-(--thumb) w-full -translate-y-1/2"
@@ -165,16 +174,16 @@ export function EffortMenu({
               className={`absolute -translate-x-1/2 text-meta transition-colors ${i === level ? "font-medium text-foreground" : "text-faint-foreground"}`}
               style={{ left: at(i) }}
             >
-              {l.name}
+              {t(l.name)}
             </span>
           ))}
         </div>
         {/* One context window is no choice, so there's nothing to show. */}
         {context !== undefined && contexts.length > 1 && (
           <div className={row}>
-            Context window
+            {t("Context window")}
             <Picker
-              label="Context window"
+              label={t("Context window")}
               value={String(context)}
               onChange={(v) => onContext?.(Number(v))}
               options={contexts.map((n) => ({ value: String(n), label: tokens(n) }))}
@@ -185,14 +194,14 @@ export function EffortMenu({
         )}
         {names && (
           <div className={row}>
-            {names.label}
+            {t(names.label)}
             <Picker
-              label={names.label}
+              label={t(names.label)}
               value={fast ? "on" : "off"}
               onChange={(v) => onFast?.(v === "on")}
               options={[
-                { value: "on", label: names.on },
-                { value: "off", label: names.off },
+                { value: "on", label: t(names.on) },
+                { value: "off", label: t(names.off) },
               ]}
               align="end"
               panelClassName="min-w-28"

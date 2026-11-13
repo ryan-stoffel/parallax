@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 
@@ -109,7 +110,7 @@ export function ThreadTabs({
       <div
         ref={list}
         role="tablist"
-        aria-label="Open tabs"
+        aria-label={t("Open tabs")}
         className={`flex h-full min-w-0 items-end gap-0.5 overflow-x-auto scroll-px-2.5 pr-2.5 ${flush ? "" : "pl-2.5"}`}
       >
         {tabs.map((tab, i) => {
@@ -157,8 +158,8 @@ export function ThreadTabs({
               {closable && (
                 <button
                   type="button"
-                  aria-label={`Close ${tab.title}`}
-                  title="Close tab"
+                  aria-label={t("Close {{title}}", { title: tab.title })}
+                  title={t("Close tab")}
                   data-keys={selected ? closeKeys : undefined}
                   onClick={() => onClose(tab.id)}
                   className={`grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-3.5 ${selected ? "mr-1.5" : "absolute right-1 bg-sidebar opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"}`}
@@ -171,7 +172,7 @@ export function ThreadTabs({
         })}
       </div>
       <IconButton
-        label="New tab"
+        label={t("New tab")}
         command="newTab"
         size="sm"
         className="-ml-1 mb-2.5 self-end"

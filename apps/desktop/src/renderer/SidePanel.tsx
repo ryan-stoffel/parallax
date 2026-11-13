@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   Brain,
   File,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode, Fragment } from "react";
 
+import { msg } from "../i18n";
 import type { BrowserAction } from "../preload/bridge";
 import {
   Browser,
@@ -42,11 +44,12 @@ import { IconButton, TopBar } from "./ui";
 import { threadTabs } from "./tabState";
 
 interface Surface {
+  /** Its English name, which the code matches on; `nameOf` shows it translated. */
   name: string;
   icon: LucideIcon;
   /** The letter that opens it from the list; a pull request's tab has its URL. */
   key: string;
-  /** Its empty state, or absent while it has a view of its own. */
+  /** Its empty state, in English marked with `msg`, or absent while it has a view of its own. */
   empty?: { title: string; hint: string };
   /** A pull request's tab: the URL it shows. */
   url?: string;
@@ -60,13 +63,13 @@ interface Surface {
 
 const isBrowserTab = (s: Surface | undefined) => s?.page !== undefined || !!s?.agent;
 const pageSurface = (page: number): Surface => ({
-  name: "New Tab",
+  name: msg("New Tab"),
   icon: Globe,
   key: `page:${page}`,
   page,
 });
 const agentSurface = (runId: string, tabId: string): Surface => ({
-  name: "Agent's tab",
+  name: msg("Agent's tab"),
   icon: Globe,
   key: `agent:${runId}:${tabId}`,
   agent: { runId, tabId },
@@ -81,56 +84,65 @@ const docIcons = {
 };
 
 // An orchestrator's own views, pinned first in its panel.
-const overview: Surface = { name: "Orchestrator", icon: SquareKanban, key: "O" };
+const overview: Surface = { name: msg("Orchestrator"), icon: SquareKanban, key: "O" };
 
 const surfaces: Surface[] = [
   {
-    name: "Changes",
+    name: msg("Changes"),
     icon: GitCompare,
     key: "D",
-    empty: { title: "No changes yet", hint: "Edits from this thread show up here for review." },
-  },
-  {
-    name: "Knowledge",
-    icon: Brain,
-    key: "K",
     empty: {
-      title: "Nothing known here yet",
-      hint: "An orchestrator, or a thread in a repository, keeps what its agents learn.",
+      title: msg("No changes yet"),
+      hint: msg("Edits from this thread show up here for review."),
     },
   },
   {
-    name: "Agents",
+    name: msg("Knowledge"),
+    icon: Brain,
+    key: "K",
+    empty: {
+      title: msg("Nothing known here yet"),
+      hint: msg("An orchestrator, or a thread in a repository, keeps what its agents learn."),
+    },
+  },
+  {
+    name: msg("Agents"),
     icon: Workflow,
     key: "A",
-    empty: { title: "No agents running", hint: "Subagents this thread starts show up here." },
+    empty: {
+      title: msg("No agents running"),
+      hint: msg("Subagents this thread starts show up here."),
+    },
   },
   {
-    name: "Terminal",
+    name: msg("Terminal"),
     icon: Terminal,
     key: "T",
-    empty: { title: "No folder here", hint: "A thread's terminal opens in its folder." },
+    empty: { title: msg("No folder here"), hint: msg("A thread's terminal opens in its folder.") },
   },
   {
-    name: "Files",
+    name: msg("Files"),
     icon: FolderTree,
     key: "F",
-    empty: { title: "No thread open", hint: "Open a thread to browse its folder." },
+    empty: { title: msg("No thread open"), hint: msg("Open a thread to browse its folder.") },
   },
   {
-    name: "Device",
+    name: msg("Device"),
     icon: Smartphone,
     key: "M",
-    empty: { title: "No devices here", hint: "Simulators and emulators show up here." },
+    empty: { title: msg("No devices here"), hint: msg("Simulators and emulators show up here.") },
   },
   {
-    name: "Pull requests",
+    name: msg("Pull requests"),
     icon: GitPullRequest,
     key: "P",
-    empty: { title: "No pull requests", hint: "Pull requests this thread opens show up here." },
+    empty: {
+      title: msg("No pull requests"),
+      hint: msg("Pull requests this thread opens show up here."),
+    },
   },
   // Picking it opens a browser tab, rather than a tab of its own.
-  { name: "Browser", icon: Globe, key: "B" },
+  { name: msg("Browser"), icon: Globe, key: "B" },
 ];
 
 const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
@@ -238,8 +250,8 @@ export function PanelTabIcon({
   return (
     <button
       type="button"
-      aria-label={`Close ${label}`}
-      title={`Close ${label}`}
+      aria-label={t("Close {{name}}", { name: label })}
+      title={t("Close {{name}}", { name: label })}
       onClick={onClose}
       className={`${icon} group/close rounded-sm hover:bg-hover`}
     >
@@ -376,7 +388,9 @@ export function SidePanel({
     : ["Browser", "Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
         surfaces.find((s) => s.name === name)!,
       );
-  const nameOf = (s: Surface) => (!orchestrator && s.name === "Changes" ? "Diff" : s.name);
+  // A view's name, translated; a file's or pull request's tab keeps its own.
+  const nameOf = (s: Surface) =>
+    s.doc || s.url ? s.name : !orchestrator && s.name === "Changes" ? t("Diff") : t(s.name);
   // An orchestrator pins its Overview and Knowledge first, without close buttons.
   const pinned = orchestrator ? [overview, knowledgeSurface] : [];
   // A pull request tab the thread no longer links stays open, but hidden.
@@ -542,8 +556,8 @@ export function SidePanel({
   const emptyOf = (s: Surface) => (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
       <s.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
-      <p className="text-body font-medium text-foreground">{s.empty?.title}</p>
-      <p className="text-body text-muted-foreground">{s.empty?.hint}</p>
+      <p className="text-body font-medium text-foreground">{s.empty && t(s.empty.title)}</p>
+      <p className="text-body text-muted-foreground">{s.empty && t(s.empty.hint)}</p>
     </div>
   );
   const viewOf = (s: Surface) =>
@@ -572,7 +586,7 @@ export function SidePanel({
   return (
     <aside
       id="side-panel"
-      aria-label="Side panel"
+      aria-label={t("Side panel")}
       hidden={!open}
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
@@ -597,7 +611,7 @@ export function SidePanel({
         className={`window-controls-inset px-2 ${browsing && browserStyle ? "bg-pane" : ""} ${topBarClassName}`}
       >
         {leading}
-        <ul aria-label="Open views" className="flex min-w-0 gap-1 overflow-x-auto">
+        <ul aria-label={t("Open views")} className="flex min-w-0 gap-1 overflow-x-auto">
           {shown.map((s) => {
             const agentTab = agentTabOf(s);
             const page = pages.find((p) => p.id === s.page);
@@ -657,20 +671,20 @@ export function SidePanel({
         </ul>
         <IconButton
           id="side-panel-open-view"
-          label="Open a view"
+          label={t("Open a view")}
           onClick={() => update(() => ({ listing: true }))}
         >
           <Plus />
         </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton
-            label={expanded ? "Exit full screen" : "Full screen"}
+            label={expanded ? t("Exit full screen") : t("Full screen")}
             onClick={() => onExpandedChange(!expanded)}
           >
             {expanded ? <Minimize2 /> : <Maximize2 />}
           </IconButton>
           <IconButton
-            label="Hide side panel"
+            label={t("Hide side panel")}
             command="panel"
             aria-expanded
             aria-controls="side-panel"
@@ -727,7 +741,7 @@ export function SidePanel({
           className="flex flex-1 flex-col items-center justify-center px-8 pb-16"
         >
           <h2 id="side-panel-views" className="mb-4 text-reading font-medium">
-            Open a view
+            {t("Open a view")}
           </h2>
           <ul className="w-full max-w-72">
             {available.map((s) => (

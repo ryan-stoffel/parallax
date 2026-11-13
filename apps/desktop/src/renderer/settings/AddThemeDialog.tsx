@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Check, LoaderCircle, Palette, Search, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -60,7 +61,7 @@ export function AddThemeDialog({
       setBusy((b) => new Set([...b].filter((x) => x !== id)));
       notify({
         tone: "error",
-        title: `Couldn't add ${name}`,
+        title: t("Couldn't add {{name}}", { name }),
         body: e instanceof Error ? e.message : String(e),
       });
     }
@@ -76,16 +77,17 @@ export function AddThemeDialog({
       <div className="flex items-start justify-between gap-4 px-5 pt-4">
         <div>
           <h2 id={titleId} className="text-reading font-semibold">
-            Add a theme
+            {t("Add a theme")}
           </h2>
           <p className="mt-1 text-body text-muted-foreground">
-            Search color themes from Open VSX. Adding one switches to it, and its other variants
-            join the theme menus.
+            {t(
+              "Search color themes from Open VSX. Adding one switches to it, and its other variants join the theme menus.",
+            )}
           </p>
         </div>
         <button
           type="button"
-          aria-label="Close"
+          aria-label={t("Close")}
           onClick={() => dialog.current?.close()}
           className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
         >
@@ -97,15 +99,15 @@ export function AddThemeDialog({
           <Search aria-hidden className="size-4 text-faint-foreground" />
           <input
             type="search"
-            aria-label="Search themes"
-            placeholder="Search themes"
+            aria-label={t("Search themes")}
+            placeholder={t("Search themes")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <div className="mt-2 flex flex-wrap items-center gap-1 text-body">
-          <span className="mr-1 text-faint-foreground">Popular</span>
+          <span className="mr-1 text-faint-foreground">{t("Popular")}</span>
           {popular.map((p) => (
             <button
               key={p}
@@ -124,9 +126,9 @@ export function AddThemeDialog({
             {error}
           </p>
         )}
-        {!results && !error && <p className="text-body text-muted-foreground">Searching…</p>}
+        {!results && !error && <p className="text-body text-muted-foreground">{t("Searching…")}</p>}
         {results?.length === 0 && (
-          <p className="text-body text-muted-foreground">No themes match.</p>
+          <p className="text-body text-muted-foreground">{t("No themes match.")}</p>
         )}
         <ul className="grid grid-cols-2 gap-3">
           {results?.map((e) => {
@@ -146,7 +148,11 @@ export function AddThemeDialog({
                     <p className="truncate text-meta text-muted-foreground">
                       {e.namespace}
                       {e.downloadCount !== undefined &&
-                        ` · ${downloads.format(e.downloadCount)} downloads`}
+                        ` · ${t("{{downloads}} downloads", {
+                          downloads: downloads.format(e.downloadCount),
+                          count: e.downloadCount,
+                          defaultValue_one: "{{downloads}} download",
+                        })}`}
                     </p>
                   </div>
                 </div>
@@ -164,7 +170,7 @@ export function AddThemeDialog({
                   ) : adding ? (
                     <LoaderCircle className="size-3.5 animate-spin" />
                   ) : null}
-                  {isAdded ? "Added" : adding ? "Adding" : "Add"}
+                  {isAdded ? t("Added") : adding ? t("Adding") : t("Add")}
                 </button>
               </li>
             );

@@ -7,6 +7,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import {
   ArrowLeft,
@@ -54,6 +55,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { PrAction, PrCheck, PullRequest } from "../../desktop/src/protocol/generated/protocol";
+import { msg } from "../../desktop/src/i18n";
 import { githubText } from "../../desktop/src/renderer/github";
 import { numberOf, type PrEntry } from "../../desktop/src/renderer/pullRequestSearch";
 import { showAlert, showMenu } from "./dialogStore";
@@ -100,11 +102,11 @@ function entriesOf(computers: Computer[]): PrEntry[] {
     .flatMap(({ machine, view: { state } }) =>
       [...state.threads]
         .sort((a, b) => (b.lastPromptAt ?? b.createdAt).localeCompare(a.lastPromptAt ?? a.createdAt))
-        .flatMap((t) =>
-          (state.runs[t.id]?.pullRequests ?? []).map((url) => ({
+        .flatMap((thread) =>
+          (state.runs[thread.id]?.pullRequests ?? []).map((url) => ({
             hostId: machine.id,
-            runId: t.id,
-            threadTitle: state.titles[t.id] ?? "Thread",
+            runId: thread.id,
+            threadTitle: state.titles[thread.id] ?? t("Thread"),
             url,
           })),
         ),
@@ -127,8 +129,8 @@ function linkMenu(url: string) {
   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   showMenu(
     [
-      { label: "Open on GitHub", icon: ExternalLink, onPress: () => void Linking.openURL(url) },
-      { label: "Copy link", icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
+      { label: t("Open on GitHub"), icon: ExternalLink, onPress: () => void Linking.openURL(url) },
+      { label: t("Copy link"), icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
     ],
     `#${numberOf(url)} · ${repoOf(url)}`,
   );
@@ -139,18 +141,18 @@ function choose<V>(title: string, options: { value: V; label: string }[], curren
   showMenu(options.map((o) => ({ label: o.label, checked: o.value === current, onPress: () => pick(o.value) })), title);
 }
 
-const states: { value: PrFilters["state"]; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "draft", label: "Draft" },
-  { value: "merged", label: "Merged" },
-  { value: "closed", label: "Closed" },
-  { value: "all", label: "All states" },
+const states = (): { value: PrFilters["state"]; label: string }[] => [
+  { value: "open", label: t("Open", { context: "pull request state" }) },
+  { value: "draft", label: t("Draft") },
+  { value: "merged", label: t("Merged") },
+  { value: "closed", label: t("Closed") },
+  { value: "all", label: t("All states") },
 ];
-const checkChoices: { value: PrFilters["checks"]; label: string }[] = [
-  { value: undefined, label: "Any checks" },
-  { value: "failed", label: "Failing" },
-  { value: "pending", label: "Running" },
-  { value: "passed", label: "Passing" },
+const checkChoices = (): { value: PrFilters["checks"]; label: string }[] => [
+  { value: undefined, label: t("Any checks") },
+  { value: "failed", label: t("Failing") },
+  { value: "pending", label: t("Running") },
+  { value: "passed", label: t("Passing") },
 ];
 
 /**
@@ -169,8 +171,8 @@ function FilterChips({
   repos: string[];
 }) {
   const set = (patch: Partial<PrFilters>) => onChange({ ...value, ...patch });
-  const state = states.find((s) => s.value === value.state)!.label;
-  const checks = checkChoices.find((s) => s.value === value.checks)!.label;
+  const state = states().find((s) => s.value === value.state)!.label;
+  const checks = checkChoices().find((s) => s.value === value.checks)!.label;
   const computer = computers.find((m) => m.id === value.hostId)?.name;
   const narrowed = JSON.stringify(value) !== JSON.stringify(defaultFilters);
   return (
@@ -182,25 +184,25 @@ function FilterChips({
     >
       <GlassChip
         label={state}
-        accessibilityLabel={`State, ${state}`}
+        accessibilityLabel={t("State, {{state}}", { state })}
         active={value.state !== "open"}
-        onPress={() => choose("State", states, value.state, (s) => set({ state: s }))}
+        onPress={() => choose(t("State"), states(), value.state, (s) => set({ state: s }))}
       />
       <GlassChip
-        label={value.checks ? checks : "Checks"}
-        accessibilityLabel={`Checks, ${checks}`}
+        label={value.checks ? checks : t("Checks")}
+        accessibilityLabel={t("Checks, {{checks}}", { checks })}
         active={!!value.checks}
-        onPress={() => choose("Checks", checkChoices, value.checks, (s) => set({ checks: s }))}
+        onPress={() => choose(t("Checks"), checkChoices(), value.checks, (s) => set({ checks: s }))}
       />
       {computers.length > 1 && (
         <GlassChip
-          label={computer ?? "Computer"}
-          accessibilityLabel={`Computer, ${computer ?? "any"}`}
+          label={computer ?? t("Computer")}
+          accessibilityLabel={computer ? t("Computer, {{computer}}", { computer }) : t("Computer, any")}
           active={!!value.hostId}
           onPress={() =>
             choose(
-              "Computer",
-              [{ value: undefined, label: "Any computer" }, ...computers.map((m) => ({ value: m.id as string | undefined, label: m.name }))],
+              t("Computer"),
+              [{ value: undefined, label: t("Any computer") }, ...computers.map((m) => ({ value: m.id as string | undefined, label: m.name }))],
               value.hostId,
               (id) => set({ hostId: id }),
             )
@@ -209,20 +211,20 @@ function FilterChips({
       )}
       {repos.length > 1 && (
         <GlassChip
-          label={value.repo?.split("/")[1] ?? "Repository"}
-          accessibilityLabel={`Repository, ${value.repo ?? "any"}`}
+          label={value.repo?.split("/")[1] ?? t("Repository")}
+          accessibilityLabel={value.repo ? t("Repository, {{repo}}", { repo: value.repo }) : t("Repository, any")}
           active={!!value.repo}
           onPress={() =>
             choose(
-              "Repository",
-              [{ value: undefined, label: "Any repository" }, ...repos.map((r) => ({ value: r as string | undefined, label: r }))],
+              t("Repository"),
+              [{ value: undefined, label: t("Any repository") }, ...repos.map((r) => ({ value: r as string | undefined, label: r }))],
               value.repo,
               (r) => set({ repo: r }),
             )
           }
         />
       )}
-      {narrowed && <GlassChip label="Clear" icon={X} accessibilityLabel="Clear filters" onPress={() => onChange(defaultFilters)} />}
+      {narrowed && <GlassChip label={t("Clear", { context: "filters" })} icon={X} accessibilityLabel={t("Clear filters")} onPress={() => onChange(defaultFilters)} />}
     </ScrollView>
   );
 }
@@ -263,10 +265,19 @@ function PrRow({ entry, pr, error, offline }: { entry: PrEntry; pr?: PullRequest
       accessibilityRole="button"
       accessibilityLabel={
         pr
-          ? `Pull request ${number}, ${pr.title}, ${stateLabel}${pr.mergeState === "dirty" ? ", has conflicts" : ""}, by ${pr.author}${pr.checksState ? `, checks ${pr.checksState}` : ""}`
-          : `Pull request ${number}, ${entry.threadTitle}${problem ? `, ${problem}` : ", loading"}`
+          ? [
+              t("Pull request {{number}}", { number }),
+              pr.title,
+              stateLabel,
+              pr.mergeState === "dirty" && t("has conflicts"),
+              t("by {{author}}", { author: pr.author }),
+              pr.checksState && t("checks {{state}}", { state: pr.checksState }),
+            ]
+              .filter(Boolean)
+              .join(", ")
+          : [t("Pull request {{number}}", { number }), entry.threadTitle, problem ?? t("loading")].join(", ")
       }
-      accessibilityHint="Touch and hold for its link."
+      accessibilityHint={t("Touch and hold for its link.")}
       onPress={() => nav.navigate("PullRequest", { hostId: entry.hostId, runId: entry.runId, url: entry.url })}
       onLongPress={() => linkMenu(entry.url)}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
@@ -317,7 +328,7 @@ function NoPullRequests({ title, note, onClear }: { title: string; note: string;
       icon={GitPullRequest}
       title={title}
       note={note}
-      action={onClear && <GlassChip label="Clear search and filters" icon={X} onPress={onClear} />}
+      action={onClear && <GlassChip label={t("Clear search and filters")} icon={X} onPress={onClear} />}
     />
   );
 }
@@ -380,7 +391,7 @@ export function PullRequestList() {
       ListHeaderComponent={
         <View style={{ gap: 10, paddingTop: 4, paddingBottom: 6 }}>
           <View style={{ paddingHorizontal: 16 }}>
-            <GlassSearch value={query} onChange={setQuery} placeholder="Search pull requests" />
+            <GlassSearch value={query} onChange={setQuery} placeholder={t("Search pull requests")} />
           </View>
           <FilterChips
             value={filters}
@@ -404,24 +415,24 @@ export function PullRequestList() {
           entry={entry}
           pr={read.pr}
           error={errors[entry.url]}
-          offline={connected.has(entry.hostId) ? undefined : `${names.get(entry.hostId) ?? "Its computer"} is offline`}
+          offline={connected.has(entry.hostId) ? undefined : t("{{computer}} is offline", { computer: names.get(entry.hostId) ?? t("Its computer") })}
         />
       )}
       ListEmptyComponent={
         !entries.length ? (
-          <NoPullRequests title="No pull requests yet" note="A pull request a thread opens or links shows up here." />
+          <NoPullRequests title={t("No pull requests yet")} note={t("A pull request a thread opens or links shows up here.")} />
         ) : query.trim() ? (
-          <NoPullRequests title="No results" note={`No pull requests match "${query.trim()}".`} onClear={clear} />
+          <NoPullRequests title={t("No results")} note={t("No pull requests match \"{{query}}\".", { query: query.trim() })} onClear={clear} />
         ) : narrowed ? (
-          <NoPullRequests title="Nothing matches" note="Try other filters, or clear them." onClear={clear} />
+          <NoPullRequests title={t("Nothing matches")} note={t("Try other filters, or clear them.")} onClear={clear} />
         ) : (
-          <NoPullRequests title="No open pull requests" note="Merged and closed ones are under the State filter." />
+          <NoPullRequests title={t("No open pull requests")} note={t("Merged and closed ones are under the State filter.")} />
         )
       }
       ListFooterComponent={
         narrowed && shown.length ? (
           <T faint style={{ fontSize: 12, lineHeight: 16, textAlign: "center", paddingTop: 14 }}>
-            {shown.length} of {entries.length} pull requests
+            {t("{{shown}} of {{count}} pull requests", { shown: shown.length, count: entries.length, defaultValue_one: "{{shown}} of {{count}} pull request" })}
           </T>
         ) : null
       }
@@ -443,10 +454,10 @@ function HeaderTitle({ number, repo }: { number: string; repo: string }) {
 }
 
 const checkLooks: Record<PrCheck["state"], [LucideIcon, "success" | "danger" | "warning" | "muted", string]> = {
-  passed: [CircleCheck, "success", "Passed"],
-  failed: [CircleX, "danger", "Failed"],
-  pending: [Clock, "warning", "Running"],
-  skipped: [CircleSlash, "muted", "Skipped"],
+  passed: [CircleCheck, "success", msg("Passed")],
+  failed: [CircleX, "danger", msg("Failed")],
+  pending: [Clock, "warning", msg("Running")],
+  skipped: [CircleSlash, "muted", msg("Skipped")],
 };
 const checkOrder: Record<PrCheck["state"], number> = { failed: 0, pending: 1, passed: 2, skipped: 3 };
 
@@ -489,14 +500,14 @@ function Checks({ pr }: { pr: PullRequest }) {
                   tint={toneColor(tone, c)}
                   title={check.name}
                   detail={check.workflow}
-                  value={word}
+                  value={t(word)}
                   onPress={check.url ? () => void Linking.openURL(check.url!) : undefined}
                 />
               );
             })}
           <CardRow
             icon={ArrowUpRight}
-            title="Open checks on GitHub"
+            title={t("Open checks on GitHub")}
             divider={false}
             onPress={() => void Linking.openURL(`${pr.url}/checks`)}
           />
@@ -534,13 +545,13 @@ function Reviews({ pr }: { pr: PullRequest }) {
               icon={r.state === "approved" ? Check : r.state === "changesRequested" ? FileDiff : MessageSquareText}
               color={r.state === "approved" ? c.added : r.state === "changesRequested" ? c.danger : c.faintForeground}
             >
-              {r.state === "approved" ? "Approved" : r.state === "changesRequested" ? "Requested changes" : "Commented"} ·{" "}
+              {r.state === "approved" ? t("Approved") : r.state === "changesRequested" ? t("Requested changes") : t("Commented")} ·{" "}
               {ago(r.submittedAt)}
             </Person>
           ))}
           {waiting.map((who) => (
             <Person key={who} login={who} icon={Clock} color={c.faintForeground}>
-              Review requested
+              {t("Review requested")}
             </Person>
           ))}
         </Folded>
@@ -573,21 +584,21 @@ function Branch({ pr }: { pr: PullRequest }) {
   const base = pr.baseBranch;
   const [icon, color, title]: [LucideIcon, string, string] =
     pr.mergeState === "dirty"
-      ? [TriangleAlert, c.danger, `Conflicts with ${base}`]
+      ? [TriangleAlert, c.danger, t("Conflicts with {{base}}", { base })]
       : pr.mergeState === "behind"
-        ? [GitBranch, c.warning, `Behind ${base}`]
+        ? [GitBranch, c.warning, t("Behind {{base}}", { base })]
         : pr.mergeState === "blocked"
-          ? [CircleAlert, c.warning, "Merging is blocked"]
+          ? [CircleAlert, c.warning, t("Merging is blocked")]
           : pr.mergeState === "draft"
-            ? [GitPullRequestDraft, c.faintForeground, "Still a draft"]
+            ? [GitPullRequestDraft, c.faintForeground, t("Still a draft")]
             : pr.mergeState
-              ? [CircleCheck, c.added, `No conflicts with ${base}`]
-              : [GitBranch, c.faintForeground, "Checking whether it can merge…"];
+              ? [CircleCheck, c.added, t("No conflicts with {{base}}", { base })]
+              : [GitBranch, c.faintForeground, t("Checking whether it can merge…")];
   return <CardRow icon={icon} tint={color} title={title} />;
 }
 
 type Method = "squash" | "merge";
-const methodLabels: Record<Method, string> = { squash: "Squash and merge", merge: "Create a merge commit" };
+const methodLabels: Record<Method, string> = { squash: msg("Squash and merge"), merge: msg("Create a merge commit") };
 
 /**
  * The card's foot, as T3's: one prominent split button in GitHub's green that merges by the
@@ -614,22 +625,22 @@ function MergeControls({
         <Pressable
           accessibilityRole="button"
           disabled={acting}
-          onPress={() => act("ready", "Mark ready for review")}
+          onPress={() => act("ready", t("Mark ready for review"))}
           style={({ pressed }) => [styles.merge, { backgroundColor: c.foreground }, (pressed || acting) && { opacity: 0.7 }]}
         >
           <Icon icon={GitPullRequest} size={16} color={c.background} />
-          <T style={{ fontSize: 14, fontWeight: "600", color: c.background }}>Ready for review</T>
+          <T style={{ fontSize: 14, fontWeight: "600", color: c.background }}>{t("Ready for review")}</T>
         </Pressable>
       </View>
     );
   const options = () => {
-    const auto = pr.autoMerge ? "Turn off auto-merge" : "Turn on auto-merge";
+    const auto = pr.autoMerge ? t("Turn off auto-merge") : t("Turn on auto-merge");
     showMenu(
       [
-        ...(Object.keys(methodLabels) as Method[]).map((m) => ({ label: methodLabels[m], checked: m === method, onPress: () => setMethod(m) })),
+        ...(Object.keys(methodLabels) as Method[]).map((m) => ({ label: t(methodLabels[m]), checked: m === method, onPress: () => setMethod(m) })),
         { label: auto, icon: Zap, onPress: () => act(pr.autoMerge ? "disableAutoMerge" : "autoMerge", auto) },
       ],
-      "Merge options",
+      t("Merge options"),
     );
   };
   return (
@@ -639,17 +650,17 @@ function MergeControls({
           accessibilityRole="button"
           accessibilityState={{ disabled: !can, busy: acting }}
           disabled={!can}
-          onPress={() => act(method, method === "squash" ? "Squash and merge" : "Merge pull request")}
+          onPress={() => act(method, method === "squash" ? t("Squash and merge") : t("Merge pull request"))}
           style={({ pressed }) => [styles.merge, { flex: 1 }, pressed && { opacity: 0.7 }]}
         >
           {acting ? <ActivityIndicator size="small" color={fg} /> : <Icon icon={GitMerge} size={16} color={fg} />}
           <T style={{ fontSize: 14, fontWeight: "600", color: fg }}>
-            {acting ? "Working…" : method === "squash" ? "Squash and merge" : "Merge pull request"}
+            {acting ? t("Working…") : method === "squash" ? t("Squash and merge") : t("Merge pull request")}
           </T>
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Merge options"
+          accessibilityLabel={t("Merge options")}
           disabled={acting}
           onPress={options}
           style={({ pressed }) => [styles.splitMore, { borderLeftColor: can ? "rgba(0, 0, 0, 0.28)" : c.border }, pressed && { opacity: 0.7 }]}
@@ -659,7 +670,7 @@ function MergeControls({
       </View>
       {pr.autoMerge && (
         <T muted style={{ fontSize: 13, lineHeight: 17, paddingHorizontal: 4 }}>
-          Auto-merge is on · {pr.autoMerge}
+          {t("Auto-merge is on")} · {pr.autoMerge}
         </T>
       )}
     </View>
@@ -727,7 +738,7 @@ function Diff({
           )}
           {rows && !rows.length && (
             <T muted style={{ fontSize: 14 }}>
-              No text changes.
+              {t("No text changes.")}
             </T>
           )}
         </View>
@@ -735,7 +746,7 @@ function Diff({
       ListFooterComponent={
         typeof state === "object" && state.truncated ? (
           <T faint style={{ padding: 16, fontSize: 13 }}>
-            The diff is cut short here. See the rest on GitHub.
+            {t("The diff is cut short here. See the rest on GitHub.")}
           </T>
         ) : null
       }
@@ -775,8 +786,8 @@ export function PullRequestScreen({
   }, [connectedNow, load]);
 
   function act(action: PrAction, label: string, destructive = false) {
-    showAlert(`${label}?`, pr ? `${pr.repo} #${pr.number}` : undefined, [
-      { text: "Cancel", style: "cancel" },
+    showAlert(t("{{action}}?", { action: label }), pr ? `${pr.repo} #${pr.number}` : undefined, [
+      { text: t("Cancel"), style: "cancel" },
       {
         text: label,
         style: destructive ? "destructive" : "default",
@@ -784,7 +795,7 @@ export function PullRequestScreen({
           setActing(true);
           const answer = await window.parallax.request(hostId, "pr/act", { runId, url, action });
           setActing(false);
-          if ("error" in answer) return showAlert(`Couldn't ${label.toLowerCase()}`, answer.error.message);
+          if ("error" in answer) return showAlert(t("{{action}} failed", { action: label }), answer.error.message);
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           reads.set(url, answer.result);
           setPr(answer.result);
@@ -796,10 +807,10 @@ export function PullRequestScreen({
   /** The header's menu: open, copy, or share its link, and close it while it's open. */
   function more() {
     showMenu([
-      { label: "Open on GitHub", icon: ExternalLink, onPress: () => void Linking.openURL(url) },
-      { label: "Copy link", icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
-      { label: "Share…", icon: ShareIcon, onPress: () => void Share.share({ url }) },
-      ...(open ? [{ label: "Close pull request", icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", "Close pull request", true) }] : []),
+      { label: t("Open on GitHub"), icon: ExternalLink, onPress: () => void Linking.openURL(url) },
+      { label: t("Copy link"), icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
+      { label: t("Share…"), icon: ShareIcon, onPress: () => void Share.share({ url }) },
+      ...(open ? [{ label: t("Close pull request"), icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", t("Close pull request"), true) }] : []),
     ]);
   }
 
@@ -809,11 +820,11 @@ export function PullRequestScreen({
     showMenu(
       [
         pr.draft
-          ? { label: "Ready for review", icon: GitPullRequest, onPress: () => act("ready", "Mark ready for review") }
-          : { label: "Convert to draft", icon: GitPullRequestDraft, onPress: () => act("draft", "Convert to draft") },
-        { label: "Close pull request", icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", "Close pull request", true) },
+          ? { label: t("Ready for review"), icon: GitPullRequest, onPress: () => act("ready", t("Mark ready for review")) }
+          : { label: t("Convert to draft"), icon: GitPullRequestDraft, onPress: () => act("draft", t("Convert to draft")) },
+        { label: t("Close pull request"), icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", t("Close pull request"), true) },
       ],
-      "Pull request status",
+      t("Pull request status"),
     );
   }
 
@@ -826,12 +837,12 @@ export function PullRequestScreen({
       headerStyle: { backgroundColor: c.background },
       headerShadowVisible: false,
       headerLeft: () => (
-        <GlassButton label="Back" onPress={() => navigation.goBack()}>
+        <GlassButton label={t("Back")} onPress={() => navigation.goBack()}>
           <Icon icon={ChevronLeft} size={22} />
         </GlassButton>
       ),
       headerRight: () => (
-        <GlassButton label="More" onPress={more}>
+        <GlassButton label={t("More")} onPress={more}>
           <Icon icon={Ellipsis} size={20} />
         </GlassButton>
       ),
@@ -852,7 +863,7 @@ export function PullRequestScreen({
         <View style={[styles.line, { flexWrap: "wrap", gap: 8 }]}>
           <Pressable
             accessibilityRole={open ? "button" : undefined}
-            accessibilityLabel={`Status, ${stateLabel}`}
+            accessibilityLabel={t("Status, {{state}}", { state: stateLabel })}
             disabled={!open}
             onPress={stateMenu}
             style={({ pressed }) => [styles.line, styles.state, { backgroundColor: fill }, pressed && { opacity: 0.7 }]}
@@ -864,12 +875,12 @@ export function PullRequestScreen({
           {pr && <DiffStats additions={pr.additions} deletions={pr.deletions} compact />}
           {pr && (
             <T muted style={{ fontSize: 12, lineHeight: 16 }}>
-              {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
+              {t("{{count}} files", { count: pr.changedFiles, defaultValue_one: "{{count}} file" })}
             </T>
           )}
         </View>
         <T selectable style={{ fontSize: 21, lineHeight: 28, fontWeight: "700" }}>
-          {pr?.title ?? `Pull request #${numberOf(url)}`}
+          {pr?.title ?? t("Pull request #{{number}}", { number: numberOf(url) })}
         </T>
         {pr && (
           <>
@@ -879,11 +890,11 @@ export function PullRequestScreen({
                 {pr.author}
               </T>
               <T muted numberOfLines={1} style={{ fontSize: 12, lineHeight: 16 }}>
-                {updated === "now" ? "Updated just now" : `Updated ${updated} ago`}
+                {updated === t("now") ? t("Updated just now") : t("Updated {{time}} ago", { time: updated })}
               </T>
             </View>
             <View style={[styles.line, { gap: 6, alignItems: "flex-start" }]}>
-              <Pressable accessibilityLabel={`Copy base branch ${pr.baseBranch}`} hitSlop={8} onPress={() => copy(pr.baseBranch)} style={{ flexShrink: 1 }}>
+              <Pressable accessibilityLabel={t("Copy base branch {{branch}}", { branch: pr.baseBranch })} hitSlop={8} onPress={() => copy(pr.baseBranch)} style={{ flexShrink: 1 }}>
                 <T muted style={styles.branch}>
                   {pr.baseBranch}
                 </T>
@@ -891,7 +902,7 @@ export function PullRequestScreen({
               <View style={{ paddingTop: 2 }}>
                 <Icon icon={ArrowLeft} size={11} color={c.faintForeground} />
               </View>
-              <Pressable accessibilityLabel={`Copy head branch ${pr.headBranch}`} hitSlop={8} onPress={() => copy(pr.headBranch)} style={{ flexShrink: 1 }}>
+              <Pressable accessibilityLabel={t("Copy head branch {{branch}}", { branch: pr.headBranch })} hitSlop={8} onPress={() => copy(pr.headBranch)} style={{ flexShrink: 1 }}>
                 <T muted style={styles.branch}>
                   {pr.headBranch}
                 </T>
@@ -902,14 +913,14 @@ export function PullRequestScreen({
       </View>
       <Segmented
         options={[
-          { value: "overview", label: "Overview" },
-          { value: "activity", label: "Activity" },
-          { value: "changes", label: "Changes" },
+          { value: "overview", label: t("Overview") },
+          { value: "activity", label: t("Activity") },
+          { value: "changes", label: t("Changes") },
         ]}
         value={tab}
-        onChange={(t) => {
+        onChange={(next) => {
           setFocus(undefined);
-          setTab(t);
+          setTab(next);
         }}
       />
     </View>
@@ -955,7 +966,7 @@ export function PullRequestScreen({
               <CardRow
                 icon={GitMerge}
                 tint={gh.merged}
-                title={pr.mergedBy ? `Merged by ${pr.mergedBy}` : "Merged"}
+                title={pr.mergedBy ? t("Merged by {{author}}", { author: pr.mergedBy }) : t("Merged")}
                 value={pr.mergedAt && ago(pr.mergedAt)}
                 divider={false}
               />
@@ -963,7 +974,7 @@ export function PullRequestScreen({
               <CardRow
                 icon={GitPullRequestClosed}
                 tint={gh.closed}
-                title="Closed without merging"
+                title={t("Closed without merging")}
                 value={pr.closedAt && ago(pr.closedAt)}
                 divider={false}
               />
@@ -983,14 +994,14 @@ export function PullRequestScreen({
           )}
 
           <View style={{ gap: 12 }}>
-            <Heading>Description</Heading>
+            <Heading>{t("Description")}</Heading>
             {pr.body.trim() ? (
               <Folding height={240} fill={c.background}>
                 <Markdown text={githubText(pr.body)} images="github" />
               </Folding>
             ) : (
               <T muted style={{ fontSize: 14 }}>
-                No description provided.
+                {t("No description provided.")}
               </T>
             )}
           </View>
@@ -999,9 +1010,9 @@ export function PullRequestScreen({
             <View style={[styles.filesTop, { borderTopColor: c.border }]}>
               <View style={[styles.line, { minHeight: 56, gap: 8 }]}>
                 <View style={{ flex: 1, gap: 2 }}>
-                  <Heading>Changed files</Heading>
+                  <Heading>{t("Changed files")}</Heading>
                   <T muted style={{ fontSize: 12, lineHeight: 16 }}>
-                    {pr.changedFiles} changed {pr.changedFiles === 1 ? "file" : "files"}
+                    {t("{{count}} changed files", { count: pr.changedFiles, defaultValue_one: "{{count}} changed file" })}
                   </T>
                 </View>
                 <DiffStats additions={pr.additions} deletions={pr.deletions} compact />
@@ -1012,7 +1023,7 @@ export function PullRequestScreen({
                   <Pressable
                     key={f.path}
                     accessibilityRole="button"
-                    accessibilityLabel={`View diff for ${f.path}`}
+                    accessibilityLabel={t("View diff for {{path}}", { path: f.path })}
                     onPress={() => {
                       setFocus(f.path);
                       setTab("changes");

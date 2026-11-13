@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
 import { isRunning } from "./transcript";
 
@@ -143,8 +145,13 @@ export function initials(name: string): string {
   return letters.toUpperCase();
 }
 
-/** The snooze menu's choices, each a label and its time from `now`. */
-export function snoozeChoices(now = new Date()): { label: string; until: Date }[] {
+/**
+ * The snooze menu's choices from `now`: each one's label, the whole action as a menu reads it
+ * alone (`snooze`), its time, and whether it's hours away, which shows a clock time, not a day.
+ */
+export function snoozeChoices(
+  now = new Date(),
+): { label: string; snooze: string; until: Date; hours: boolean }[] {
   const at = (days: number, hour: number) => {
     const d = new Date(now);
     d.setDate(d.getDate() + days);
@@ -154,9 +161,21 @@ export function snoozeChoices(now = new Date()): { label: string; until: Date }[
   // Next Monday, a week out if today is Monday.
   const toMonday = (8 - now.getDay()) % 7 || 7;
   return [
-    { label: "In 1 hour", until: new Date(now.getTime() + 3_600_000) },
-    { label: "In 3 hours", until: new Date(now.getTime() + 3 * 3_600_000) },
-    { label: "Tomorrow", until: at(1, 9) },
-    { label: "Next week", until: at(toMonday, 9) },
+    ...[1, 3].map((count) => ({
+      label: t("In {{count}} hours", { count, defaultValue_one: "In {{count}} hour" }),
+      snooze: t("Snooze for {{count}} hours", {
+        count,
+        defaultValue_one: "Snooze for {{count}} hour",
+      }),
+      until: new Date(now.getTime() + count * 3_600_000),
+      hours: true,
+    })),
+    { label: t("Tomorrow"), snooze: t("Snooze until tomorrow"), until: at(1, 9), hours: false },
+    {
+      label: t("Next week"),
+      snooze: t("Snooze until next week"),
+      until: at(toMonday, 9),
+      hours: false,
+    },
   ];
 }

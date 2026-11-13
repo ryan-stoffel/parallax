@@ -11,6 +11,6 @@
       "react/*": ["./node_modules/@types/react/*"]
     }
   },
-  "include": ["index.ts", "src", "modules/*/index.ts", "../desktop/src/renderer/parallax.d.ts"],
+  "include": ["index.ts", "src", "modules/*/index.ts", "../desktop/src/renderer/parallax.d.ts", "../desktop/src/i18n/loaders.native.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

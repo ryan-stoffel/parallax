@@ -4,11 +4,13 @@
 // detail in the same sheet, under a glass back chevron: a command and its output in mono, a file
 // read, an edit's diff, a search's results, a thought, or a message.
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { ChevronLeft, ChevronRight, FoldVertical, Hand, X } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
 import Animated, { SlideInLeft, SlideInRight } from "react-native-reanimated";
 
+import { msg } from "../../desktop/src/i18n";
 import { loadImage } from "../../desktop/src/renderer/images";
 import { inputText, stepLabel, toolKind } from "../../desktop/src/renderer/steps";
 import { field, type Item } from "../../desktop/src/renderer/transcript";
@@ -39,7 +41,7 @@ export function RunImage({ scope, id, ids, size = 120 }: { scope: TraceScope; id
   return (
     <Pressable
       accessibilityRole="imagebutton"
-      accessibilityLabel="Image"
+      accessibilityLabel={t("Image")}
       onPress={() =>
         void Promise.all(ids.map((i) => loadImage(hostId, runId, i))).then((uris) =>
           openLightbox(
@@ -58,19 +60,20 @@ export function RunImage({ scope, id, ids, size = 120 }: { scope: TraceScope; id
   );
 }
 
-/** How a call went: running, failed or denied, with no result, or fine. */
+/** How a call went: running, failed or denied, with no result, or fine. `toolLook` translates `said`. */
 const looks: Record<string, { tone?: "running" | "error" | "pending"; said?: string }> = {
   running: { tone: "running" },
   ok: {},
-  error: { tone: "error", said: "Failed" },
-  denied: { tone: "error", said: "Denied" },
-  none: { tone: "pending", said: "No result" },
+  error: { tone: "error", said: msg("Failed") },
+  denied: { tone: "error", said: msg("Denied") },
+  none: { tone: "pending", said: msg("No result") },
 };
 
 /** A call's look: running while the turn goes and its result hasn't come, as the desktop's. */
 export function toolLook(item: Tool, live: boolean) {
   // A status newer than this app reads as no result.
-  return looks[item.status ?? (live ? "running" : "none")] ?? looks["none"]!;
+  const look = looks[item.status ?? (live ? "running" : "none")] ?? looks["none"]!;
+  return look.said ? { ...look, said: t(look.said) } : look;
 }
 
 /** Whether a step has a detail to push. */
@@ -85,20 +88,28 @@ export function titleOf(item: Item, root: string | undefined, live: boolean): st
     case "tool":
       return stepLabel(item, root, toolLook(item, live).tone === "running");
     case "reasoning":
-      return "Thought";
+      return t("Thought");
     case "todo":
-      return "Updated the plan";
+      return t("Updated the plan");
     case "assistant":
-      return "Message";
+      return t("Message");
     case "approval":
-      return questionLine(item)?.title ?? `${item.resolved ? (item.resolved.decision === "allowed" ? "Allowed" : item.resolved.decision === "denied" ? "Denied" : "Ended") : "Waiting for you:"} ${item.request.toolName}`;
+      return questionLine(item)?.title ?? approvalTitle(item);
     case "compaction":
-      return item.done ? "Compacted the conversation" : "Compacting…";
+      return item.done ? t("Compacted the conversation") : t("Compacting…");
     case "notice":
       return item.text;
     default:
       return "";
   }
+}
+
+/** A permission request's line: how it came out, and the tool it was for. */
+function approvalTitle({ resolved, request }: Extract<Item, { kind: "approval" }>): string {
+  const tool = request.toolName;
+  if (!resolved) return t("Waiting for you: {{tool}}", { tool });
+  if (resolved.decision === "allowed") return t("Allowed {{tool}}", { tool });
+  return resolved.decision === "denied" ? t("Denied {{tool}}", { tool }) : t("Ended {{tool}}", { tool });
 }
 
 /** What a fold or a run of steps holds that the timeline shows (`groupWork` folds no others). */
@@ -136,9 +147,9 @@ function Detail({ item, scope }: { item: Item; scope: TraceScope }) {
           {diff ? (
             <DiffView rows={diff} />
           ) : command ? (
-            <Block label="Command" text={command} />
+            <Block label={t("Command")} text={command} />
           ) : (
-            item.input !== undefined && <Block label="Input" text={inputText(item.input)} />
+            item.input !== undefined && <Block label={t("Input")} text={inputText(item.input)} />
           )}
           {!!item.images?.length && (
             <View style={styles.images}>
@@ -147,7 +158,7 @@ function Detail({ item, scope }: { item: Item; scope: TraceScope }) {
               ))}
             </View>
           )}
-          {item.output !== undefined && <Block label="Output" text={item.output} />}
+          {item.output !== undefined && <Block label={t("Output")} text={item.output} />}
         </View>
       );
     }
@@ -309,11 +320,11 @@ export function TraceSheet({
       head={
         <View style={styles.head}>
           {canBack ? (
-            <GlassButton label="Back" size={40} onPress={() => go(undefined)}>
+            <GlassButton label={t("Back")} size={40} onPress={() => go(undefined)}>
               <Icon icon={ChevronLeft} size={22} color={c.foreground} />
             </GlassButton>
           ) : (
-            <GlassButton label="Close" size={40} onPress={onClose}>
+            <GlassButton label={t("Close")} size={40} onPress={onClose}>
               <Icon icon={X} size={20} color={c.foreground} />
             </GlassButton>
           )}

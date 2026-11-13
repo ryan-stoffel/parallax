@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useCallback, useEffect, useState } from "react";
 
 import type { StorageItem } from "../../preload/bridge";
@@ -27,10 +28,10 @@ export function StorageSettings() {
   const platform = window.parallax.platform;
   const fileManager =
     platform === "darwin"
-      ? "Show in Finder"
+      ? t("Show in Finder")
       : platform === "win32"
-        ? "Show in Explorer"
-        : "Open folder";
+        ? t("Show in Explorer")
+        : t("Open folder");
   const [items, setItems] = useState<StorageItem[]>();
   const [clearing, setClearing] = useState(false);
   const load = useCallback(() => void window.parallax.storage().then(setItems), []);
@@ -38,11 +39,11 @@ export function StorageSettings() {
 
   return (
     <>
-      <PageTitle title="Storage">
-        What Parallax keeps on this computer, and what it takes.
+      <PageTitle title={t("Storage")}>
+        {t("What Parallax keeps on this computer, and what it takes.")}
       </PageTitle>
-      <Section title="On this computer">
-        {!items && <p className="px-4 py-3 text-body text-muted-foreground">Measuring…</p>}
+      <Section title={t("On this computer")}>
+        {!items && <p className="px-4 py-3 text-body text-muted-foreground">{t("Measuring…")}</p>}
         {items?.map((item) => (
           <Row
             key={item.id}
@@ -56,7 +57,7 @@ export function StorageSettings() {
             }
             description={
               item.id === "cache" ? (
-                "Web pages and code the app keeps to load faster. Nothing you made."
+                t("Web pages and code the app keeps to load faster. Nothing you made.")
               ) : (
                 <span className="block truncate font-mono text-meta" title={item.folder}>
                   {item.folder}
@@ -76,7 +77,7 @@ export function StorageSettings() {
                   load();
                 }}
               >
-                {clearing ? "Clearing…" : "Clear"}
+                {clearing ? t("Clearing…") : t("Clear", { context: "cache" })}
               </button>
             ) : (
               <button
@@ -102,7 +103,7 @@ function ArchivedThreads() {
   const targets = hostsOf(hosts, scope);
   return (
     <Section
-      title="Archived threads"
+      title={t("Archived threads")}
       action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
     >
       {targets.map((host) => (
@@ -144,7 +145,7 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
       if ("error" in answer) {
         notify({
           tone: "error",
-          title: "Couldn't delete the archived threads",
+          title: t("Couldn't delete the archived threads"),
           body: describeError(answer.error),
         });
         break;
@@ -160,10 +161,13 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
     <Row
       title={`${named ? `${host.name}: ` : ""}${
         !connected
-          ? "Not connected"
+          ? t("Not connected")
           : archived === undefined
-            ? "Counting…"
-            : `${count} archived ${count === 1 ? "thread" : "threads"}`
+            ? t("Counting…")
+            : t("{{count}} archived threads", {
+                count,
+                defaultValue_one: "{{count}} archived thread",
+              })
       }`}
       description={
         error ? (
@@ -172,14 +176,20 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
           </span>
         ) : confirming ? (
           kept ? (
-            "Delete them? Their transcripts go too. Their worktrees and branches stay on disk. This can't be undone."
+            t(
+              "Delete them? Their transcripts go too. Their worktrees and branches stay on disk. This can't be undone.",
+            )
           ) : (
-            "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
+            t(
+              "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone.",
+            )
           )
         ) : kept ? (
-          "Deleting removes each one's transcript from the host. Its worktree and branch stay on disk."
+          t(
+            "Deleting removes each one's transcript from the host. Its worktree and branch stay on disk.",
+          )
         ) : (
-          "Deleting removes each one's transcript and worktree from the host."
+          t("Deleting removes each one's transcript and worktree from the host.")
         )
       }
     >
@@ -191,7 +201,7 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
             className={dangerButton}
             onClick={() => void deleteAll()}
           >
-            {deleting ? "Deleting…" : "Delete all"}
+            {deleting ? t("Deleting…") : t("Delete all")}
           </button>
           <button
             type="button"
@@ -200,7 +210,7 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
             disabled={deleting}
             onClick={() => setConfirming(false)}
           >
-            Cancel
+            {t("Cancel")}
           </button>
         </>
       ) : (
@@ -210,7 +220,7 @@ function HostArchived({ host, named }: { host: Host; named: boolean }) {
           disabled={!count}
           onClick={() => setConfirming(true)}
         >
-          Delete all
+          {t("Delete all")}
         </button>
       )}
     </Row>

@@ -1,5 +1,7 @@
+import { t } from "i18next";
 import { Atom, Package } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { Trans } from "react-i18next";
 
 import {
   bundledFonts,
@@ -27,42 +29,45 @@ export function TypographySettings() {
   // The system's list may need a user gesture: a press on a font menu tries again.
   const retry = () => fonts.complete || void loadSystemFonts().then(setFonts);
   return (
-    <Section title="Text">
-      <Row title="Interface font" description="Menus, chat, and everything outside code.">
+    <Section title={t("Text")}>
+      <Row title={t("Interface font")} description={t("Menus, chat, and everything outside code.")}>
         <span onPointerDown={retry} className="flex gap-2">
           <FontPicker
-            label="Interface font"
+            label={t("Interface font")}
             value={appearance.uiFont}
             defaultName="Inter"
             defaultFamily="var(--font-sans)"
             bundled={bundledFonts.ui}
-            groups={[["Installed", [...fonts.other, ...fonts.mono]]]}
+            groups={[[t("Installed"), [...fonts.other, ...fonts.mono]]]}
             onChange={(uiFont) => setAppearance({ uiFont })}
           />
           <SizePicker
-            label="Interface font size"
+            label={t("Interface font size")}
             value={appearance.uiSize}
             sizes={uiSizes}
             onChange={(uiSize) => setAppearance({ uiSize })}
           />
         </span>
       </Row>
-      <Row title="Code font" description="Code blocks, diffs, file previews, and the terminal.">
+      <Row
+        title={t("Code font")}
+        description={t("Code blocks, diffs, file previews, and the terminal.")}
+      >
         <span onPointerDown={retry} className="flex gap-2">
           <FontPicker
-            label="Monospace font"
+            label={t("Monospace font")}
             value={appearance.codeFont}
             defaultName="JetBrains Mono"
             defaultFamily='"JetBrains Mono Nerd Font"'
             bundled={bundledFonts.code}
             groups={[
-              ["Installed monospace", fonts.mono],
-              ["Other installed fonts", fonts.other],
+              [t("Installed monospace"), fonts.mono],
+              [t("Other installed fonts"), fonts.other],
             ]}
             onChange={(codeFont) => setAppearance({ codeFont })}
           />
           <SizePicker
-            label="Monospace font size"
+            label={t("Monospace font size")}
             value={appearance.codeSize}
             sizes={codeSizes}
             onChange={(codeSize) => setAppearance({ codeSize })}
@@ -73,31 +78,33 @@ export function TypographySettings() {
         {/* Typing here only tries the font; nothing is kept. */}
         <div
           role="textbox"
-          aria-label="Interface font preview"
+          aria-label={t("Interface font preview")}
           aria-multiline
           contentEditable
           suppressContentEditableWarning
           spellCheck={false}
           className={`${preview} px-4 py-3 text-reading leading-relaxed`}
         >
-          Use <Chip icon={<Package />}>Frontend Design</Chip> to fix the flaky test in{" "}
-          <Chip icon={<span className="text-micro font-semibold">TS</span>} tone="file">
-            surface.test.ts
-          </Chip>{" "}
-          and align the header with{" "}
-          <Chip icon={<Atom />} tone="file">
-            SettingsPanels.tsx
-          </Chip>{" "}
-          before shipping.
+          <Trans>
+            Use <Chip icon={<Package />}>Frontend Design</Chip> to fix the flaky test in{" "}
+            <Chip icon={<span className="text-micro font-semibold">TS</span>} tone="file">
+              surface.test.ts
+            </Chip>{" "}
+            and align the header with{" "}
+            <Chip icon={<Atom />} tone="file">
+              SettingsPanels.tsx
+            </Chip>{" "}
+            before shipping.
+          </Trans>
         </div>
         <DiffPreview />
       </div>
       <Row
-        title="Word wrap"
-        description="Wrap long lines in code blocks, diffs, and file previews by default."
+        title={t("Word wrap")}
+        description={t("Wrap long lines in code blocks, diffs, and file previews by default.")}
       >
         <Switch
-          label="Word wrap"
+          label={t("Word wrap")}
           checked={appearance.wordWrap}
           onChange={(wordWrap) => setAppearance({ wordWrap })}
         />
@@ -127,7 +134,7 @@ function DiffPreview() {
   );
   return (
     <div
-      aria-label="Diff preview"
+      aria-label={t("Diff preview")}
       role="group"
       className={`${preview} code-scroll overflow-hidden bg-code font-mono text-meta leading-6`}
     >
@@ -206,8 +213,8 @@ function FontPicker({
   onChange: (font: string) => void;
 }) {
   const options: PickerOption[] = [
-    { value: "", label: defaultName, hint: "Default", style: { fontFamily: defaultFamily } },
-    ...bundled.map((f) => fontOption(f, "Included with Parallax")),
+    { value: "", label: defaultName, hint: t("Default"), style: { fontFamily: defaultFamily } },
+    ...bundled.map((f) => fontOption(f, t("Included with Parallax"))),
     ...groups.flatMap(([group, fonts]) =>
       fonts.filter((f) => !bundled.includes(f)).map((f) => fontOption(f, group)),
     ),
@@ -219,8 +226,8 @@ function FontPicker({
       value={value}
       onChange={onChange}
       options={options}
-      search="Search or type a font name"
-      custom={(name) => ({ ...fontOption(name), hint: "Use this name" })}
+      search={t("Search or type a font name")}
+      custom={(name) => ({ ...fontOption(name), hint: t("Use this name") })}
       align="end"
       className="w-56"
       panelClassName="w-72"

@@ -16,6 +16,7 @@ import {
   shell,
   webContents,
 } from "electron";
+import { t } from "i18next";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync, promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -106,6 +107,7 @@ import {
   terminalName,
   writeTerminalApp,
 } from "./terminalApp";
+import { isLanguage, matchLanguage, msg, setLanguage } from "../i18n";
 import { logLine } from "../protocol/connectionLog";
 import { startConnectionLog, writeConnectionLine } from "./connectionLogFile";
 import { startStorage } from "./storage";
@@ -356,22 +358,22 @@ app.on("web-contents-created", (_event, contents) => {
     const separator = { type: "separator" } as const;
     const link = isBrowsable(linkURL)
       ? [
-          { label: "Open Link in New Tab", click: () => tell({ kind: "open", url: linkURL }) },
-          { label: "Copy Link Address", click: () => clipboard.writeText(linkURL) },
+          { label: t("Open Link in New Tab"), click: () => tell({ kind: "open", url: linkURL }) },
+          { label: t("Copy Link Address"), click: () => clipboard.writeText(linkURL) },
           separator,
         ]
       : [];
     const page = [
-      { label: "Back", enabled: history.canGoBack(), click: () => history.goBack() },
-      { label: "Forward", enabled: history.canGoForward(), click: () => history.goForward() },
-      { label: "Reload", click: () => contents.reload() },
+      { label: t("Back"), enabled: history.canGoBack(), click: () => history.goBack() },
+      { label: t("Forward"), enabled: history.canGoForward(), click: () => history.goForward() },
+      { label: t("Reload"), click: () => contents.reload() },
       separator,
     ];
     Menu.buildFromTemplate([
       ...link,
       ...(edit.length ? [...edit, separator] : link.length ? [] : page),
       ...extensionMenuItems(contents, params),
-      { label: "Inspect", click: () => contents.inspectElement(x, y) },
+      { label: t("Inspect"), click: () => contents.inspectElement(x, y) },
     ]).popup();
   });
 });
@@ -475,7 +477,7 @@ ipcMain.handle("parallax:installExtension", (_event, text: unknown) =>
   installExtension(browserSession(), typeof text === "string" ? text : ""),
 );
 ipcMain.handle("parallax:loadUnpackedExtension", async (event) => {
-  const { canceled, filePaths } = await pickDirectory(event.sender, "Load Extension");
+  const { canceled, filePaths } = await pickDirectory(event.sender, t("Load Extension"));
   return canceled || !filePaths[0] ? undefined : addUnpacked(browserSession(), filePaths[0]);
 });
 ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
@@ -576,8 +578,8 @@ const fileManagerName =
   process.platform === "darwin"
     ? "Finder"
     : process.platform === "win32"
-      ? "File Explorer"
-      : "Files";
+      ? msg("File Explorer")
+      : msg("Files");
 // Editors open another computer's folder over their Remote SSH, so only those with it are listed
 // for one, and a terminal opens an ssh session there. The file manager is this computer's.
 function openTargets(hostId: unknown): OpenTarget[] {
@@ -629,7 +631,7 @@ async function openApps(hostId: unknown): Promise<OpenApp[]> {
         : installedEditors()[target]!.program;
   const name = (target: OpenTarget) =>
     target === "files"
-      ? fileManagerName
+      ? t(fileManagerName)
       : target === "terminal"
         ? (installedTerminals().find((app) => app.path === terminal)?.name ??
           terminalName(terminal!))
@@ -659,7 +661,7 @@ ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) =>
     writeTerminalApp(terminalFile(), chosen.path);
   } catch (error) {
     const win = BrowserWindow.fromWebContents(event.sender);
-    if (win) await warn(win, "Parallax couldn't save your terminal.", (error as Error).message);
+    if (win) await warn(win, t("Parallax couldn't save your terminal."), (error as Error).message);
     return null;
   }
   terminal = chosen.path;
@@ -693,7 +695,7 @@ async function commandStatus(): Promise<CommandStatus> {
 /** Installs the command, which the user wants from now on. */
 async function putCommand(): Promise<string | null> {
   const at = commandLayout();
-  if (!at) return "This copy of Parallax can't install the command.";
+  if (!at) return t("This copy of Parallax can't install the command.");
   try {
     await installCommand(at);
     await writeRecord(commandRecordFile(), { asked: true, removed: false });
@@ -736,17 +738,18 @@ async function setUpCommand(win: BrowserWindow): Promise<void> {
   await writeRecord(commandRecordFile(), { ...record, asked: true });
   const { response } = await dialog.showMessageBox(win, {
     type: "question",
-    message: "Use Parallax from your terminal?",
-    detail:
+    message: t("Use Parallax from your terminal?"),
+    detail: t(
       "This installs the parallax command in /usr/local/bin, so typing parallax in any terminal opens Parallax there. macOS asks for your password. You can change this in Settings > General.",
-    buttons: ["Install", "Not Now"],
+    ),
+    buttons: [t("Install"), t("Not Now")],
     defaultId: 0,
     cancelId: 1,
   });
   if (response !== 0) return;
   const error = await putCommand();
   if (error && error !== "Cancelled.")
-    await warn(win, "Parallax couldn't install the parallax command.", error);
+    await warn(win, t("Parallax couldn't install the parallax command."), error);
 }
 
 /** A warning dialog over `win`. */
@@ -781,11 +784,13 @@ ipcMain.handle(
     // opens a file, which the Files view's Open in asks for.
     const editor = target !== "files" && target !== "terminal";
     if (local && !isDirectory(folder) && !(editor && isFile(folder)))
-      error = "That folder isn't there anymore.";
+      error = t("That folder isn't there anymore.");
     else if (target === "files") error = (await shell.openPath(folder)) || undefined;
     // `open -a` starts without complaint when the app is gone, so check it's still there.
     else if (target === "terminal" && !existsSync(shellApp))
-      error = `${terminalName(shellApp)} isn't there anymore. Choose your terminal again in Settings.`;
+      error = t("{{name}} isn't there anymore. Choose your terminal again in Settings.", {
+        name: terminalName(shellApp),
+      });
     else if (target === "terminal")
       error = destination
         ? await openSshTerminal(shellApp, destination, folder)
@@ -795,7 +800,7 @@ ipcMain.handle(
       error = await launch(editorCommand(process.platform, editor, folder, destination));
     }
     const win = BrowserWindow.fromWebContents(event.sender);
-    if (error && win) await warn(win, "Parallax couldn't open the folder.", error);
+    if (error && win) await warn(win, t("Parallax couldn't open the folder."), error);
     return undefined;
   },
 );
@@ -808,14 +813,14 @@ ipcMain.handle("parallax:sshDestination", async (_event, hostId: unknown, folder
 ipcMain.handle("parallax:setSshDestination", (_event, hostId: unknown, destination: unknown) =>
   typeof hostId === "string" && typeof destination === "string"
     ? setSshDestination(hostId, destination)
-    : "That isn't an ssh destination.",
+    : t("That isn't an ssh destination."),
 );
 
 // A file a local thread's agent linked from outside the thread's folder, selected in Finder or
 // Explorer. Showing never opens or runs it. Resolves to why it couldn't, or undefined.
 ipcMain.handle("parallax:showFile", (_event, file: unknown) => {
   const shown = shownFilePath(file, homedir());
-  if (!shown || !existsSync(shown)) return "That file isn't on this computer.";
+  if (!shown || !existsSync(shown)) return t("That file isn't on this computer.");
   shell.showItemInFolder(shown);
   return undefined;
 });
@@ -827,9 +832,9 @@ let registry: Promise<RegistryAgent[] | string> | undefined;
 async function fetchRegistry(): Promise<RegistryAgent[] | string> {
   try {
     const response = await net.fetch(registryUrl);
-    if (!response.ok) throw new Error(`it answered ${response.status}`);
+    if (!response.ok) throw new Error(t("it answered {{status}}", { status: response.status }));
     const { agents } = (await response.json()) as { agents?: unknown };
-    if (!Array.isArray(agents)) throw new Error("it lists no agents");
+    if (!Array.isArray(agents)) throw new Error(t("it lists no agents"));
     const text = (value: unknown) => (typeof value === "string" ? value : "");
     const https = (url: unknown) =>
       typeof url === "string" && url.startsWith("https://") ? url : undefined;
@@ -863,7 +868,9 @@ async function fetchRegistry(): Promise<RegistryAgent[] | string> {
     );
   } catch (error) {
     registry = undefined;
-    return `Parallax couldn't read the ACP Registry: ${(error as Error).message}.`;
+    return t("Parallax couldn't read the ACP Registry: {{why}}.", {
+      why: (error as Error).message,
+    });
   }
 }
 ipcMain.handle("parallax:acpRegistry", () => (registry ??= fetchRegistry()));
@@ -941,6 +948,11 @@ ipcMain.on("parallax:zoomed", (event, zoom: unknown) => {
 void app.whenReady().then(async () => {
   if (secondCopy) return;
   if (!devServerUrl) await serveAppScheme();
+  // The OS's language until a window says which one it shows, the user's choice (0105).
+  await setLanguage(matchLanguage(app.getPreferredSystemLanguages()));
+  ipcMain.on("parallax:language", (_event, language: unknown) => {
+    if (isLanguage(language)) void setLanguage(language);
+  });
   startConnectionLog(path.join(app.getPath("userData"), "logs"));
   // So a disconnect a sleep caused can be told from the rest.
   const logPower = (event: string) => writeConnectionLine(logLine(Date.now(), "power", { event }));

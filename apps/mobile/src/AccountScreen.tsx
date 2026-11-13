@@ -12,6 +12,7 @@ import {
   Trophy,
   type LucideIcon,
 } from "lucide-react-native";
+import { t } from "i18next";
 import { useMemo, useState } from "react";
 import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, RadialGradient, Rect, Stop } from "react-native-svg";
@@ -26,9 +27,9 @@ import { Action, Section } from "./SettingsParts";
 import { font } from "./theme";
 import { Icon, Mark, Row, T, useColors } from "./ui";
 
-const monthYear = new Intl.DateTimeFormat("en", { month: "long", year: "numeric" });
-const shortDay = new Intl.DateTimeFormat("en", { weekday: "short", month: "short", day: "numeric" });
-const hourName = new Intl.DateTimeFormat("en", { hour: "numeric" });
+const monthYear = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
+const shortDay = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
+const hourName = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
 
 const SECURITY = `${PORTAL}/user/security`;
 
@@ -120,8 +121,8 @@ export function AccountScreen() {
   const email = user?.email;
 
   const chips: { icon: LucideIcon; text: string }[] = [];
-  if (activity.since) chips.push({ icon: CalendarDays, text: `Building since ${monthYear.format(activity.since)}` });
-  if (repos > 0) chips.push({ icon: FolderGit2, text: `${repos} ${repos === 1 ? "repository" : "repositories"}` });
+  if (activity.since) chips.push({ icon: CalendarDays, text: t("Building since {{date}}", { date: monthYear.format(activity.since) }) });
+  if (repos > 0) chips.push({ icon: FolderGit2, text: t("{{count}} repositories", { count: repos, defaultValue_one: "{{count}} repository" }) });
 
   const busiestHour = activity.hours.indexOf(Math.max(...activity.hours));
   const security = () => void Linking.openURL(SECURITY);
@@ -139,7 +140,7 @@ export function AccountScreen() {
             <Avatar size={80} />
           </View>
           <Text numberOfLines={1} style={[styles.name, { color: c.foreground }]}>
-            {name ?? email ?? "Parallax account"}
+            {name ?? email ?? t("Parallax account")}
           </Text>
           {!!name && !!email && (
             <T muted numberOfLines={1} style={{ fontSize: 13, lineHeight: 18 }}>
@@ -159,38 +160,38 @@ export function AccountScreen() {
             </View>
           )}
           <View style={styles.stats}>
-            <Stat icon={Bot} tone="blue" label="Agents" value={activity.agents} />
-            <Stat icon={GitPullRequest} tone="blue" label="Pull requests" value={activity.pullRequests} />
-            <Stat icon={Trophy} tone="coral" label="Longest streak" value={activity.longest} unit="d" />
-            <Stat icon={Flame} tone={activity.current ? "coral" : "off"} label="Current streak" value={activity.current} unit="d" />
+            <Stat icon={Bot} tone="blue" label={t("Agents")} value={activity.agents} />
+            <Stat icon={GitPullRequest} tone="blue" label={t("Pull requests")} value={activity.pullRequests} />
+            <Stat icon={Trophy} tone="coral" label={t("Longest streak")} value={activity.longest} unit={t("d", { context: "days" })} />
+            <Stat icon={Flame} tone={activity.current ? "coral" : "off"} label={t("Current streak")} value={activity.current} unit={t("d", { context: "days" })} />
           </View>
           {computers.length > 1 && (
             <T faint style={{ fontSize: 12, lineHeight: 16, marginTop: 12 }}>
-              Across {computers.length} computers
+              {t("Across {{count}} computers", { count: computers.length, defaultValue_one: "Across {{count}} computer" })}
             </T>
           )}
         </View>
       </View>
 
-      <Section title="Account settings">
+      <Section title={t("Account settings")}>
         <Row
-          title="Name"
-          detail={name ?? "Shown on your profile and in the sidebar."}
-          right={<Action label="Edit" onPress={() => void Linking.openURL(`${PORTAL}/user`)} />}
+          title={t("Name")}
+          detail={name ?? t("Shown on your profile and in the sidebar.")}
+          right={<Action label={t("Edit")} onPress={() => void Linking.openURL(`${PORTAL}/user`)} />}
         />
-        <Row title="Email" detail={email ?? "None"} />
+        <Row title={t("Email")} detail={email ?? t("None")} />
         <Row
-          title="Sign out"
-          detail="Only on this phone. Your other devices stay signed in."
+          title={t("Sign out")}
+          detail={t("Only on this phone. Your other devices stay signed in.")}
           last
           right={
             <Action
-              label="Sign out"
+              label={t("Sign out")}
               destructive
               onPress={() =>
-                showAlert("Sign out of Parallax?", "Your computers stay on this phone.", [
-                  { text: "Cancel", style: "cancel" },
-                  { text: "Sign out", style: "destructive", onPress: () => void signOut() },
+                showAlert(t("Sign out of Parallax?"), t("Your computers stay on this phone."), [
+                  { text: t("Cancel"), style: "cancel" },
+                  { text: t("Sign out"), style: "destructive", onPress: () => void signOut() },
                 ])
               }
             />
@@ -199,42 +200,42 @@ export function AccountScreen() {
       </Section>
 
       {activity.busiest && (
-        <Section title="Activity" footer="When your agents started, on every computer.">
+        <Section title={t("Activity")} footer={t("When your agents started, on every computer.")}>
           <Row
-            title="When you build"
-            detail={`${rhythmOf(busiestHour)} · busiest around ${hourName.format(new Date(2000, 0, 1, busiestHour))}`}
+            title={t("When you build")}
+            detail={t("{{rhythm}} · busiest around {{hour}}", { rhythm: t(rhythmOf(busiestHour)), hour: hourName.format(new Date(2000, 0, 1, busiestHour)) })}
           />
           <Row
-            title="Busiest day"
-            detail={`${shortDay.format(dayOf(activity.busiest.day))} · ${activity.busiest.agents} ${activity.busiest.agents === 1 ? "agent" : "agents"}`}
+            title={t("Busiest day")}
+            detail={t("{{day}} · {{count}} agents", { day: shortDay.format(dayOf(activity.busiest.day)), count: activity.busiest.agents, defaultValue_one: "{{day}} · {{count}} agent" })}
             last
           />
         </Section>
       )}
 
-      <Section title="Security" footer="Each opens your account's security page on Clerk.">
+      <Section title={t("Security")} footer={t("Each opens your account's security page on Clerk.")}>
         <Row
-          title="Password"
-          detail="Set or change the password you sign in with by email."
-          right={<Action label="Set" onPress={security} />}
+          title={t("Password")}
+          detail={t("Set or change the password you sign in with by email.")}
+          right={<Action label={t("Set")} onPress={security} />}
         />
         <Row
-          title="Passkeys"
-          detail="Sign in with Face ID, Touch ID, or a security key."
-          right={<Action label="Add" onPress={security} />}
+          title={t("Passkeys")}
+          detail={t("Sign in with Face ID, Touch ID, or a security key.")}
+          right={<Action label={t("Add")} onPress={security} />}
         />
         <Row
-          title="Delete account"
-          detail="Deletes your Parallax account and signs out every device."
+          title={t("Delete account")}
+          detail={t("Deletes your Parallax account and signs out every device.")}
           last
-          right={<Action label="Delete" destructive onPress={security} />}
+          right={<Action label={t("Delete")} destructive onPress={security} />}
         />
       </Section>
 
-      <Section title="Parallax Connect" footer="The computers you add with plx connect join this phone on their own.">
+      <Section title="Parallax Connect" footer={t("The computers you add with plx connect join this phone on their own.")}>
         <Row
-          title="Computers"
-          detail={`${computers.length} on this phone`}
+          title={t("Computers")}
+          detail={t("{{count}} on this phone", { count: computers.length })}
           chevron
           last
           onPress={() =>

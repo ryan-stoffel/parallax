@@ -3,6 +3,7 @@
 // rows, a capsule segmented control, a body that folds past a height under a fade, the activity
 // timeline, and the diff with line numbers.
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Check,
@@ -26,6 +27,7 @@ import { Image, Pressable, StyleSheet, TextInput, useColorScheme, View } from "r
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 
 import type { PrReviewState, PullRequest } from "../../desktop/src/protocol/generated/protocol";
+import { msg } from "../../desktop/src/i18n";
 import { githubText } from "../../desktop/src/renderer/github";
 import { ago } from "./nav";
 import type { Activity, DiffRow, Tone } from "./pullRequestLogic";
@@ -87,11 +89,11 @@ export function lookOf(
   pr: Pick<PullRequest, "state" | "draft"> | undefined,
   gh: GitHubColors,
 ): [LucideIcon, string, string, string] {
-  if (pr?.state === "merged") return [GitMerge, gh.merged, "Merged", gh.mergedFill];
-  if (pr?.state === "closed") return [GitPullRequestClosed, gh.closed, "Closed", gh.closedFill];
-  if (pr?.state === "open" && pr.draft) return [GitPullRequestDraft, gh.draft, "Draft", gh.draftFill];
-  if (pr?.state === "open") return [GitPullRequest, gh.open, "Open", gh.openFill];
-  return [GitPullRequest, gh.draft, "Pull request", gh.draftFill];
+  if (pr?.state === "merged") return [GitMerge, gh.merged, t("Merged"), gh.mergedFill];
+  if (pr?.state === "closed") return [GitPullRequestClosed, gh.closed, t("Closed"), gh.closedFill];
+  if (pr?.state === "open" && pr.draft) return [GitPullRequestDraft, gh.draft, t("Draft"), gh.draftFill];
+  if (pr?.state === "open") return [GitPullRequest, gh.open, t("Open", { context: "pull request state" }), gh.openFill];
+  return [GitPullRequest, gh.draft, t("Pull request"), gh.draftFill];
 }
 
 /** A GitHub user's picture, or their initial while it loads or when they have none. */
@@ -286,7 +288,7 @@ export function GlassSearch({
         style={[styles.input, { color: c.foreground }]}
       />
       {!!value && (
-        <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={10} onPress={() => onChange("")}>
+        <Pressable accessibilityRole="button" accessibilityLabel={t("Clear search")} hitSlop={10} onPress={() => onChange("")}>
           <Icon icon={CircleX} size={17} color={c.faintForeground} />
         </Pressable>
       )}
@@ -377,7 +379,7 @@ export function Folding({ height, fill, children }: { height: number; fill: stri
           style={({ pressed }) => [styles.more, folded && styles.moreOver, pressed && { opacity: 0.6 }]}
         >
           <T medium style={{ fontSize: 13, lineHeight: 17 }}>
-            {open ? "Show less" : "Show more"}
+            {open ? t("Show less") : t("Show more")}
           </T>
           <Icon icon={open ? ChevronUp : ChevronDown} size={11} color={c.foreground} strokeWidth={2.4} />
         </Pressable>
@@ -387,10 +389,10 @@ export function Folding({ height, fill, children }: { height: number; fill: stri
 }
 
 const verdictWords: Record<PrReviewState, string> = {
-  approved: "approved",
-  changesRequested: "requested changes",
-  commented: "commented",
-  dismissed: "was dismissed",
+  approved: msg("approved"),
+  changesRequested: msg("requested changes"),
+  commented: msg("commented"),
+  dismissed: msg("was dismissed"),
 };
 
 /** A verdict's timeline icon and color. */
@@ -434,7 +436,8 @@ function Event({
 }
 
 /** Who did what, and when, at the top of an event. */
-function Byline({ author, action, at }: { author?: string; action: string; at: string }) {
+function Byline({ author, action: english, at }: { author?: string; action: string; at: string }) {
+  const action = t(english);
   return (
     <View style={[styles.line, { gap: 8 }]}>
       {author && <Avatar login={author} size={22} />}
@@ -459,7 +462,7 @@ export function Timeline({ events }: { events: Activity[] }) {
   if (!events.length)
     return (
       <T muted style={{ fontSize: 14, paddingVertical: 24 }}>
-        No activity yet.
+        {t("No activity yet.")}
       </T>
     );
   return (
@@ -488,7 +491,7 @@ export function Timeline({ events }: { events: Activity[] }) {
               fill={e.kind === "merged" ? gh.mergedFill : gh.closedFill}
               last={last}
             >
-              <Byline author={e.author} action={e.kind === "merged" ? "merged this" : "closed this"} at={e.at} />
+              <Byline author={e.author} action={e.kind === "merged" ? msg("merged this") : msg("closed this")} at={e.at} />
             </Event>
           );
         const [icon, color] = verdictLook(e.verdict, c, gh);

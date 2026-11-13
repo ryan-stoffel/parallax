@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { behaviorPrefs } from "../prefs";
@@ -147,12 +148,21 @@ export function MergeBox({
     actions ? { method: chosen, deleteBranch, headSha: status?.headSha ?? more(pr).headSha } : {};
   const { Icon, color } = toneLook[gate.tone];
   const justNow = pr.mergedAt && Date.now() - Date.parse(pr.mergedAt) < JUST_NOW_MS;
-  const title = gate.tone === "merged" && justNow ? "Merged just now" : gate.title;
+  const title = gate.tone === "merged" && justNow ? t("Merged just now") : gate.title;
+  const who = pr.mergedBy ?? t("Someone");
+  const [head, base] = [pr.headBranch, pr.baseBranch];
   const detail =
     gate.tone === "merged"
-      ? `${pr.mergedBy ?? "Someone"} merged ${pr.headBranch} into ${pr.baseBranch}${pr.mergedAt && !justNow ? ` ${ago(pr.mergedAt)}` : ""}.`
+      ? pr.mergedAt && !justNow
+        ? t("{{who}} merged {{head}} into {{base}} {{ago}}.", {
+            who,
+            head,
+            base,
+            ago: ago(pr.mergedAt),
+          })
+        : t("{{who}} merged {{head}} into {{base}}.", { who, head, base })
       : gate.tone === "closed" && pr.closedAt
-        ? `Closed ${ago(pr.closedAt)}.`
+        ? t("Closed {{ago}}.", { ago: ago(pr.closedAt) })
         : undefined;
   const open = pr.state === "open";
   const merge = async () => {
@@ -169,7 +179,7 @@ export function MergeBox({
 
   return (
     <section
-      aria-label="Merge"
+      aria-label={t("Merge", { context: "noun" })}
       className="overflow-hidden rounded-xl border border-border bg-surface"
     >
       {rows.map((row) => {
@@ -238,11 +248,14 @@ export function MergeBox({
           <div className="flex items-center gap-2 text-meta text-muted-foreground">
             <icons.merged aria-hidden className="size-3.5 shrink-0 text-added" />
             <span className="min-w-0 flex-1">
-              Auto-merge is on{methodLabels[pr.autoMerge] && ` (${methodLabels[pr.autoMerge]})`}. It
-              merges once it can.
+              {methodLabels[pr.autoMerge]
+                ? t("Auto-merge is on ({{method}}). It merges once it can.", {
+                    method: t(methodLabels[pr.autoMerge]),
+                  })
+                : t("Auto-merge is on. It merges once it can.")}
             </span>
             <Button size="sm" disabled={busy} onClick={() => onAct("disableAutoMerge")}>
-              Turn off
+              {t("Turn off")}
             </Button>
           </div>
         )}
@@ -266,10 +279,10 @@ export function MergeBox({
               )}
               <span className="truncate">
                 {pr.state === "merged"
-                  ? "Merged"
+                  ? t("Merged")
                   : pr.state === "closed"
-                    ? "Closed"
-                    : methodLabels[chosen]}
+                    ? t("Closed", { context: "pull request state" })
+                    : t(methodLabels[chosen])}
               </span>
             </button>
             {open && (
@@ -277,7 +290,7 @@ export function MergeBox({
                 {/* GitHub lets the method change while merging waits, as auto-merge takes it. */}
                 <button
                   type="button"
-                  aria-label="Merge method"
+                  aria-label={t("Merge method")}
                   aria-haspopup="menu"
                   popoverTarget={`${id}-method`}
                   disabled={busy || (methods.length < 2 && !actions)}
@@ -291,24 +304,24 @@ export function MergeBox({
           {gate.draft && (
             <Button variant="outline" disabled={busy} onClick={() => onAct("ready")}>
               <icons.pullRequest aria-hidden />
-              Ready for review
+              {t("Ready for review")}
             </Button>
           )}
           {gate.behind && actions && (
             <Button variant="outline" disabled={busy} onClick={() => onAct("updateBranch")}>
-              Update branch
+              {t("Update branch")}
             </Button>
           )}
         </div>
         {pr.state === "merged" && actions && !branchDeleted && (
           <Button variant="outline" disabled={busy} onClick={() => void removeBranch()}>
             <icons.delete aria-hidden />
-            Delete branch
+            {t("Delete branch")}
           </Button>
         )}
         {open && !pr.autoMerge && !gate.canMerge && gate.canAutoMerge && (
           <Button variant="outline" disabled={busy} onClick={() => onAct("autoMerge", extra())}>
-            Merge when ready
+            {t("Merge when ready")}
           </Button>
         )}
         {open && <CommitMessage preview={commitPreview(pr, chosen)} base={pr.baseBranch} />}
@@ -316,7 +329,7 @@ export function MergeBox({
       <Menu
         ref={menu}
         id={`${id}-method`}
-        label="Merge method"
+        label={t("Merge method")}
         align="end"
         focus='[aria-checked="true"]'
         className="w-80 p-1"
@@ -324,7 +337,7 @@ export function MergeBox({
         {methods.map((m) => (
           <MenuOption
             key={m}
-            option={{ value: m, label: methodLabels[m], description: methodHint(m, commits) }}
+            option={{ value: m, label: t(methodLabels[m]), description: methodHint(m, commits) }}
             checked={m === chosen}
             onClick={() => {
               setMethod(m);
@@ -337,7 +350,7 @@ export function MergeBox({
             {separator}
             <MenuOption
               role="menuitemcheckbox"
-              option={{ value: "deleteBranch", label: "Delete branch after merging" }}
+              option={{ value: "deleteBranch", label: t("Delete branch after merging") }}
               checked={deleteBranch}
               onClick={() => setDeleteBranch(!deleteBranch)}
             />
@@ -357,15 +370,15 @@ function CommitMessage({ preview, base }: { preview: CommitPreview; base: string
   return (
     <div
       role="note"
-      aria-label="Commit message"
+      aria-label={t("Commit message")}
       className="min-w-0 rounded-lg border border-border px-3 py-2 text-meta"
     >
       {preview.replayed ? (
         <>
           <p className="text-muted-foreground">
             {preview.replayed.length
-              ? `Replays these commits onto ${base} as they are:`
-              : `Replays this branch's commits onto ${base} as they are.`}
+              ? t("Replays these commits onto {{base}} as they are:", { base })
+              : t("Replays this branch's commits onto {{base}} as they are.", { base })}
           </p>
           {preview.replayed.length > 0 && (
             <ul className="mt-1 flex flex-col gap-0.5">

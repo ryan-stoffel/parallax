@@ -1,5 +1,6 @@
 // The Traditional sidebar's head (0090, 0094): New thread, New project, and Search as rows, then
 // the pages Settings shows there and More. Its Pinned section, which folds, sits atop the list.
+import { t } from "i18next";
 import {
   ChartNoAxesColumn,
   ChevronDown,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { useId, type ReactNode } from "react";
 
+import { msg } from "../i18n";
 import { icons } from "./icons";
 import { useShortcutLabel } from "./keybindings";
 import { navDefaults, sidebarNav, type NavRow } from "./sidebarPrefs";
@@ -23,11 +25,11 @@ const navBase =
 export const navRow = `${navBase} hover:[&>svg]:text-foreground`;
 const navCurrent = "bg-selected text-foreground [&>svg]:text-foreground";
 
-/** The pages Settings › Appearance › Sidebar chooses between, in the order they list. */
+/** The pages Settings › Appearance › Sidebar chooses between, in the order they list. Show `label` with `t`. */
 export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
-  { id: "projects", label: "Projects", Icon: LayoutGrid },
-  { id: "pullRequests", label: "Pull requests", Icon: GitPullRequest },
-  { id: "usage", label: "Usage", Icon: ChartNoAxesColumn },
+  { id: "projects", label: msg("Projects"), Icon: LayoutGrid },
+  { id: "pullRequests", label: msg("Pull requests"), Icon: GitPullRequest },
+  { id: "usage", label: msg("Usage"), Icon: ChartNoAxesColumn },
 ];
 
 /** Whether More is open, showing the pages Settings leaves out of the head, on this computer. */
@@ -70,7 +72,7 @@ export function SidebarNav({
       className={`${navRow} ${current === id ? navCurrent : ""}`}
     >
       <Icon />
-      {label}
+      {t(label)}
     </button>
   );
   const hidden = navChoices.filter((c) => !shown[c.id]);
@@ -78,7 +80,7 @@ export function SidebarNav({
     <div className="flex flex-col px-2">
       <button type="button" onClick={onNewThread} className={navRow}>
         <SquarePen />
-        <span className="flex-1">New thread</span>
+        <span className="flex-1">{t("New thread")}</span>
         {newKeys && (
           <kbd
             aria-hidden
@@ -90,7 +92,7 @@ export function SidebarNav({
       </button>
       <button type="button" onClick={onAdd} className={navRow}>
         <FolderPlus />
-        New project
+        {t("New project")}
       </button>
       {search}
       {navChoices.filter((c) => shown[c.id]).map(page)}
@@ -109,7 +111,7 @@ export function SidebarNav({
         onClick={() => moreShown.set(!moreOpen)}
         className="group/more mt-1 flex h-6 items-center gap-1 rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground"
       >
-        {moreOpen ? "Less" : "More"}
+        {moreOpen ? t("Less") : t("More")}
         <ChevronDown
           aria-hidden
           className={`size-3 motion-safe:transition-transform motion-safe:duration-200 ${moreOpen ? "rotate-180" : ""}`}
@@ -128,7 +130,7 @@ export function PinnedSection({ children }: { children: ReactNode }) {
   const folded = pinnedFolded.use();
   const list = useId();
   return (
-    <section aria-label="Pinned" className="mb-1">
+    <section aria-label={t("Pinned")} className="mb-1">
       <button
         type="button"
         aria-expanded={!folded}
@@ -136,7 +138,7 @@ export function PinnedSection({ children }: { children: ReactNode }) {
         onClick={() => pinnedFolded.set(!folded)}
         className="flex h-7 items-center gap-1 rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground"
       >
-        Pinned
+        {t("Pinned")}
         <icons.expand
           aria-hidden
           className={`size-3 transition-transform ${folded ? "-rotate-90" : ""}`}

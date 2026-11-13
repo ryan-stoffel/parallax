@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { ConnectNotice, ConnectionState, Profile } from "../preload/bridge";
@@ -35,30 +36,32 @@ export function useSnoozeAlarms(
     const timers: number[] = [];
     const now = Date.now();
     for (const { host, view } of hosts)
-      for (const t of view.state.threads) {
-        if (!t.snoozedUntil || t.archived) continue;
-        const until = Date.parse(t.snoozedUntil);
-        const key = `${host.id}/${t.id}/${t.snoozedUntil}`;
+      for (const thread of view.state.threads) {
+        if (!thread.snoozedUntil || thread.archived) continue;
+        const until = Date.parse(thread.snoozedUntil);
+        const key = `${host.id}/${thread.id}/${thread.snoozedUntil}`;
         // ponytail: a snooze past setTimeout's ~24-day limit isn't armed until a later change
         // runs this again; arm from a daily check if long snoozes matter.
         if (until <= now || until - now > 2 ** 31 - 1 || notified.current.has(key)) continue;
-        const title = view.state.titles[t.id] ?? "Thread";
+        const title = view.state.titles[thread.id] ?? t("Thread");
         const ring = (tone: "attention" | "info", body: string) => {
           notified.current.add(key);
           notify({
-            key: `thread/${host.id}/${t.id}`,
+            key: `thread/${host.id}/${thread.id}`,
             tone,
             title,
             body,
-            action: { label: "Open thread", run: () => open.current(host.id, t.id) },
+            action: { label: t("Open thread"), run: () => open.current(host.id, thread.id) },
             system: true,
           });
         };
-        const asks = asksOf(view.state, t.id);
-        if (attentionOf(t, view.state.runs[t.id], asks) === "needsYou")
-          ring("attention", "Needs you, so it woke early from its snooze.");
+        const asks = asksOf(view.state, thread.id);
+        if (attentionOf(thread, view.state.runs[thread.id], asks) === "needsYou")
+          ring("attention", t("Needs you, so it woke early from its snooze."));
         else
-          timers.push(window.setTimeout(() => ring("info", "Back from its snooze."), until - now));
+          timers.push(
+            window.setTimeout(() => ring("info", t("Back from its snooze.")), until - now),
+          );
       }
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [hosts]);
@@ -83,10 +86,10 @@ export function useNeedsYouAlarm(
       ?.view.state.orchestrators.find((p) => p.id === orchestratorId);
     notify({
       tone: "attention",
-      title: orchestrator?.name ?? "Orchestrator",
-      body: `Needs you: ${item.text}`,
+      title: orchestrator?.name ?? t("Orchestrator"),
+      body: t("Needs you: {{text}}", { text: item.text }),
       action: {
-        label: "Open orchestrator",
+        label: t("Open orchestrator"),
         run: () => latest.current.onOpen(hostId, orchestratorId),
       },
       system: true,
@@ -130,20 +133,22 @@ export function threadNotice(
 ): Pick<Notice, "tone" | "title" | "body"> | undefined {
   if (before === now) return undefined;
   if (now === "needsYou")
-    return { tone: "attention", title: "Thread needs your input", body: name };
+    return { tone: "attention", title: t("Thread needs your input"), body: name };
   if (now === "limited")
     return {
       tone: "info",
-      title: "Thread hit a usage limit",
-      body: run?.resumeAt ? `${name}. Resumes at ${clock(run.resumeAt)}.` : name,
+      title: t("Thread hit a usage limit"),
+      body: run?.resumeAt
+        ? t("{{name}}. Resumes at {{time}}.", { name, time: clock(run.resumeAt) })
+        : name,
     };
   if (!active.includes(before)) return undefined;
-  if (now === "done") return { tone: "success", title: "Thread finished", body: name };
+  if (now === "done") return { tone: "success", title: t("Thread finished"), body: name };
   if (now === "failed")
     return {
       tone: "error",
-      title: "Thread failed",
-      body: run?.error ? `${name}: ${run.error}` : name,
+      title: t("Thread failed"),
+      body: run?.error ? t("{{name}}: {{error}}", { name, error: run.error }) : name,
     };
   return undefined;
 }
@@ -171,21 +176,29 @@ export function useThreadAlarms(
     for (const { host, view } of hosts) {
       // Mid-load, a thread's requests may not be in yet; its marks wait for the whole answer.
       if (view.loading) continue;
-      for (const t of view.state.threads) {
-        const key = `${host.id}/${t.id}`;
-        const run = view.state.runs[t.id];
-        const mark = markOf(t, run, asksOf(view.state, t.id), waitingOf(view.state, t.id));
+      for (const thread of view.state.threads) {
+        const key = `${host.id}/${thread.id}`;
+        const run = view.state.runs[thread.id];
+        const mark = markOf(
+          thread,
+          run,
+          asksOf(view.state, thread.id),
+          waitingOf(view.state, thread.id),
+        );
         const before = marks.current.get(key);
         marks.current.set(key, mark);
-        if (before === undefined || t.archived) continue;
-        if (t.snoozedUntil && Date.parse(t.snoozedUntil) > now) continue;
+        if (before === undefined || thread.archived) continue;
+        if (thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now) continue;
         if (latest.current.openKeys.includes(key) && document.hasFocus()) continue;
-        const notice = threadNotice(before, mark, view.state.titles[t.id] ?? "Thread", run);
+        const notice = threadNotice(before, mark, view.state.titles[thread.id] ?? t("Thread"), run);
         if (!notice) continue;
         notify({
           ...notice,
           key: `thread/${key}`,
-          action: { label: "Open thread", run: () => latest.current.onOpen(host.id, t.id) },
+          action: {
+            label: t("Open thread"),
+            run: () => latest.current.onOpen(host.id, thread.id),
+          },
           system: true,
         });
       }
@@ -221,11 +234,11 @@ export function useConnectionAlarms(hosts: Host[]) {
     return onConnectionShown((hostId, state) => {
       const before = last.current.get(hostId);
       last.current.set(hostId, state);
-      const name = names.current.find((h) => h.id === hostId)?.name ?? "a host";
+      const name = names.current.find((h) => h.id === hostId)?.name ?? t("a host");
       const key = `connection/${hostId}`;
       if (state.status === "connected") {
         if (troubled.delete(hostId))
-          notify({ key, tone: "success", title: `Reconnected to ${name}` });
+          notify({ key, tone: "success", title: t("Reconnected to {{name}}", { name }) });
       } else if (state.status === "failed" && !state.retrying) {
         if (before?.status === "failed" && !before.retrying) return;
         // An account computer with no session here signs in, or waits for its code, which
@@ -235,14 +248,19 @@ export function useConnectionAlarms(hosts: Host[]) {
         notify({
           key,
           tone: "error",
-          title: `Couldn't connect to ${name}`,
+          title: t("Couldn't connect to {{name}}", { name }),
           body: state.error.message,
-          action: { label: "Retry", run: () => void window.parallax.retry(hostId) },
+          action: { label: t("Retry"), run: () => void window.parallax.retry(hostId) },
         });
       } else if (!state.updating && (before?.status === "connected" || before?.updating)) {
         // A restart for an update isn't a drop, until it runs out of time.
         troubled.add(hostId);
-        notify({ key, tone: "error", title: `Lost connection to ${name}`, body: "Reconnecting…" });
+        notify({
+          key,
+          tone: "error",
+          title: t("Lost connection to {{name}}", { name }),
+          body: t("Reconnecting…"),
+        });
       }
     });
   }, []);
@@ -262,11 +280,17 @@ export function useOutdatedAlarms(hosts: HostThreads[]) {
         notify({
           key,
           tone: "error",
-          title: `${host.name}'s plxd is out of date`,
-          body: "Its threads can't load. Update Parallax there, or run npx plx-cli setup on a Linux computer that runs only plxd.",
+          title: t("{{name}}'s plxd is out of date", { name: host.name }),
+          body: t(
+            "Its threads can't load. Update Parallax there, or run npx plx-cli setup on a Linux computer that runs only plxd.",
+          ),
         });
       } else if (!view.outdated && !view.loading && outdated.current.delete(host.id)) {
-        notify({ key, tone: "success", title: `${host.name}'s plxd is up to date` });
+        notify({
+          key,
+          tone: "success",
+          title: t("{{name}}'s plxd is up to date", { name: host.name }),
+        });
       }
     }
   }, [hosts]);
@@ -285,43 +309,64 @@ export function useHostUpdateAlarms(hosts: Host[]) {
     () =>
       window.parallax.onHostUpdate((event) => {
         const { hostId } = event;
-        const name = names.current.find((h) => h.id === hostId)?.name ?? "a computer";
+        const name = names.current.find((h) => h.id === hostId)?.name ?? t("a computer");
         const key = `hostUpdate/${hostId}`;
         if (event.status === "updated")
-          notify({ key, tone: "success", title: `Updated plxd on ${name}` });
+          notify({ key, tone: "success", title: t("Updated plxd on {{name}}", { name }) });
         else
           notify({
             key,
             tone: "error",
-            title: `Couldn't update plxd on ${name}`,
+            title: t("Couldn't update plxd on {{name}}", { name }),
             body: event.error,
-            action: { label: "Retry", run: () => void window.parallax.retryHostUpdate(hostId) },
+            action: { label: t("Retry"), run: () => void window.parallax.retryHostUpdate(hostId) },
           });
       }),
     [],
   );
 }
 
-/** What each notice says, for people: what's wrong, and what still works (PLX-1351). */
+/**
+ * What each notice says, for people: what's wrong, and what still works (PLX-1351). Each is read
+ * in the current language when it's used.
+ */
 export const CONNECT_NOTICE_TEXT: Record<ConnectNotice, { title: string; body: string }> = {
   relay: {
-    title: "Can't reach Parallax Connect",
-    body: "Computers on this network keep working. The rest reconnect when Parallax Connect is back.",
+    get title() {
+      return t("Can't reach Parallax Connect");
+    },
+    get body() {
+      return t(
+        "Computers on this network keep working. The rest reconnect when Parallax Connect is back.",
+      );
+    },
   },
   clerk: {
-    title: "Can't reach Clerk sign-in",
-    body: "Computers on this network keep working. New Parallax Connect connections and sign-ins wait until it's back.",
+    get title() {
+      return t("Can't reach Clerk sign-in");
+    },
+    get body() {
+      return t(
+        "Computers on this network keep working. New Parallax Connect connections and sign-ins wait until it's back.",
+      );
+    },
   },
   notListed: {
-    title: "This computer isn't on your account",
-    body: "Parallax Connect doesn't list it. If you didn't remove it, set it up again so your devices can reach it.",
+    get title() {
+      return t("This computer isn't on your account");
+    },
+    get body() {
+      return t(
+        "Parallax Connect doesn't list it. If you didn't remove it, set it up again so your devices can reach it.",
+      );
+    },
   },
 };
 
 /** Registers this computer again, the one click `notListed` offers, and says why it couldn't. */
 export async function setUpAgain() {
   const failed = await window.parallax.registerRelay();
-  if (failed) notify({ tone: "error", title: "Couldn't set up this computer", body: failed });
+  if (failed) notify({ tone: "error", title: t("Couldn't set up this computer"), body: failed });
 }
 
 /** Says what's wrong with Parallax Connect while it lasts, and offers `notListed`'s one click. */
@@ -334,7 +379,7 @@ export function useConnectNotices() {
           key: "connect",
           tone: "error",
           ...CONNECT_NOTICE_TEXT[notice],
-          ...(notice === "notListed" && { action: { label: "Set up again", run: setUpAgain } }),
+          ...(notice === "notListed" && { action: { label: t("Set up again"), run: setUpAgain } }),
         });
       }),
     [],
@@ -397,8 +442,10 @@ export function useAccountAlarms() {
               notify({
                 key: "account",
                 tone: "info",
-                title: "Sign in to Parallax again",
-                body: "Parallax accounts moved. Sign in again, then set up each of your computers again.",
+                title: t("Sign in to Parallax again"),
+                body: t(
+                  "Parallax accounts moved. Sign in again, then set up each of your computers again.",
+                ),
               }),
           );
         return;
@@ -407,12 +454,12 @@ export function useAccountAlarms() {
         notify({
           key: "account",
           tone: "success",
-          title: "Signed in to Parallax",
+          title: t("Signed in to Parallax"),
           // A notification is plain text, so it names the account without its email (PLX-1067).
-          ...(profile.name && { body: `As ${profile.name}.` }),
+          ...(profile.name && { body: t("As {{name}}.", { name: profile.name }) }),
         });
       else if (!profile && before)
-        notify({ key: "account", tone: "info", title: "Signed out of Parallax" });
+        notify({ key: "account", tone: "info", title: t("Signed out of Parallax") });
     });
   }, []);
 }

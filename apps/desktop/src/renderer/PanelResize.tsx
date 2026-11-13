@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useRef, type PointerEvent } from "react";
 
 import { stored } from "./stored";
@@ -59,8 +60,8 @@ export function PanelResize({
   return (
     <div
       role="separator"
-      aria-label={`Resize ${side === "left" ? "sidebar" : "side panel"}`}
-      title={`Drag to resize ${side === "left" ? "sidebar" : "side panel"}`}
+      aria-label={side === "left" ? t("Resize sidebar") : t("Resize side panel")}
+      title={side === "left" ? t("Drag to resize sidebar") : t("Drag to resize side panel")}
       aria-orientation="vertical"
       aria-valuenow={Math.round(width)}
       tabIndex={0}

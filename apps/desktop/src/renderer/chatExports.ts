@@ -1,4 +1,5 @@
 import { strFromU8, unzipSync } from "fflate";
+import { t } from "i18next";
 
 import type { ChatMessage, ImportSource } from "../protocol/generated/protocol";
 
@@ -199,10 +200,10 @@ export async function readExports(files: File[]): Promise<ExportContents> {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let texts: string[];
     if (/\.jsonl?$/i.test(file.name)) {
-      const t = strFromU8(bytes);
+      const json = strFromU8(bytes);
       let found: ExportPart[] | undefined;
       try {
-        found = manifestParts(JSON.parse(t));
+        found = manifestParts(JSON.parse(json));
       } catch {
         found = undefined;
       }
@@ -210,13 +211,13 @@ export async function readExports(files: File[]): Promise<ExportContents> {
         parts.push(...found);
         continue;
       }
-      texts = [t];
+      texts = [json];
     } else {
       let entries: Record<string, Uint8Array>;
       try {
         entries = unzipSync(bytes, { filter: (f) => /\.jsonl?$/i.test(f.name) });
       } catch {
-        throw new Error(`${file.name} isn't a .zip Parallax can open.`);
+        throw new Error(t("{{file}} isn't a .zip Parallax can open.", { file: file.name }));
       }
       texts = Object.keys(entries)
         .sort()
@@ -230,7 +231,7 @@ export async function readExports(files: File[]): Promise<ExportContents> {
   }
   if (!chats.size && !parts.length) {
     const names = files.map((f) => f.name).join(", ");
-    throw new Error(`${names} has no ChatGPT or Claude chats in it.`);
+    throw new Error(t("{{files}} has no ChatGPT or Claude chats in it.", { files: names }));
   }
   return {
     chats: [...chats.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),

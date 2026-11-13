@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import {
@@ -341,7 +342,10 @@ export class Connection {
     this.watches.clear();
     this.log.disconnected("app_closed");
     this.teardown();
-    const error = { code: ErrorCodes.InternalError, message: "The connection to this host closed" };
+    const error = {
+      code: ErrorCodes.InternalError,
+      message: t("The connection to this host closed"),
+    };
     for (const watch of watches) watch.listener({ type: "error", error });
     for (const done of this.reconnectWaiters) done();
   }
@@ -355,7 +359,7 @@ export class Connection {
     const { client, logId } = this;
     if (this.state.status !== "connected" || !client || logId === undefined) {
       return Promise.resolve({
-        error: { code: ErrorCodes.InternalError, message: "not connected" },
+        error: { code: ErrorCodes.InternalError, message: t("not connected") },
       });
     }
     const legacy = this.legacy;
@@ -478,7 +482,7 @@ export class Connection {
   /** Opens plxd's terminal `params`. Resolves to an error for people, or undefined once it runs. */
   async openTerminal(params: TerminalOpenParams): Promise<string | undefined> {
     if (this.state.status === "connected" && !this.state.capabilities["terminals"]) {
-      return "This host's plxd is too old to run terminals. Update Parallax there.";
+      return t("This host's plxd is too old to run terminals. Update Parallax there.");
     }
     const answer = await this.request("terminal/open", params);
     if ("error" in answer) return answer.error.message;
@@ -495,7 +499,7 @@ export class Connection {
     listener: (message: DeviceStreamMessage) => void,
   ): Promise<string | undefined> {
     if (this.state.status === "connected" && !this.state.capabilities["devices"]) {
-      return "This host's plxd is too old to show devices. Update Parallax there.";
+      return t("This host's plxd is too old to show devices. Update Parallax there.");
     }
     // Set first: plxd may relay the stream's first messages before it answers.
     this.deviceStreams.set(params.streamId, listener);
@@ -553,7 +557,7 @@ export class Connection {
     if (this.state.status !== "connected" || !this.client) return;
     this.client.send("host/health", {}, REQUEST_TIMEOUT_MS, ignore);
     this.livenessTimer ??= setTimeout(
-      () => this.end({ reason: "unresponsive", message: "plxd stopped answering" }),
+      () => this.end({ reason: "unresponsive", message: t("plxd stopped answering") }),
       LIVENESS_MS,
     );
   }
@@ -564,7 +568,7 @@ export class Connection {
     if (!file) {
       return this.fail({
         reason: "notFound",
-        message: "plxd wasn't found. Set PLXD_PATH to the plxd binary.",
+        message: t("plxd wasn't found. Set PLXD_PATH to the plxd binary."),
       });
     }
     const { destination } = this.options;
@@ -586,8 +590,11 @@ export class Connection {
         this.end({
           reason: "sshSetup",
           message: destination
-            ? `${destination}'s shell printed text before plxd started. Keep its startup files quiet for commands that aren't interactive.`
-            : "plxd attach printed something that isn't plxd's protocol.",
+            ? t(
+                "{{destination}}'s shell printed text before plxd started. Keep its startup files quiet for commands that aren't interactive.",
+                { destination },
+              )
+            : t("plxd attach printed something that isn't plxd's protocol."),
           stderr: `stdout: ${line.slice(0, 200)}`,
         });
       },
@@ -621,12 +628,12 @@ export class Connection {
     child.on("error", (error: NodeJS.ErrnoException) => {
       if (child !== this.child) return;
       const missing = error.code === "ENOENT";
-      let message = `${file} couldn't be started: ${error.message}`;
+      let message = t("{{file}} couldn't be started: {{why}}", { file, why: error.message });
       if (missing && destination) {
         message =
           process.platform === "win32"
-            ? "ssh wasn't found. Add OpenSSH Client in Settings > System > Optional features."
-            : "ssh wasn't found. Install OpenSSH.";
+            ? t("ssh wasn't found. Add OpenSSH Client in Settings > System > Optional features.")
+            : t("ssh wasn't found. Install OpenSSH.");
       }
       this.end({ reason: missing ? "notFound" : "exited", message });
     });
@@ -686,7 +693,9 @@ export class Connection {
             // Retried with backoff: the service may yet start, and `replaceDaemon` stops trying.
             this.fail({
               reason: "exited",
-              message: `Couldn't update the bundled local plxd: ${failure instanceof Error ? failure.message : String(failure)}`,
+              message: t("Couldn't update the bundled local plxd: {{why}}", {
+                why: failure instanceof Error ? failure.message : String(failure),
+              }),
             });
           },
         );
@@ -914,7 +923,7 @@ export class Connection {
     clearInterval(this.heartbeatTimer);
     clearTimeout(this.livenessTimer);
     this.livenessTimer = undefined;
-    client?.close("the connection to plxd ended");
+    client?.close(t("the connection to plxd ended"));
     this.pipelining = false;
     this.early.clear();
     for (const subscription of this.subscriptions) subscription.id = undefined;
@@ -926,7 +935,7 @@ export class Connection {
     const streams = [...this.deviceStreams.values()];
     this.deviceStreams.clear();
     for (const listener of streams)
-      listener({ type: "end", error: "The connection to plxd ended." });
+      listener({ type: "end", error: t("The connection to plxd ended.") });
     child?.kill();
   }
 
@@ -982,17 +991,22 @@ export function exitError(
     ...details,
   });
   if (destination !== undefined) {
-    const inTerminal = `run \`ssh ${destination}\` once in a terminal`;
     if (code === 255 && stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED")) {
       return error(
         "sshSetup",
-        `${destination}'s host key has changed. If you expected that, remove its old key from known_hosts, then ${inTerminal}.`,
+        t(
+          "{{destination}}'s host key has changed. If you expected that, remove its old key from known_hosts, then run `ssh {{destination}}` once in a terminal.",
+          { destination },
+        ),
       );
     }
     if (code === 255 && stderr.includes("Host key verification failed")) {
       return error(
         "sshSetup",
-        `${destination}'s host key isn't trusted yet. To accept it, ${inTerminal}.`,
+        t(
+          "{{destination}}'s host key isn't trusted yet. To accept it, run `ssh {{destination}}` once in a terminal.",
+          { destination },
+        ),
       );
     }
     if (code === 255 && stderr.includes("Permission denied")) {
@@ -1000,78 +1014,119 @@ export function exitError(
       if (platform === "win32") {
         return error(
           "sshSetup",
-          `ssh couldn't log in to ${destination} without a prompt. If your key has a passphrase, start the ssh-agent service, then run \`ssh-add\`. Otherwise, ${inTerminal}.`,
+          t(
+            "ssh couldn't log in to {{destination}} without a prompt. If your key has a passphrase, start the ssh-agent service, then run `ssh-add`. Otherwise, run `ssh {{destination}}` once in a terminal.",
+            { destination },
+          ),
         );
       }
       return error(
         "sshSetup",
-        `ssh couldn't log in to ${destination} without a prompt. If it needs a password, press Sign in. If your key has a passphrase, run \`ssh-add\`.`,
+        t(
+          "ssh couldn't log in to {{destination}} without a prompt. If it needs a password, press Sign in. If your key has a passphrase, run `ssh-add`.",
+          { destination },
+        ),
       );
     }
     // cmd.exe, on a Windows host, exits 1.
     if (code === 127 || /not recognized as an internal or external command/.test(stderr)) {
       return error(
         "notFound",
-        `Parallax couldn't find plxd on ${destination}: it isn't on PATH for ssh commands, in ~/.local/bin, or in a Parallax app in Applications. Install plxd from Settings > Connections, or add plxd's folder to PATH in the shell file that ssh commands read.`,
+        t(
+          "Parallax couldn't find plxd on {{destination}}: it isn't on PATH for ssh commands, in ~/.local/bin, or in a Parallax app in Applications. Install plxd from Settings > Connections, or add plxd's folder to PATH in the shell file that ssh commands read.",
+          { destination },
+        ),
       );
     }
     if (code === 255 && stderr.includes("Could not resolve hostname")) {
-      return error("exited", `Couldn't find ${destination}. Check its name, or your ssh config.`);
+      return error(
+        "exited",
+        t("Couldn't find {{destination}}. Check its name, or your ssh config.", { destination }),
+      );
     }
     if (code === 255) {
-      return error("exited", `Couldn't reach ${destination}. Check that it's on and accepts ssh.`);
+      return error(
+        "exited",
+        t("Couldn't reach {{destination}}. Check that it's on and accepts ssh.", { destination }),
+      );
     }
-    if (code === 4) return error("exited", `plxd couldn't be reached or started on ${destination}`);
+    if (code === 4)
+      return error(
+        "exited",
+        t("plxd couldn't be reached or started on {{destination}}", { destination }),
+      );
   }
   if (lan !== undefined && code === 4)
     return error(
       "exited",
-      `Couldn't reach ${lan} on this network. Check that it's on, on the same network, and that Same network is on there.`,
+      t(
+        "Couldn't reach {{name}} on this network. Check that it's on, on the same network, and that Same network is on there.",
+        { name: lan },
+      ),
     );
   if (lan !== undefined && code === 5)
     return error(
       "refused",
-      `${lan} doesn't know this computer anymore. Remove it, then pair again with a new code.`,
+      t(
+        "{{name}} doesn't know this computer anymore. Remove it, then pair again with a new code.",
+        {
+          name: lan,
+        },
+      ),
     );
   if (account !== undefined && code === 4)
     return error(
       "exited",
-      `Couldn't reach ${account}. Check that it's on, and that \`plx connect status\` there says it's connected.`,
+      t(
+        "Couldn't reach {{name}}. Check that it's on, and that `plx connect status` there says it's connected.",
+        { name: account },
+      ),
     );
   // No session there yet, or a revoked one: hosts.ts signs in, or asks for the computer's code.
   if (account !== undefined && code === 5)
-    return error("refused", `${account} hasn't let this computer in yet.`);
+    return error("refused", t("{{name}} hasn't let this computer in yet.", { name: account }));
   if (device !== undefined && code === 4)
     return error(
       "exited",
-      `Couldn't reach ${device} over Tailscale. Check that it's on, and that Parallax Connect is on there.`,
+      t(
+        "Couldn't reach {{name}} over Tailscale. Check that it's on, and that Parallax Connect is on there.",
+        { name: device },
+      ),
     );
   // plxd closes a connection from another Tailscale user before it answers.
   if (device !== undefined && code === 0)
     return error(
       "exited",
-      `${device} closed the connection. If it keeps happening, check that it's signed in to your Tailscale account.`,
+      t(
+        "{{name}} closed the connection. If it keeps happening, check that it's signed in to your Tailscale account.",
+        { name: device },
+      ),
     );
-  if (code === 127) return error("notFound", "plxd isn't installed");
+  if (code === 127) return error("notFound", t("plxd isn't installed"));
   const message =
     code === 4
-      ? "plxd couldn't be reached or started"
+      ? t("plxd couldn't be reached or started")
       : code === 2
-        ? "plxd attach rejected its arguments. Update plxd."
-        : `plxd attach exited with ${code ?? signal}`;
+        ? t("plxd attach rejected its arguments. Update plxd.")
+        : t("plxd attach exited with {{code}}", { code: code ?? signal });
   return error("exited", message);
 }
 
 function handshakeError(error: RpcError): ConnectionError {
   if (error.data?.kind !== "incompatibleProtocol") {
-    return { reason: "protocolError", message: `initialize failed: ${error.message}` };
+    return {
+      reason: "protocolError",
+      message: t("initialize failed: {{why}}", { why: error.message }),
+    };
   }
   const detail = error.data.detail as IncompatibleProtocolDetail | undefined;
-  const update =
-    detail && detail.supported.max < PROTOCOL_VERSION ? "Update plxd." : "Update the app.";
+  const why = error.message;
   return {
     reason: "incompatibleProtocol",
-    message: `${error.message}. ${update}`,
+    message:
+      detail && detail.supported.max < PROTOCOL_VERSION
+        ? t("{{why}}. Update plxd.", { why })
+        : t("{{why}}. Update the app.", { why }),
     ...(detail && { plxd: detail.plxd }),
   };
 }
