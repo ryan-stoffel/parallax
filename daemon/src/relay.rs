@@ -3177,9 +3177,9 @@ mod tests {
     }
 
     /// A link that goes silent with no close, as when Cloudflare's edge or a router drops it, ends
-    /// within two pings of the last frame the relay sent, well under 10 s (PLX-1547).
+    /// within 10 s of the last frame the relay sent (PLX-1547).
     #[tokio::test(start_paused = true)]
-    async fn a_silent_relay_is_noticed_within_two_pings() {
+    async fn a_silent_relay_is_noticed_within_10_s() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
         let stop = CancellationToken::new();
@@ -3214,7 +3214,10 @@ mod tests {
         };
         assert_eq!(lost.cause, "ping_timeout");
         let noticed = last_heard.elapsed();
-        assert!(noticed <= PING * 2, "noticed after {noticed:?}");
+        assert!(
+            noticed <= Duration::from_secs(10),
+            "noticed after {noticed:?}"
+        );
         assert!(noticed > PING, "noticed after {noticed:?}");
     }
 

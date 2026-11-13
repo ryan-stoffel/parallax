@@ -33,8 +33,10 @@ export type HookReply = { status: number; body: unknown };
 const TICKET_LIFETIME = 30_000;
 /** How long the relay waits for plxd to answer a webhook. */
 const HOOK_TIMEOUT = 10_000;
-/** How long a connect waits for plxd to reconnect when its control socket is gone (PLX-1547). */
-export const HOST_WAIT = 10_000;
+/** How long a connect waits for plxd to reconnect when its control socket is gone (PLX-1547).
+ *  Shorter than the 10 s a client's dial waits (`REQUEST_TIMEOUT` in daemon/src/remote.rs), so
+ *  one released late still has a client to join the stream it makes. */
+export const HOST_WAIT = 7_000;
 /** A connect waits only when plxd's control socket closed within this, so one to a host that's
  *  been away a while answers `host_offline` at once. */
 const RECONNECT_WINDOW = 60_000;
@@ -163,7 +165,7 @@ export class HostRelay extends DurableObject<Env> {
   /** Counts plxd's spare requests, so a placement a later one superseded reserves nothing. In
    *  memory, since a placement in flight keeps the object awake. */
   private spareRequests = 0;
-  /** When plxd's control socket last closed. In memory: an object evicted since then has been
+  /** When plxd's control socket last closed or was replaced. In memory: an object evicted since then has been
    *  without plxd for longer than [`RECONNECT_WINDOW`]. */
   private hostLeft = 0;
   /** Connects waiting for plxd's next control socket, each woken by it or by its own timer. */
@@ -408,10 +410,13 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** plxd's control socket. When there's none and plxd left within [`RECONNECT_WINDOW`], waits up
-   *  to [`HOST_WAIT`] for it to reconnect (PLX-1547). Callers count the request before this. */
+   *  to [`HOST_WAIT`] for it to reconnect (PLX-1547). Callers count the request before this. At
+   *  most [`MAX_STREAMS`] wait at once, since no more could get a stream, and the rest answer at
+   *  once. */
   private async reachHost() {
     const host = this.host();
-    if (host || Date.now() - this.hostLeft > RECONNECT_WINDOW) return host;
+    if (host || Date.now() - this.hostLeft > RECONNECT_WINDOW || this.arrivals.size >= MAX_STREAMS)
+      return host;
     await new Promise<void>((resolve) => {
       const done = () => {
         clearTimeout(timer);
@@ -673,6 +678,9 @@ export class HostRelay extends DurableObject<Env> {
     const openBefore = this.ctx
       .getWebSockets("host")
       .filter((ws) => ws.readyState === WebSocket.OPEN).length;
+    // After a silent drop the relay saw no close, so plxd left now, as far as a connect arriving
+    // while the streams settle knows: it waits for this socket instead of answering 503.
+    this.hostLeft = Date.now();
     this.closeHost(4409, "replaced");
     const { kept, again } = await this.settleStreams(owner.hostId, held);
     const [client, server] = Object.values(new WebSocketPair());

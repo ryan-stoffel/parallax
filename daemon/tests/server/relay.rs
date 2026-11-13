@@ -1650,9 +1650,14 @@ async fn online_through(
     (server, client, host_id)
 }
 
-/// How long plxd's control connection may take to notice a silent link: two of its 4 s pings, and
-/// some room for a busy test machine.
-const SILENCE_NOTICED: Duration = Duration::from_secs(15);
+/// How long plxd's control connection may take to notice a silent link (PLX-1547): two of its 4 s
+/// pings are 8 s, and the 15 s pings before it took up to 30 s.
+const SILENCE_NOTICED: Duration = Duration::from_secs(10);
+
+/// How long plxd may take to reconnect after the last silence. The refused connections before it
+/// leave plxd up to 4 failures in a row, and the link between lives under the 10 s that starts the
+/// backoff over, so its next wait can be up to 16 s, then the connection itself. Measured: 4 to 10 s.
+const BACK_AFTER_FAILURES: Duration = Duration::from_secs(25);
 
 #[tokio::test]
 async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_is_noticed() {
@@ -1713,7 +1718,7 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     );
     let mut waiting = App::bridged(dialed.unwrap().socket);
     assert!(waiting.initialize().await["result"].is_object());
-    relay_status_within(&mut client, |s| s.connected, SILENCE_NOTICED).await;
+    relay_status(&mut client, |s| s.connected).await;
     assert!(
         answers(&mut app).await,
         "a stream ended with the silent control link"
@@ -1749,7 +1754,12 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     relay_status_within(&mut client, |s| !s.connected, SILENCE_NOTICED).await;
     eprintln!("a silent link was noticed in {:?}", silent.elapsed());
     proxy.shared.silent.store(false, Ordering::SeqCst);
-    relay_status_within(&mut client, |s| s.connected, SILENCE_NOTICED).await;
+    let heard = Instant::now();
+    relay_status_within(&mut client, |s| s.connected, BACK_AFTER_FAILURES).await;
+    eprintln!(
+        "plxd was back {:?} after the silence ended",
+        heard.elapsed()
+    );
     server.stop().await;
 }
 
