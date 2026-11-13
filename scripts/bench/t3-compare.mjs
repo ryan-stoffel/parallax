@@ -11,7 +11,9 @@
 //
 //     node scripts/bench/t3-compare.mjs --token-file ~/.config/parallax/probe-token --out t3-compare.jsonl
 //
-// Other options: [--parallax-tag <exact-release-tag>] [--gap-ms 2200]
+// Other options: [--parallax-tag <exact-release-tag>] [--gap-ms 2200] [--plxd <path>] [--parallax-only]
+// --plxd times a plxd built here instead of a release's. --parallax-only skips T3, for comparing
+// two Parallax builds on one network.
 // Sampling gap defaults to 2200 ms on both sides to respect the relay's 30 opens/minute.
 // Other options: [--connects 30] [--trips 50] [--version latest].
 //
@@ -58,6 +60,8 @@ const { values: options } = parseArgs({
     trips: { type: "string", default: "50" },
     timings: { type: "boolean", default: false },
     "parallax-tag": { type: "string" },
+    plxd: { type: "string" },
+    "parallax-only": { type: "boolean", default: false },
     "gap-ms": { type: "string", default: "2200" },
     version: { type: "string", default: "latest" },
     out: { type: "string" },
@@ -315,7 +319,10 @@ for (const event of ["uncaughtException", "unhandledRejection"]) {
 }
 
 let failed = false;
-try {
+if (options["parallax-only"]) {
+  console.log("--parallax-only, so T3 isn't timed.");
+  await cleanUp();
+} else try {
   // Only this step sees the real PATH, since npx needn't sit beside node. It just downloads T3.
   await attached("npx", ["--yes", `t3@${options.version}`, "--version"], { ...env, PATH: `${env.PATH}:${process.env.PATH}` });
   const version = readdirSync(join(home, "runtime", "versions")).filter((name) => !name.includes(".staging")).at(-1);
@@ -347,6 +354,7 @@ try {
       "Both ends of the tunnel are on this computer, so a slow network counts twice.",
       "A connect skips the relay call a client makes to get its first session.",
       "Parallax includes a new dial process per connect, pinned inner TLS and DPoP. T3 uses this existing Node process and Cloudflare terminates TLS.",
+      "Parallax dials as its desktop app does away from home: a LAN route that doesn't answer, then the relay 200 ms later, so its connect includes that head start (PLX-1549).",
       "First events and RPCs differ: T3 lifecycle/server.probe; Parallax event replay/host/health. Setup, approval and tunnel provisioning are excluded.",
       "One warm-up precedes counted connects and RPCs. OS DNS and host state may be warm; each Parallax dial starts fresh. Spares are not guaranteed by a fixed gap.",
     ],
@@ -368,7 +376,7 @@ if (!probeEnv.PROBE_CLERK_REFRESH_TOKEN && !process.env.PROBE_CLERK_REFRESH_TOKE
 const probeFile = join(dirname(fileURLToPath(import.meta.url)), "relay-probe.mjs");
 const outDir = mkdtempSync(join(tmpdir(), "t3-compare-probe-"));
 try {
-  execFileSync(process.execPath, [probeFile, "--out", outDir, "--connects", options.connects, "--trips", options.trips, "--gap-ms", options["gap-ms"], ...(options.timings ? ["--timings"] : []), ...(options["parallax-tag"] ? ["--tag", options["parallax-tag"]] : [])], {
+  execFileSync(process.execPath, [probeFile, "--out", outDir, "--connects", options.connects, "--trips", options.trips, "--gap-ms", options["gap-ms"], ...(options.timings ? ["--timings"] : []), ...(options["parallax-tag"] ? ["--tag", options["parallax-tag"]] : []), ...(options.plxd ? ["--plxd", absolute(options.plxd)] : [])], {
     env: { ...process.env, ...probeEnv, PATH: env.PATH },
     stdio: "inherit",
   });
