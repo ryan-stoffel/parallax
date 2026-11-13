@@ -92,20 +92,22 @@ it("holds a connect while plxd reconnects, and it gets its stream", async () => 
   expect(await side.next()).toBe("ready");
 });
 
-it("counts a waiting connect, so the limit still answers at once", async () => {
+it("counts a waiting connect, so the limit still answers at once, and holds no more than fit", async () => {
   const { host, control, stub, user } = await online();
   control.ws.close(1000);
   await control.closed;
-  const waiting = Array.from({ length: LIMITS.opens }, () => stub.open(user));
   const started = Date.now();
+  const opens = Array.from({ length: LIMITS.opens }, () => stub.open(user));
   expect(await stub.open(user)).toEqual({ status: 429, error: "rate_limited" });
+  // Past the 16 a host's streams can take, the rest don't wait.
+  const extra = opens.slice(MAX_STREAMS);
+  expect(await Promise.all(extra)).toEqual(
+    Array(LIMITS.opens - MAX_STREAMS).fill({ status: 503, error: "host_offline" }),
+  );
   expect(Date.now() - started).toBeLessThan(1_000);
   await reconnect(host);
-  const results = await Promise.all(waiting);
-  expect(results.filter((r) => "stream" in r)).toHaveLength(MAX_STREAMS);
-  expect(results.filter((r) => "error" in r)).toEqual(
-    Array(LIMITS.opens - MAX_STREAMS).fill({ status: 429, error: "too_many_streams" }),
-  );
+  const waited = await Promise.all(opens.slice(0, MAX_STREAMS));
+  expect(waited.filter((r) => "stream" in r)).toHaveLength(MAX_STREAMS);
 });
 
 it("answers host_offline after the wait when plxd stays away, and at once when it's been gone", async () => {
