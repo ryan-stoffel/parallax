@@ -66,6 +66,7 @@ mod proxy;
 #[cfg(all(feature = "host-routing-proof", not(debug_assertions)))]
 compile_error!("host-routing-proof is for disposable debug builds only");
 mod seal;
+pub(crate) mod warm;
 
 use self::proxy::Proxy;
 use crate::event_log::{Entry, EventLog};
@@ -663,12 +664,22 @@ async fn upgrade(
     path: &str,
     headers: &[(&'static str, &str)],
 ) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     let base = Base::parse(url).map_err(|e| (None, e.into()))?;
     let stream = base
         .connect(Roots::WithOs)
         .await
         .map_err(|e| (None, e.into()))?;
+    upgrade_over(&base, stream, path, headers).await
+}
+
+/// [`upgrade`] over `stream`, a connection to `base` that's already open.
+async fn upgrade_over(
+    base: &Base,
+    stream: Stream,
+    path: &str,
+    headers: &[(&'static str, &str)],
+) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     crate::connect_timing::mark("outer_tls_ready");
     let scheme = if base.tls { "wss" } else { "ws" };
     #[cfg(feature = "host-routing-proof")]
@@ -936,11 +947,19 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
 /// [`open_stream`] through the relay at `url`, signed in with `token`. A relay from before 0091
 /// refuses the header with 401, 404, or 426 before any stream opens. Then this asks it for a
 /// ticket and opens `/connect?ticket=`, as such a relay expects. Once a stream opened, nothing is
-/// tried again.
+/// tried again. The first request goes over the connection the race opened early ([`warm`]), when
+/// it has one.
 async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream, Error> {
+    crate::connect_timing::mark("relay_route_start");
     let path = format!("/v1/hosts/{host_id}/connect");
     let authorization = format!("Bearer {token}");
-    let mut socket = match upgrade(url, &path, &[("authorization", &authorization)]).await {
+    let headers = [("authorization", authorization.as_str())];
+    // Over the connection the dial opened during the direct routes' head start, if it did (PLX-1549).
+    let upgraded = match warm::take(url) {
+        Some(early) => warm::upgrade(early, url, &path, &headers).await,
+        None => upgrade(url, &path, &headers).await,
+    };
+    let mut socket = match upgraded {
         Ok(socket) => socket,
         Err((Some(401 | 404 | 426), _)) => ticketed(url, token, host_id).await?,
         Err((_, error)) => return Err(error),

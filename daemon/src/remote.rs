@@ -1946,17 +1946,34 @@ pub type Opened = (String, TlsStream<crate::relay::Stream>, String);
 /// as soon as every direct one failed. With `in_order`, the user's order: each route starts
 /// [`RELAY_HEAD_START`] after the one above it, or as soon as those above it failed. Nothing is sent
 /// over any of them before its certificate checks out, and the others are dropped once one does.
+/// When a `relay:` route waits for others, the relay's connection opens from the start, and that
+/// route sends its first request over it ([`crate::relay::warm`], PLX-1549).
 ///
 /// # Errors
 ///
 /// The last route's error when none answered with the pinned certificate.
 pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened, Error> {
-    let opened = first(routes, in_order, |route| async move {
+    let racing = first(routes, in_order, |route| async move {
         open_pinned(&route, pin).await
-    })
-    .await?;
-    let (route, (tls, fingerprint)) = opened;
+    });
+    let opened = if relay_waits(routes, in_order) {
+        crate::relay::warm::ahead(racing).await
+    } else {
+        racing.await
+    };
+    let (route, (tls, fingerprint)) = opened?;
     Ok((route, tls, fingerprint))
+}
+
+/// Whether [`race`] starts a `relay:` route in `routes` after other routes had a head start.
+fn relay_waits(routes: &[String], in_order: bool) -> bool {
+    let relay = |route: &String| route.starts_with(RELAY_ROUTE);
+    let first_waits = if in_order {
+        routes.first().is_some_and(|route| !relay(route))
+    } else {
+        !routes.iter().all(relay)
+    };
+    first_waits && routes.iter().any(relay)
 }
 
 /// The first of `routes` that `open` opens, in [`race`]'s order, with the route.
@@ -2853,6 +2870,17 @@ mod tests {
         // Nothing answers: the last error.
         let (won, _) = race_of(&[("192.168.1.5", 10, false), ("relay:h", 0, false)]).await;
         assert_eq!(won, Err("relay:h failed".to_owned()));
+    }
+
+    #[test]
+    fn the_relay_connects_early_only_when_its_route_waits_for_others() {
+        let routes = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        assert!(relay_waits(&routes(&["192.168.1.5", "relay:h"]), false));
+        assert!(relay_waits(&routes(&["relay:h", "192.168.1.5"]), false));
+        assert!(!relay_waits(&routes(&["relay:h"]), false));
+        assert!(!relay_waits(&routes(&["192.168.1.5"]), false));
+        assert!(relay_waits(&routes(&["192.168.1.5", "relay:h"]), true));
+        assert!(!relay_waits(&routes(&["relay:h", "192.168.1.5"]), true));
     }
 
     #[test]

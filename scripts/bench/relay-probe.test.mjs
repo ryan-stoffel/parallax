@@ -42,7 +42,7 @@ test("later connect/RPC failure retains completed samples and stage evidence whi
         if (failure === "connect" && attempt === 3 && what === "connecting") throw new Error("connecting timed out");
         return work;
       },
-      dial: () => {
+      dialStream: () => {
         const child = new EventEmitter();
         child.stderr = new EventEmitter();
         child.stdout = new EventEmitter();
