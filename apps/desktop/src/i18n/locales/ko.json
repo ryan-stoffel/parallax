@@ -4055,6 +4055,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "{{computer}}의 스레드: {{repo}}의 {{title}}",
   "Thread on {{where}}": "{{where}}의 스레드",
   "Thread title instructions": "스레드 제목 지침",
+  "Thread updates": "스레드 업데이트",
   "Thread: {{title}}": "스레드: {{title}}",
   "Thread: {{title}} in {{repo}}": "스레드: {{repo}}의 {{title}}",
   "Thread: Find": "스레드: 찾기",

@@ -4568,6 +4568,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "Vlákno na počítači {{computer}}: {{title}} v {{repo}}",
   "Thread on {{where}}": "Vlákno na {{where}}",
   "Thread title instructions": "Instrukce pro názvy vláken",
+  "Thread updates": "Aktualizace vláken",
   "Thread: {{title}}": "Vlákno: {{title}}",
   "Thread: {{title}} in {{repo}}": "Vlákno: {{title}} v {{repo}}",
   "Thread: Find": "Vlákno: Hledat",

@@ -4226,6 +4226,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "{{computer}} üzerindeki konu: {{repo}} içinde {{title}}",
   "Thread on {{where}}": "{{where}} üzerindeki dizi",
   "Thread title instructions": "Konu başlığı talimatları",
+  "Thread updates": "Konu güncellemeleri",
   "Thread: {{title}}": "Konu: {{title}}",
   "Thread: {{title}} in {{repo}}": "Konu: {{repo}} içinde {{title}}",
   "Thread: Find": "Konu: Bul",

@@ -4055,6 +4055,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "{{computer}} 上的对话：{{repo}} 中的 {{title}}",
   "Thread on {{where}}": "{{where}} 上的讨论",
   "Thread title instructions": "对话标题指令",
+  "Thread updates": "对话更新",
   "Thread: {{title}}": "对话：{{title}}",
   "Thread: {{title}} in {{repo}}": "对话：{{repo}} 中的 {{title}}",
   "Thread: Find": "对话：查找",

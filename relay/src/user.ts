@@ -113,9 +113,11 @@ export class UserAccount extends DurableObject<Env> {
     if (!this.limits.allow("pushes", USER_LIMITS.pushes)) return;
     const notification: Notification = { hostId, run, state, ...(sealed && { sealed }) };
     for (const device of await this.devices()) {
-      const sent = device.startsWith(FCM)
-        ? await sendFcm(this.env, device.slice(FCM.length), notification)
-        : await sendApns(this.env, device, notification);
+      // A send that throws, such as on a bad secret or a failed request, fails only its own device.
+      const sent = await (device.startsWith(FCM)
+        ? sendFcm(this.env, device.slice(FCM.length), notification)
+        : sendApns(this.env, device, notification)
+      ).catch(() => "failed" as const);
       if (sent === "gone") await this.removeDevice(device);
       if (sent === "stubbed") {
         this.outbox.push({ device, notification });

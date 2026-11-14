@@ -9,6 +9,7 @@
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
+import { t } from "i18next";
 import { Platform } from "react-native";
 
 import { openSealed, type PushBody } from "./sealed";
@@ -67,7 +68,7 @@ if (Platform.OS === "android") {
     const opened = push && key ? openSealed(push, key) : undefined;
     if (!push || !opened) return;
     await Notifications.setNotificationChannelAsync(OPENED, {
-      name: "Thread updates",
+      name: t("Thread updates"),
       importance: Notifications.AndroidImportance.HIGH,
       sound: null,
       enableVibrate: false,

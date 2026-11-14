@@ -4397,6 +4397,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "Hilo en {{computer}}: {{title}} en {{repo}}",
   "Thread on {{where}}": "Hilo en {{where}}",
   "Thread title instructions": "Instrucciones para el título del hilo",
+  "Thread updates": "Actualizaciones de hilos",
   "Thread: {{title}}": "Hilo: {{title}}",
   "Thread: {{title}} in {{repo}}": "Hilo: {{title}} en {{repo}}",
   "Thread: Find": "Hilo: Buscar",

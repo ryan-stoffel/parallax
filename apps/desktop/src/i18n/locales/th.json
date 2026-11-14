@@ -4055,6 +4055,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "เธรดบน {{computer}}: {{title}} ใน {{repo}}",
   "Thread on {{where}}": "เธรดบน {{where}}",
   "Thread title instructions": "คำสั่งสำหรับชื่อเธรด",
+  "Thread updates": "อัปเดตเธรด",
   "Thread: {{title}}": "เธรด: {{title}}",
   "Thread: {{title}} in {{repo}}": "เธรด: {{title}} ใน {{repo}}",
   "Thread: Find": "เธรด: ค้นหา",

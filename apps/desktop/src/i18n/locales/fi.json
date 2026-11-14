@@ -4226,6 +4226,7 @@
   "Thread on {{computer}}: {{title}} in {{repo}}": "Ketju tietokoneella {{computer}}: {{title}} repositoriossa {{repo}}",
   "Thread on {{where}}": "Ketju kohteessa {{where}}",
   "Thread title instructions": "Ketjun otsikon ohjeet",
+  "Thread updates": "Ketjujen päivitykset",
   "Thread: {{title}}": "Ketju: {{title}}",
   "Thread: {{title}} in {{repo}}": "Ketju: {{title}} repositoriossa {{repo}}",
   "Thread: Find": "Ketju: Etsi",

@@ -191,9 +191,11 @@ export async function sendFcm(
     .json<{ error?: { status?: string; details?: { errorCode?: string }[] } }>()
     .catch(() => ({ error: undefined }));
   const code = error?.details?.find((d) => d.errorCode)?.errorCode;
-  // FCM says UNREGISTERED for a token an uninstall or a reset retired, and NOT_FOUND for one it
-  // never knew.
-  if (answer.status === 404 || code === "UNREGISTERED") return "gone";
+  // UNREGISTERED is a token an uninstall or a reset retired. A 404 without it, such as for a wrong
+  // project, says nothing about the token.
+  if (code === "UNREGISTERED") return "gone";
+  // Google refused the access token, so the next push makes another.
+  if (answer.status === 401) access = undefined;
   console.log("fcm", answer.status, error?.status, code);
   return "failed";
 }
