@@ -442,6 +442,18 @@ pub(crate) async fn delete(
     let refused = || ErrorObject::invalid_params(format!("{:?} is not a secret id", params.id));
     let id = Uuid::try_parse(&params.id).map_err(|_| refused())?;
     let key = AccountId::try_from(id).map_err(|_| refused())?;
+    // The keystore also holds API keys, so only a saved secret's id reaches it.
+    let saved = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.saved_secrets().map_err(|e| store_error(&e))
+        })
+        .await?
+        .into_iter()
+        .any(|secret| secret.id == id);
+    if !saved {
+        return Ok(SecretSavedResult {});
+    }
     let keys = Arc::clone(&daemon.keys);
     tokio::task::spawn_blocking(move || keys.delete(key))
         .await

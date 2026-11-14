@@ -1070,6 +1070,16 @@ async fn a_saved_secret_reaches_any_thread_s_file_until_it_goes() {
         keys.0.lock().unwrap().is_empty(),
         "deleting removes the value"
     );
+    // An id that isn't a saved secret's, such as an API key's, leaves the keystore alone.
+    let other = parallax_protocol::AccountId::generate();
+    plxd::keystore::KeyStore::set(&*keys, other, "an API key").unwrap();
+    client
+        .call::<SecretDelete>(SecretDeleteParams {
+            id: other.to_string(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(keys.0.lock().unwrap().len(), 1, "the API key stays");
     host.server.stop().await;
 }
 
