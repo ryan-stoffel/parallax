@@ -367,7 +367,7 @@ function SecretForm({
   const until = expiry === "date" && !date ? undefined : expiresAt(expiry, date);
   return (
     <form
-      aria-label={t("Add secret")}
+      aria-label={replaces ? t("Replace secret") : t("Add secret")}
       onSubmit={(e) => {
         e.preventDefault();
         const value = (e.currentTarget.elements.namedItem("value") as HTMLTextAreaElement).value;
@@ -412,7 +412,7 @@ function SecretForm({
           </label>
           <IconButton
             size="sm"
-            label={shown ? t("Hide value") : t("Show value")}
+            label={t("Show value")}
             aria-pressed={shown}
             onClick={() => setShown(!shown)}
           >
