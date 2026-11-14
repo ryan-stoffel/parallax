@@ -9,9 +9,10 @@
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
-import { t } from "i18next";
+import i18next, { t } from "i18next";
 import { Platform } from "react-native";
 
+import { startLanguage } from "./language";
 import { openSealed, type PushBody } from "./sealed";
 
 const TASK = "parallax-sealed-push";
@@ -67,6 +68,11 @@ if (Platform.OS === "android") {
     const key = push && (await savedKeys())[push.hostId];
     const opened = push && key ? openSealed(push, key) : undefined;
     if (!push || !opened) return;
+    // A closed app runs only this task, so its language isn't loaded yet. English is fine if it fails.
+    if (!i18next.isInitialized)
+      try {
+        await startLanguage();
+      } catch {}
     await Notifications.setNotificationChannelAsync(OPENED, {
       name: t("Thread updates"),
       importance: Notifications.AndroidImportance.HIGH,
