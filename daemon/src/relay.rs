@@ -726,6 +726,34 @@ async fn upgrade(
     Ok(socket)
 }
 
+/// When plxd pings the relay over its control socket, every [`PING`], and whether the relay has
+/// sent anything since the last ping. Any frame counts as an answer.
+struct ControlPing {
+    tick: time::Interval,
+    heard: bool,
+}
+
+impl ControlPing {
+    fn new() -> Self {
+        let mut tick = time::interval_at(Instant::now() + PING, PING);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Self { tick, heard: true }
+    }
+
+    /// Waits until the next ping should go. Fails if the last one went unanswered, so a silent
+    /// link ends within two pings of the last frame heard. Cancel safe.
+    async fn due(&mut self) -> Result<(), Lost> {
+        self.tick.tick().await;
+        if !std::mem::replace(&mut self.heard, false) {
+            return Err(Lost::new(
+                "ping_timeout",
+                "the relay stopped answering".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// When plxd's end of a stream pings, and whether the stream has answered. The stream's own socket
 /// is all that tells plxd it's gone, since a stream outlives the control connection.
 struct Keepalive {
@@ -1912,9 +1940,7 @@ async fn serve(
     if streams.spare.as_ref().is_some_and(|spare| !spare.opened) {
         streams.spare = None;
     }
-    let mut ping = time::interval_at(Instant::now() + PING, PING);
-    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut heard = true;
+    let mut ping = ControlPing::new();
     let failed = |error: tungstenite::Error| Lost::from_socket(&error);
     // The webhook URLs this plxd serves, so the relay refuses the rest for free.
     let hooks = || async {
@@ -1996,7 +2022,7 @@ async fn serve(
                 }
             }
             frame = frames.next() => {
-                heard = true;
+                ping.heard = true;
                 match frame {
                     Some(Ok(Message::Text(text))) => {
                         // No frame the relay sends plxd is this long, so none costs a parse.
@@ -2053,11 +2079,8 @@ async fn serve(
                     Some(Err(error)) => return Err(failed(error)),
                 }
             }
-            _ = ping.tick() => {
-                if !heard {
-                    return Err(Lost::new("ping_timeout", "the relay stopped answering".to_owned()));
-                }
-                heard = false;
+            due = ping.due() => {
+                due?;
                 sink.send(Message::text("ping")).await.map_err(failed)?;
             }
         }
@@ -3177,40 +3200,22 @@ mod tests {
     }
 
     /// A link that goes silent with no close, as when Cloudflare's edge or a router drops it, ends
-    /// within 10 s of the last frame the relay sent (PLX-1547).
+    /// within 10 s of the last frame the relay sent (PLX-1547). The worst case: the last answer
+    /// comes just after a ping went. Only the pings' timer runs here, since `serve` also reads the
+    /// store on another thread, and paused time jumps ahead while it waits.
     #[tokio::test(start_paused = true)]
     async fn a_silent_relay_is_noticed_within_10_s() {
-        let dir = tempfile::tempdir().unwrap();
-        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
-        let stop = CancellationToken::new();
-        let mut pushes = Pushes::new(daemon.log.head());
-        let (mut streams, mut link) = lasting(&stop);
-        let (plxd, mut relay) = socket().await;
-        let (ended, last_heard) = tokio::join!(
-            serve(
-                &daemon,
-                plxd,
-                "host",
-                &stop,
-                &mut pushes,
-                &mut streams,
-                &mut link
-            ),
-            async {
-                assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
-                // Answered for a while, then nothing more, though the socket stays open.
-                for _ in 0..3 {
-                    let ping = relay.next().await.unwrap().unwrap();
-                    assert_eq!(ping.to_text().unwrap(), "ping");
-                    relay.send(Message::text("pong")).await.unwrap();
-                }
-                let last_heard = Instant::now();
-                while relay.next().await.is_some_and(|frame| frame.is_ok()) {}
-                last_heard
+        let mut ping = ControlPing::new();
+        // Answered for a while, then nothing more, though the socket stays open.
+        for _ in 0..3 {
+            ping.due().await.unwrap();
+            ping.heard = true;
+        }
+        let last_heard = Instant::now();
+        let lost = loop {
+            if let Err(lost) = ping.due().await {
+                break lost;
             }
-        );
-        let Err(lost) = ended else {
-            panic!("the connection didn't end as lost");
         };
         assert_eq!(lost.cause, "ping_timeout");
         let noticed = last_heard.elapsed();

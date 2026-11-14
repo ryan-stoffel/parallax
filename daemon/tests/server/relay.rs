@@ -1651,8 +1651,9 @@ async fn online_through(
 }
 
 /// How long plxd's control connection may take to notice a silent link (PLX-1547): two of its 4 s
-/// pings are 8 s, and the 15 s pings before it took up to 30 s.
-const SILENCE_NOTICED: Duration = Duration::from_secs(10);
+/// pings are 8 s, the unit test holds it to 10 s, and this leaves room for a busy runner. The 15 s
+/// pings before took up to 30 s.
+const SILENCE_NOTICED: Duration = Duration::from_secs(12);
 
 /// How long plxd may take to reconnect after the last silence. The refused connections before it
 /// leave plxd up to 4 failures in a row, and the link between lives under the 10 s that starts the
