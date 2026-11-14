@@ -18,6 +18,7 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  MessageSquareCode,
   MessageSquareText,
   Search,
 } from "lucide-react-native";
@@ -25,7 +26,7 @@ import { useState, type ReactNode } from "react";
 import { Image, Pressable, StyleSheet, TextInput, useColorScheme, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 
-import type { PrReviewState, PullRequest } from "../../desktop/src/protocol/generated/protocol";
+import type { PrReviewState, PrReviewThread, PullRequest } from "../../desktop/src/protocol/generated/protocol";
 import { githubText } from "../../desktop/src/renderer/github";
 import { ago } from "./nav";
 import type { Activity, DiffRow, Tone } from "./pullRequestLogic";
@@ -451,8 +452,17 @@ function Byline({ author, action, at }: { author?: string; action: string; at: s
   );
 }
 
-/** The activity tab: comments with their GitHub images, verdicts, commits, and the merge or close. */
-export function Timeline({ events }: { events: Activity[] }) {
+/**
+ * The activity tab: comments with their GitHub images, verdicts, review threads, which
+ * `renderThread` draws, commits, and the merge or close.
+ */
+export function Timeline({
+  events,
+  renderThread,
+}: {
+  events: Activity[];
+  renderThread: (thread: PrReviewThread) => ReactNode;
+}) {
   const c = useColors();
   const gh = useGitHub();
   const card = useCard();
@@ -478,6 +488,13 @@ export function Timeline({ events }: { events: Activity[] }) {
                   {e.oid.slice(0, 7)}
                 </T>
               </View>
+            </Event>
+          );
+        if (e.kind === "thread")
+          return (
+            <Event key={i} icon={MessageSquareCode} color={c.faintForeground} last={last}>
+              <Byline author={e.author} action="commented on the code" at={e.at} />
+              {renderThread(e.thread)}
             </Event>
           );
         if (e.kind === "merged" || e.kind === "closed")
