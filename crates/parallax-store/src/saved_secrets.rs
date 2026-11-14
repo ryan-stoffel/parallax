@@ -1,4 +1,4 @@
-//! Saved secrets (0105, PLX-1558): secrets the user saved in Settings for every thread, by name.
+//! Saved secrets (0106, PLX-1558): secrets the user saved in Settings for every thread, by name.
 //! Only the name and times are here. The value is in the host's keystore under the id.
 
 use jiff::Timestamp;

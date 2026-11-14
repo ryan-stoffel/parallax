@@ -41,7 +41,7 @@ impl Conn {
     }
 }
 
-/// 0105: a thread's next CLI process is told the names of the secrets saved since its last, and
+/// 0106: a thread's next CLI process is told the names of the secrets saved since its last, and
 /// never their values.
 #[cfg(not(windows))]
 #[tokio::test]

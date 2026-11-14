@@ -704,7 +704,7 @@ const lanSettings = new Set<string>([
   "schedule/list",
 ]);
 
-// Saved secrets (0105), without their values, as plxd lists them.
+// Saved secrets (0106), without their values, as plxd lists them.
 let savedSecrets: SavedSecret[] = [
   {
     id: "0199c7a1-1a2b-7c3d-8e4f-5a6b7c8d9e01",

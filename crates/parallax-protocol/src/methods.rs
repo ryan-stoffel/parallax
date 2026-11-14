@@ -881,7 +881,7 @@ method_table! {
         SecretRequest = "secret/request": SecretRequestParams => SecretRequestResult;
         /// `secret/answer`: the user's answer to a secret request, or the agent giving up on it.
         SecretAnswer = "secret/answer": SecretAnswerParams => SecretAnswerResult;
-        /// `secret/list`: the secrets saved for every thread, without their values (0105). Gated
+        /// `secret/list`: the secrets saved for every thread, without their values (0106). Gated
         /// on the `savedSecrets` capability, like every method below through `secret/use`.
         SecretList = "secret/list": SecretListParams => SecretListResult;
         /// `secret/save`: saves a secret, replacing one with its name. Refused with

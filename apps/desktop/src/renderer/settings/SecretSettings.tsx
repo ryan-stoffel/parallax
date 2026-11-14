@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -6,6 +7,7 @@ import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
+import { msg } from "../../i18n";
 import { Picker } from "../ui";
 import {
   allHosts,
@@ -22,7 +24,7 @@ import {
 import { nextLabel } from "./shared";
 
 /**
- * Settings > Secrets (0105): the secrets saved on each computer for every thread there. An agent
+ * Settings > Secrets (0106): the secrets saved on each computer for every thread there. An agent
  * uses one by name with `use_secret` instead of asking with the secret card. Values go to the
  * computer's keychain and are never shown again.
  */
@@ -32,12 +34,13 @@ export function SecretSettings() {
   const targets = hostsOf(hosts, scope);
   return (
     <>
-      <PageTitle title="Secrets">
-        Passwords, API keys, and .env files every agent on a computer can use without asking, until
-        they expire.
+      <PageTitle title={t("Secrets")}>
+        {t(
+          "Passwords, API keys, and .env files every agent on a computer can use without asking, until they expire.",
+        )}
       </PageTitle>
       <Section
-        title="Saved secrets"
+        title={t("Saved secrets")}
         action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
       >
         {targets.map((host) => (
@@ -50,12 +53,12 @@ export function SecretSettings() {
 
 /** The expiry choices, in days, and a date the user picks. */
 const expiries = [
-  { value: "never", label: "Never" },
-  { value: "1", label: "In 1 day" },
-  { value: "7", label: "In 7 days" },
-  { value: "30", label: "In 30 days" },
-  { value: "90", label: "In 90 days" },
-  { value: "date", label: "On a date" },
+  { value: "never", label: msg("Never") },
+  { value: "1", label: msg("In 1 day") },
+  { value: "7", label: msg("In 7 days") },
+  { value: "30", label: msg("In 30 days") },
+  { value: "90", label: msg("In 90 days") },
+  { value: "date", label: msg("On a date") },
 ];
 
 /** When an expiry choice ends, as `secret/save` takes it: the end of a picked day, local time. */
@@ -101,7 +104,7 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
     if ("error" in answer)
       notify({
         tone: "error",
-        title: `Couldn't delete ${secret.name}`,
+        title: t("Couldn't delete {{title}}", { title: secret.name }),
         body: describeError(answer.error),
       });
     void load();
@@ -120,7 +123,7 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
     if ("error" in answer) {
       notify({
         tone: "error",
-        title: "Couldn't save the secret",
+        title: t("Couldn't save the secret"),
         body: describeError(answer.error),
       });
       return;
@@ -131,13 +134,13 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
   };
 
   const empty = !connected
-    ? "Not connected"
+    ? t("Not connected")
     : !supported
-      ? "This computer's plxd can't save secrets."
+      ? t("This computer's plxd can't save secrets.")
       : error && !secrets
         ? error
         : secrets === undefined
-          ? "Loading…"
+          ? t("Loading…")
           : undefined;
   return (
     <>
@@ -151,7 +154,9 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
               key={secret.id}
               title={secret.name}
               description={
-                secret.expiresAt ? `Expires ${nextLabel(secret.expiresAt)}` : "Never expires"
+                secret.expiresAt
+                  ? t("Expires {{when}}", { when: nextLabel(secret.expiresAt) })
+                  : t("Never expires")
               }
             >
               <button
@@ -160,13 +165,13 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
                 disabled={busy}
                 onClick={() => void remove(secret)}
               >
-                Delete
+                {t("Delete")}
               </button>
             </Row>
           ))}
           {adding ? (
             <form
-              aria-label="Add secret"
+              aria-label={t("Add secret")}
               onSubmit={(e) => {
                 e.preventDefault();
                 void add(e.currentTarget);
@@ -174,19 +179,19 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
               className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
             >
               <label className="text-body text-muted-foreground">
-                Name
+                {t("Name")}
                 <input
                   name="name"
                   required
                   maxLength={100}
-                  placeholder="sudo password"
+                  placeholder={t("sudo password")}
                   spellCheck={false}
                   autoComplete="off"
                   className={field}
                 />
               </label>
               <label className="text-body text-muted-foreground">
-                Value
+                {t("Value")}
                 {/* Masked as a password field is, but keeps a pasted .env's newlines. */}
                 <textarea
                   name="value"
@@ -194,19 +199,19 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
                   rows={3}
                   spellCheck={false}
                   autoComplete="off"
-                  placeholder="A password, an API key, or a whole .env file"
+                  placeholder={t("A password, an API key, or a whole .env file")}
                   className={`${field} resize-y font-mono [-webkit-text-security:disc]`}
                 />
               </label>
               <div className="flex flex-wrap items-end gap-3">
                 <span className="text-body text-muted-foreground">
-                  Expires
+                  {t("Expires")}
                   <Picker
                     field
-                    label="Expires"
+                    label={t("Expires")}
                     value={expiry}
                     onChange={setExpiry}
-                    options={expiries}
+                    options={expiries.map((e) => ({ value: e.value, label: t(e.label) }))}
                     className="mt-1 w-40"
                   />
                 </span>
@@ -215,16 +220,17 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
                     name="date"
                     type="date"
                     required
-                    aria-label="Expiry date"
+                    aria-label={t("Expiry date")}
                     // Today in local time, as `expiresAt` reads the picked day.
                     min={new Date().toLocaleDateString("en-CA")}
-                    className={`${field} w-44`}
+                    className={field}
                   />
                 )}
               </div>
               <p className="text-body text-muted-foreground">
-                Kept in this computer's keychain and never shown again. Agents get it in a private
-                file their commands can read.
+                {t(
+                  "Kept in this computer's keychain and never shown again. Agents get it in a private file their commands can read.",
+                )}
               </p>
               <div className="flex justify-end gap-2">
                 <button
@@ -235,17 +241,17 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
                   }}
                   className={quietButton}
                 >
-                  Cancel
+                  {t("Cancel")}
                 </button>
                 <button type="submit" disabled={busy} className={primaryButton}>
-                  Save secret
+                  {t("Save secret")}
                 </button>
               </div>
             </form>
           ) : (
             <Row
-              title={secrets?.length ? "Add another" : "No saved secrets"}
-              description="Save one here, or agents ask with a card when they need one."
+              title={secrets?.length ? t("Add another") : t("No saved secrets")}
+              description={t("Save one here, or agents ask with a card when they need one.")}
             >
               <button
                 type="button"
@@ -253,7 +259,7 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
                 className={`${quietButton} flex items-center gap-1 border border-border [&_svg]:size-3.5`}
               >
                 <Plus aria-hidden />
-                Add secret
+                {t("Add secret")}
               </button>
             </Row>
           )}

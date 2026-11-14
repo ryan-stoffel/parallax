@@ -990,7 +990,7 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE threads ADD COLUMN archived_at TEXT;
         UPDATE threads SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE archived;",
     },
-    // Saved secrets (0105, PLX-1558): a secret the user saved in Settings for every thread, by
+    // Saved secrets (0106, PLX-1558): a secret the user saved in Settings for every thread, by
     // name, until `expires_at`, or for good when it is NULL. The value is in the host's keystore
     // under the id, never here.
     Migration {

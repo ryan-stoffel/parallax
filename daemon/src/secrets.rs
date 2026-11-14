@@ -22,7 +22,7 @@
 //! timer for the next to expire and none while there are none. A host with no keystore (Windows,
 //! PLX-23) refuses requests of either kind.
 //!
-//! A saved secret (0105) is one the user saved in Settings for every thread, by name, until its
+//! A saved secret (0106) is one the user saved in Settings for every thread, by name, until its
 //! expiry or for good. Its value is in the keystore under its id, and `secret/use` copies it to a
 //! file for one run's commands, as `delivery: file` does, with no card. [`run`] removes it and its
 //! value once it expires.

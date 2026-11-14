@@ -980,7 +980,7 @@ async fn a_file_secret_reaches_only_the_thread_s_own_file() {
     host.server.stop().await;
 }
 
-/// 0105: a secret saved in Settings reaches any thread's file through `use_secret` with no card,
+/// 0106: a secret saved in Settings reaches any thread's file through `use_secret` with no card,
 /// as often as it's used. `secret/list` shows its name and never its value, saving the name again
 /// replaces the keystore value, and once it's deleted or expired `use_secret` refuses it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3628,7 +3628,7 @@ impl Actor {
             return Ok(project);
         }
         let mut secrets = crate::mcp::delegation::INSTRUCTIONS.to_owned();
-        // The secrets the user saved in Settings (0105), as they are when the CLI starts.
+        // The secrets the user saved in Settings (0106), as they are when the CLI starts.
         if let Some(saved) = crate::mcp::delegation::saved_secrets_instructions(&saved) {
             secrets = format!("{secrets}\n\n{saved}");
         }

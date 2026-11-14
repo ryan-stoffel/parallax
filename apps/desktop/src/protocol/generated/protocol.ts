@@ -1083,7 +1083,7 @@ export type ParallaxRequests = {
 	 */
 	"secret/answer": { params: SecretAnswerParams, result: SecretAnswerResult },
 	/**
-	 * `secret/list`: the secrets saved for every thread, without their values (0105). Gated
+	 * `secret/list`: the secrets saved for every thread, without their values (0106). Gated
 	 * on the `savedSecrets` capability, like every method below through `secret/use`.
 	 */
 	"secret/list": { params: SecretListParams, result: SecretListResult },

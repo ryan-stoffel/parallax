@@ -56,9 +56,9 @@ export const settingsSections: {
   },
   {
     id: "secrets",
-    name: "Secrets",
-    group: "Agents",
-    keywords: "passwords sudo api keys tokens env credentials keychain",
+    name: msg("Secrets"),
+    group: msg("Agents"),
+    keywords: msg("passwords sudo api keys tokens env credentials keychain"),
   },
   {
     id: "browser",
@@ -513,9 +513,9 @@ export const settingsIndex: SettingEntry[] = [
   ]),
   ...entries("secrets", undefined, [
     [
-      "Saved secrets",
-      "Secrets every agent can use without asking",
-      "password sudo api key token env expire keychain",
+      msg("Saved secrets"),
+      msg("Secrets every agent can use without asking"),
+      msg("password sudo api key token env expire keychain"),
     ],
   ]),
   ...entries("sourceControl", undefined, [

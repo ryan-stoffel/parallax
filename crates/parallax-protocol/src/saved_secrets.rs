@@ -1,4 +1,4 @@
-//! Saved secrets (0105, PLX-1558), behind the `savedSecrets` capability: secrets the user saves
+//! Saved secrets (0106, PLX-1558), behind the `savedSecrets` capability: secrets the user saves
 //! in Settings for every thread on the host, by name, until they expire. `secret/list`,
 //! `secret/save`, and `secret/delete` are the app's, and `secret/use` is the `use_secret` tool's.
 //! No method returns a value.
