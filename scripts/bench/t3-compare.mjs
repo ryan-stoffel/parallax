@@ -319,6 +319,8 @@ for (const event of ["uncaughtException", "unhandledRejection"]) {
 }
 
 let failed = false;
+/** T3's numbers, for the comparison after Parallax's run. */
+let t3Results;
 if (options["parallax-only"]) {
   console.log("--parallax-only, so T3 isn't timed.");
   await cleanUp();
@@ -354,13 +356,13 @@ if (options["parallax-only"]) {
       "Both ends of the tunnel are on this computer, so a slow network counts twice.",
       "A connect skips the relay call a client makes to get its first session.",
       "Parallax includes a new dial process per connect, pinned inner TLS and DPoP. T3 uses this existing Node process and Cloudflare terminates TLS.",
-      "Parallax dials as its desktop app does away from home: a LAN route that doesn't answer, then the relay 200 ms later, so its connect includes that head start (PLX-1549).",
       "First events and RPCs differ: T3 lifecycle/server.probe; Parallax event replay/host/health. Setup, approval and tunnel provisioning are excluded.",
       "One warm-up precedes counted connects and RPCs. OS DNS and host state may be warm; each Parallax dial starts fresh. Spares are not guaranteed by a fixed gap.",
     ],
     ...(await measure(base, token)),
   };
   console.log(JSON.stringify(results, null, 2));
+  t3Results = results;
   if (options.out) writeFileSync(options.out, `${JSON.stringify(results)}\n`, { flag: "a" });
 } catch (error) {
   failed = true;
@@ -386,7 +388,24 @@ try {
   try {
     const result = JSON.parse(readFileSync(join(outDir, "relay-probe.json"), "utf8"));
     if (options.out) writeFileSync(options.out, `${JSON.stringify({ product: "parallax", ...result })}\n`, { flag: "a" });
+    compare(result.metrics);
   } catch {}
   rmSync(outDir, { recursive: true, force: true });
+}
+
+/**
+ * T3 against Parallax's relay-only dial, which like T3's connect goes straight to the relay. The
+ * app's dial away from home has no T3 counterpart, since it includes the 200 ms the app gives a
+ * LAN route first, so it gets a line of its own (PLX-1549).
+ */
+function compare(metrics) {
+  const both = (summary) => summary && `median ${summary.medianMs} ms, p95 ${summary.p95Ms} ms`;
+  console.log("\nConnect, compared:");
+  if (t3Results) console.log(`  T3 through its tunnel: ${both(t3Results.connect)}`);
+  if (metrics.connect) console.log(`  Parallax, the relay alone: ${both(metrics.connect)}`);
+  if (metrics.appConnect) {
+    const older = metrics.appDial?.early === 0 ? ", with a plxd from before PLX-1549" : "";
+    console.log(`  Parallax as its app dials away from home, a LAN route first${older}: ${both(metrics.appConnect)}`);
+  }
 }
 process.exit(failed ? 1 : 0);

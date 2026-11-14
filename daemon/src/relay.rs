@@ -66,7 +66,7 @@ mod proxy;
 #[cfg(all(feature = "host-routing-proof", not(debug_assertions)))]
 compile_error!("host-routing-proof is for disposable debug builds only");
 mod seal;
-pub(crate) mod warm;
+pub mod warm;
 
 use self::proxy::Proxy;
 use crate::event_log::{Entry, EventLog};

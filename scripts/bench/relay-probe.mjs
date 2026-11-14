@@ -13,10 +13,14 @@
 // the first event, and a round trip. Without the secret that part says so and skips. `--plxd` runs a
 // plxd built here instead of the release's, to time a change before it ships.
 //
-// Each stream dials as the desktop app does away from home (PLX-1549): a LAN route that doesn't
-// answer, then the relay, which starts `RELAY_HEAD_START` (200 ms) after it. Before PLX-1549 the
-// probe dialed the relay alone, which no app dial does, so its connects ran about 200 ms under the
-// app's.
+// It times two dials, in turn, so they share the network. `connect` dials the relay alone, as it
+// always has, so it compares with earlier runs and with T3. `appConnect` dials as the desktop app
+// does away from home (PLX-1549): a LAN route that doesn't answer, here a loopback port that takes
+// TCP and never answers TLS, then the relay, which starts `RELAY_HEAD_START` (200 ms) after it. A
+// plxd from PLX-1549 on opens the relay's connection during that head start, so its app dial costs
+// 200 ms less the relay handshake it hides over `connect`, about 100 to 130 ms on the Mac mini's
+// Wi-Fi. An older one costs the full 200 ms.
+// `appDial` says how many app dials opened the relay's connection early, so 0 marks an older plxd.
 //
 // That part runs only on the account PROBE_CLERK_USER_ID names, a repo variable holding the test
 // account's Clerk user id. It fails before registering anything when the variable is unset or the
@@ -70,11 +74,28 @@ const HOST_NAMES = new Set([PROBE_NAME, "relay-objects bench"]);
 const STREAMS = count(options.connects, "connects");
 const ROUND_TRIPS = count(options.trips, "trips");
 const GAP_MS = count(options["gap-ms"], "gap-ms", 60000);
+
 /**
- * A LAN route on another network, which the app's dial tries first away from home. TEST-NET-1 (RFC
- * 5737) is never assigned, so it never answers, as a home address doesn't from elsewhere.
+ * A route that takes TCP on loopback and never answers TLS, standing in for the LAN address the
+ * app's dial tries first away from home. It holds the relay route back the same 200 ms on every
+ * network, where a real unreachable address may fail at once. Answers the route and a `close`.
  */
-const AWAY_ROUTE = "192.0.2.1";
+async function silentRoute() {
+  const held = new Set();
+  const server = createServer((socket) => {
+    held.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => held.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    route: `127.0.0.1:${server.address().port}`,
+    close: () => {
+      for (const socket of held) socket.destroy();
+      server.close();
+    },
+  };
+}
 
 // relay-probe.yml sets PROBE_SKIP_SIGNIN to stale when another run stored a rotated token after this
 // attempt started, so this one holds a token Clerk already replaced, and Clerk revokes the
@@ -398,8 +419,12 @@ function stderrOf(child) {
   return () => said.trim();
 }
 
-/** One new stream: `dial`, a plxd dial over the relay, timed from its start. Answers the open connection. */
-async function openStream(dial, token, stages = []) {
+/**
+ * One new stream: `dial`, a plxd dial over the relay, timed from its start. Each stage row names the
+ * dial, `relay` or `app`. Answers the open connection, and whether the dial opened the relay's
+ * connection during the head start.
+ */
+async function openStream(dial, token, stages = [], kind = "relay") {
   const started = performance.now();
   const child = dial(token);
   let diagnostic = "";
@@ -409,17 +434,20 @@ async function openStream(dial, token, stages = []) {
     diagnostic = lines.pop();
     for (const line of lines) {
       const match = /^(connect-(?:server-)?timing) ([a-z_]{1,40}) (\d{1,6}\.\d{3})$/.exec(line);
-      if (match && stages.length < 64) stages.push({ kind: match[1], stage: match[2], ms: Number(match[3]), observedMs: ms(performance.now() - started) });
+      if (match && stages.length < 64) stages.push({ dial: kind, kind: match[1], stage: match[2], ms: Number(match[3]), observedMs: ms(performance.now() - started) });
     }
   });
   const said = stderrOf(child);
   const exited = new Promise((_, reject) =>
     child.once("exit", (code) => reject(new Error(`plxd dial exited ${code}: ${said()}`))),
   );
+  // plxd says so on the line before `connected over` when the relay's connection opened early.
+  let early = false;
   const connected = new Promise((resolve) => {
     let text = "";
     child.stderr.on("data", (chunk) => {
       text += chunk;
+      early ||= text.includes("opened the relay's connection during the head start");
       if (text.includes("connected over relay:")) resolve(performance.now() - started);
     });
   });
@@ -440,7 +468,7 @@ async function openStream(dial, token, stages = []) {
     const connectMs = await within(30_000, "connecting", Promise.race([connected, exited]));
     await app.subscribed;
     const firstEventMs = await within(30_000, "the first event", Promise.race([firstEvent, exited]));
-    return { app, connectMs, firstEventMs, stages };
+    return { app, connectMs, firstEventMs, stages, early };
   } catch (error) {
     if (app) app.close();
     else child.kill();
@@ -503,13 +531,12 @@ async function checkSignedIn(release) {
     if (!online) return true;
 
     const route = `relay:${hostId}`;
-    // A sign-in tries routes one at a time, so only a stream's dial gets the route that doesn't answer.
     const dial = (args, relayToken, routes = [route]) =>
       spawn(plxd, ["dial", `--account=${hostId}`, "--data-dir", clientDir, ...args, "--", ...routes], {
         stdio: "pipe",
         env: { ...env, PLXD_RELAY_TOKEN: relayToken, PLXD_CONNECT_TIMINGS: options.timings ? "1" : undefined },
       });
-    const dialStream = (relayToken) => dial([], relayToken, [AWAY_ROUTE, route]);
+    const dialRelay = (relayToken) => dial([], relayToken);
 
     const approved = await check("Approval: a new device waits, then is approved with a matching code", async () => {
       const started = performance.now();
@@ -540,45 +567,62 @@ async function checkSignedIn(release) {
       makeRepo(repo);
       await host.call("orchestrator/create", { id: uuid7(), name: PROBE_NAME, repoPath: repo });
       const relayToken = await clerkToken();
-      const [connect, firstEvent, trips] = [[], [], []];
+      const [connect, firstEvent, appConnect, appFirstEvent, trips] = [[], [], [], [], []];
+      let appEarly = 0;
       const stageSamples = [];
+      const silent = await silentRoute();
+      const dialApp = (token) => dial([], token, [silent.route, route]);
       try {
         await sleep(GAP_MS);
-        (await openStream(dialStream, relayToken)).app.close(); // One uncounted warm-up, as on T3.
+        (await openStream(dialRelay, relayToken)).app.close(); // One uncounted warm-up, as on T3.
 
         for (let run = 0; run < STREAMS; run++) {
-          // As in the relay's budget test: the app connects long after plxd opened its spare stream.
-          await sleep(GAP_MS);
-          const stages = [];
-          if (options.timings) stageSamples.push(stages);
-          const { app, connectMs, firstEventMs } = await openStream(dialStream, relayToken, stages);
-          connect.push(connectMs);
-          firstEvent.push(firstEventMs);
-          try {
-            if (run === STREAMS - 1) {
-              await app.call("host/health"); // One uncounted RPC warm-up, as on T3.
-              for (let trip = 0; trip < ROUND_TRIPS; trip++) {
-                await sleep(100);
-                const sent = performance.now();
-                await within(15_000, "a round trip", app.call("host/health"));
-                trips.push(performance.now() - sent);
-              }
+          // Both dials each run, each first in turn, so they share the network and the relay.
+          for (const kind of run % 2 ? ["app", "relay"] : ["relay", "app"]) {
+            // As in the relay's budget test: the app connects long after plxd opened its spare stream.
+            await sleep(GAP_MS);
+            const stages = [];
+            if (options.timings) stageSamples.push(stages);
+            const opened = await openStream(kind === "app" ? dialApp : dialRelay, relayToken, stages, kind);
+            const { app } = opened;
+            if (kind === "app") {
+              appConnect.push(opened.connectMs);
+              appFirstEvent.push(opened.firstEventMs);
+              if (opened.early) appEarly++;
+              app.close();
+              continue;
             }
-          } finally {
-            app.close();
+            connect.push(opened.connectMs);
+            firstEvent.push(opened.firstEventMs);
+            try {
+              if (run === STREAMS - 1) {
+                await app.call("host/health"); // One uncounted RPC warm-up, as on T3.
+                for (let trip = 0; trip < ROUND_TRIPS; trip++) {
+                  await sleep(100);
+                  const sent = performance.now();
+                  await within(15_000, "a round trip", app.call("host/health"));
+                  trips.push(performance.now() - sent);
+                }
+              }
+            } finally {
+              app.close();
+            }
           }
         }
       } finally {
+        silent.close();
         // A failed attempt must not discard earlier measurements or its own stage evidence.
         if (options.timings) metrics.stages = stageSamples;
-        for (const [name, samples] of [["connect", connect], ["firstEvent", firstEvent], ["roundTrip", trips]]) {
+        const named = [["connect", connect], ["firstEvent", firstEvent], ["appConnect", appConnect], ["appFirstEvent", appFirstEvent], ["roundTrip", trips]];
+        for (const [name, samples] of named) {
           if (samples.length) {
             metrics[name] = summary(samples);
             metrics[`${name}Ms`] = metrics[name].medianMs;
           }
         }
+        if (appConnect.length) metrics.appDial = { early: appEarly, of: appConnect.length };
       }
-      return `medians of ${STREAMS} streams and ${ROUND_TRIPS} round trips`;
+      return `medians of ${STREAMS} streams of each dial and ${ROUND_TRIPS} round trips`;
     });
     return true;
   } finally {
@@ -632,6 +676,16 @@ function report(release, signedIn) {
     metrics.connect && `p95 connect ${metrics.connect.p95Ms} ms, first event ${metrics.firstEvent.p95Ms} ms`,
     metrics.roundTrip && `p95 round trip ${metrics.roundTrip.p95Ms} ms`,
   );
+  // The app's dial away from home, which T3 has no counterpart for. Its own line, so `connect`
+  // above stays the relay-only dial every earlier run timed (PLX-1549).
+  const appDial = metrics.appDial;
+  const appLine = metrics.appConnect && line(
+    `connect ${metrics.appConnectMs} ms, p95 ${metrics.appConnect.p95Ms} ms`,
+    `first event ${metrics.appFirstEventMs} ms, p95 ${metrics.appFirstEvent.p95Ms} ms`,
+    appDial.early === 0
+      ? "this plxd predates PLX-1549, so it opens the relay's connection after the 200 ms head start"
+      : appDial.early < appDial.of && `the relay's connection opened early on ${appDial.early} of ${appDial.of}`,
+  );
 
   const notes = [
     run ? `**${verdict}** ([run](${run}))` : `**${verdict}**`,
@@ -639,6 +693,7 @@ function report(release, signedIn) {
     ...failed.map(({ name, detail }) => `- Failed: ${name}: ${detail}`),
     relayLine && `- Relay: ${relayLine}`,
     signedIn ? accountLine && `- Signed in: ${accountLine}` : `- Signed-in test skipped: ${skipped}`,
+    signedIn && appLine && `- App dial away from home (a LAN route that doesn't answer, then the relay): ${appLine}`,
   ].filter((text, index) => text || index === 1);
 
   const table = [

@@ -668,6 +668,11 @@ async fn bridge_dialed(
 ) -> i32 {
     // The app reads this line to know when it's on the relay, and so re-checks direct routes.
     plxd::connect_timing::mark("connected");
+    // The relay probe reads this to tell a dial with the early connection from one without
+    // (PLX-1549). The app reads only the next line.
+    if dialed.route.starts_with(remote::RELAY_ROUTE) && plxd::relay::warm::took() {
+        report(&"opened the relay's connection during the head start");
+    }
     report(&format!("connected over {}", dialed.route));
     let bridged = remote::bridge(dialed.socket, input, tokio::io::stdout()).await;
     // The app logs this with the disconnect (connection.ts).
