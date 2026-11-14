@@ -3,10 +3,11 @@
 //
 // While the app runs, it watches every computer's threads and posts the notification itself,
 // with the thread's title and the start of the agent's last reply. For when it doesn't, it hands
-// its APNs token to Parallax Relay (0068), which plxd tells about runs and which sends a fixed
-// text with the run's id. plxd also seals the title and reply with a key the relay never sees, and
-// the notification service extension (plugins/notification-service) opens them into the
-// notification, or leaves the fixed text if it can't (0100). Both name one event alike, so iOS
+// its APNs or FCM token to Parallax Relay (0068), which plxd tells about runs and which sends a
+// fixed text with the run's id. plxd also seals the title and reply with a key the relay never
+// sees, and the notification service extension (plugins/notification-service) on iOS, or a
+// background task on Android (androidPush.ts), opens them into the notification, or leaves the
+// fixed text if it can't (0100). Both name one event alike, so iOS
 // shows one of them, and a push doesn't show in front for a thread the app notifies about itself.
 // Tapping either opens the thread. The extension also keeps what opens for the widget and the Live
 // Activity, and the app does that here for the threads it sees and for a push it gets in front.
@@ -21,6 +22,7 @@ import type { HostResponse } from "../../desktop/src/preload/bridge";
 import type { RelayPushKeyResult } from "../../desktop/src/protocol/generated/protocol";
 import { ThreadStatus } from "../modules/thread-status";
 import { lastReplyIn, type Alert } from "./alerts";
+import { forgetAndroidPushKeys, saveAndroidPushKey } from "./androidPush";
 import type { ThreadStatusUpdate } from "./threadStatus";
 
 /** Parallax Relay (0068), or the local one a test's bundle names. */
@@ -107,6 +109,7 @@ export function showThreadStatus({ seen, connected }: ThreadStatusUpdate) {
 
 /** Takes thread names and push keys off this phone, for signing out, and ends the Live Activity. */
 export async function forgetThreadStatus(): Promise<void> {
+  if (Platform.OS === "android") return forgetAndroidPushKeys();
   const group = sharedGroup();
   if (group) await ThreadStatus?.signOut(group).catch(() => {});
 }
@@ -122,19 +125,20 @@ export function applySealedPushes(): () => void {
 }
 
 /**
- * Keeps the push key of the computer behind `request` under its relay id, which its pushes carry,
- * in the keychain group this app shares with its extensions, where the notification service
- * extension reads it while the phone is locked. One that fails leaves the fixed text until the next
- * connection.
+ * Keeps the push key of the computer behind `request` under its relay id, which its pushes carry:
+ * on iOS in the keychain group this app shares with its extensions, where the notification service
+ * extension reads it while the phone is locked, and on Android where its push task reads it. One
+ * that fails leaves the fixed text until the next connection.
  */
 export async function savePushKey(
   request: (method: "relay/pushKey", params: object) => Promise<HostResponse<unknown>>,
 ): Promise<void> {
   const group = sharedGroup();
-  if (!group) return;
+  if (!group && Platform.OS !== "android") return;
   const answer = await request("relay/pushKey", {}).catch(() => undefined);
   if (!answer || "error" in answer) return;
   const { hostId, key } = answer.result as RelayPushKeyResult;
+  if (!group) return saveAndroidPushKey(hostId, key);
   await SecureStore.setItemAsync(hostId, key, {
     keychainService: "pushKeys",
     accessGroup: group,
@@ -153,16 +157,18 @@ export async function notificationsOn(): Promise<boolean> {
 }
 
 /**
- * Gives Parallax Relay this phone's APNs token under the signed-in account, so plxd's runs
+ * Gives Parallax Relay this phone's APNs or FCM token under the signed-in account, so plxd's runs
  * notify it while the app isn't running. Resolves to why that isn't on, for people, or
  * undefined once it is.
  */
 export async function registerWithRelay(
   token: () => Promise<string | undefined>,
 ): Promise<string | undefined> {
-  // No Firebase project yet (PLX-1372), so no push token to give on Android.
-  if (Platform.OS !== "ios") return t("Notifications while Parallax is closed aren't available on Android yet.");
-  if (!(await notificationsOn())) return t("Notifications are off for Parallax in iOS Settings.");
+  const android = Platform.OS === "android";
+  if (!(await notificationsOn()))
+    return android
+      ? t("Notifications are off for Parallax in Android Settings.")
+      : t("Notifications are off for Parallax in iOS Settings.");
   const device = await Notifications.getDevicePushTokenAsync().catch(() => undefined);
   if (!device)
     return t("This build can't get a push token. It needs the App ID's push capability.");
@@ -172,7 +178,7 @@ export async function registerWithRelay(
   const answer = await fetch(`${RELAY_URL}/v1/devices`, {
     method: "POST",
     headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ token: String(device.data) }),
+    body: JSON.stringify({ token: String(device.data), ...(android && { platform: "android" }) }),
   }).catch(() => undefined);
   if (!answer) return t("Parallax Connect isn't reachable, so notifications come only while the app is open.");
   return answer.ok ? undefined : t("Parallax Connect refused this phone ({{status}}).", { status: answer.status });
