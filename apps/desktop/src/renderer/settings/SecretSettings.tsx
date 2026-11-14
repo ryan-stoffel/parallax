@@ -216,7 +216,8 @@ function HostSecrets({ host, named }: { host: Host; named: boolean }) {
                     type="date"
                     required
                     aria-label="Expiry date"
-                    min={new Date().toISOString().slice(0, 10)}
+                    // Today in local time, as `expiresAt` reads the picked day.
+                    min={new Date().toLocaleDateString("en-CA")}
                     className={`${field} w-44`}
                   />
                 )}

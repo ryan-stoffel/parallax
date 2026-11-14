@@ -433,22 +433,26 @@ pub(crate) async fn save_named(
     Ok(SecretSavedResult {})
 }
 
-/// `secret/delete`: removes a saved secret and its value. An unknown id changes nothing.
+/// `secret/delete`: removes a saved secret's value, then its row, so a keystore that can't be
+/// written keeps both for another try. An unknown id changes nothing.
 pub(crate) async fn delete(
     daemon: &Daemon,
     params: SecretDeleteParams,
 ) -> Result<SecretSavedResult, ErrorObject> {
-    let id = Uuid::try_parse(&params.id)
-        .map_err(|_| ErrorObject::invalid_params(format!("{:?} is not a secret id", params.id)))?;
-    let deleted = daemon
+    let refused = || ErrorObject::invalid_params(format!("{:?} is not a secret id", params.id));
+    let id = Uuid::try_parse(&params.id).map_err(|_| refused())?;
+    let key = AccountId::try_from(id).map_err(|_| refused())?;
+    let keys = Arc::clone(&daemon.keys);
+    tokio::task::spawn_blocking(move || keys.delete(key))
+        .await
+        .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+        .map_err(|error| crate::methods::keychain_error(&error))?;
+    daemon
         .store
         .run(&CancellationToken::new(), move |db| {
             db.delete_saved_secret(id).map_err(|e| store_error(&e))
         })
         .await?;
-    if let Some(key) = deleted.then(|| AccountId::try_from(id).ok()).flatten() {
-        forget(daemon, vec![key]).await;
-    }
     Ok(SecretSavedResult {})
 }
 
