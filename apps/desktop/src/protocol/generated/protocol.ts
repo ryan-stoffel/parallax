@@ -1083,6 +1083,25 @@ export type ParallaxRequests = {
 	 */
 	"secret/answer": { params: SecretAnswerParams, result: SecretAnswerResult },
 	/**
+	 * `secret/list`: the secrets saved for every thread, without their values (0105). Gated
+	 * on the `savedSecrets` capability, like every method below through `secret/use`.
+	 */
+	"secret/list": { params: SecretListParams, result: SecretListResult },
+	/**
+	 * `secret/save`: saves a secret, replacing one with its name. Refused with
+	 * `keychainUnavailable` on a host with no keystore.
+	 */
+	"secret/save": { params: SecretSaveParams, result: SecretSavedResult },
+	/**
+	 * `secret/delete`: deletes a saved secret and its value.
+	 */
+	"secret/delete": { params: SecretDeleteParams, result: SecretSavedResult },
+	/**
+	 * `secret/use`: writes a saved secret to a private file for a run's commands
+	 * (`use_secret`).
+	 */
+	"secret/use": { params: SecretUseParams, result: SecretUseResult },
+	/**
 	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
 	 * its `commandId`. Gated on the `orchestration` capability, like every
 	 * `orchestration/*` method.
@@ -1377,6 +1396,10 @@ export const REQUEST_METHODS = [
 	"thread/mergeBack",
 	"secret/request",
 	"secret/answer",
+	"secret/list",
+	"secret/save",
+	"secret/delete",
+	"secret/use",
 	"orchestration/dispatch",
 	"orchestration/subscribeShell",
 	"orchestration/subscribeThread",
@@ -12042,6 +12065,102 @@ export type SecretChoice = { "type": "save",
  * Result of `secret/answer`.
  */
 export type SecretAnswerResult = Record<symbol, never>;
+
+/**
+ * Params of `secret/list`.
+ */
+export type SecretListParams = Record<symbol, never>;
+
+/**
+ * Result of `secret/list`: every saved secret, by name.
+ */
+export type SecretListResult = {
+	/**
+	 * The secrets.
+	 */
+	secrets: Array<SavedSecret>,
+};
+
+/**
+ * A saved secret, without its value.
+ */
+export type SavedSecret = {
+	/**
+	 * Its id, a UUID.
+	 */
+	id: string,
+	/**
+	 * The name agents use it by.
+	 */
+	name: string,
+	/**
+	 * When it was saved.
+	 */
+	createdAt: string,
+	/**
+	 * When it is deleted. Absent keeps it until the user deletes it.
+	 */
+	expiresAt?: string,
+};
+
+/**
+ * Params of `secret/save`: saves `value` as `name`, replacing a secret saved as `name`.
+ */
+export type SecretSaveParams = {
+	/**
+	 * The name agents use it by.
+	 */
+	name: string,
+	/**
+	 * The value, which goes to the host's keystore.
+	 */
+	value: string,
+	/**
+	 * When to delete it, in the future. Absent keeps it until the user deletes it.
+	 */
+	expiresAt?: string,
+};
+
+/**
+ * Result of `secret/save` and `secret/delete`.
+ */
+export type SecretSavedResult = Record<symbol, never>;
+
+/**
+ * Params of `secret/delete`. An unknown id changes nothing.
+ */
+export type SecretDeleteParams = {
+	/**
+	 * The secret's id.
+	 */
+	id: string,
+};
+
+/**
+ * Params of `secret/use`: writes saved secret `name` to a private file for run `runId`'s
+ * commands, as `secret/request` with `delivery: file` does.
+ */
+export type SecretUseParams = {
+	/**
+	 * The run whose commands read it.
+	 */
+	runId: RunId,
+	/**
+	 * The saved secret's name.
+	 */
+	name: string,
+};
+
+/**
+ * Result of `secret/use`.
+ */
+export type SecretUseResult = {
+	/**
+	 * The path of an owner-only file holding the value, which the run's commands can read for
+	 * 24 hours.
+	 */
+	file: string,
+};
 
 /**
  * A command for `orchestration/dispatch` (0059), by `type`.

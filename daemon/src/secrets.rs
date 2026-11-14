@@ -21,6 +21,11 @@
 //! thread that asked, within 24 hours. [`run`] removes expired refs and their values, with one
 //! timer for the next to expire and none while there are none. A host with no keystore (Windows,
 //! PLX-23) refuses requests of either kind.
+//!
+//! A saved secret (0105) is one the user saved in Settings for every thread, by name, until its
+//! expiry or for good. Its value is in the keystore under its id, and `secret/use` copies it to a
+//! file for one run's commands, as `delivery: file` does, with no card. [`run`] removes it and its
+//! value once it expires.
 
 use std::collections::HashMap;
 use std::fs;
@@ -35,9 +40,10 @@ use data_encoding::BASE64;
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, RunId, ScopeId,
-    SecretAnswerParams, SecretAnswerResult, SecretChoice, SecretDelivery, SecretInput,
-    SecretRequestParams, SecretRequestResult, SecretStatus,
+    AccountId, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, RunId, SavedSecret, ScopeId,
+    SecretAnswerParams, SecretAnswerResult, SecretChoice, SecretDeleteParams, SecretDelivery,
+    SecretInput, SecretListResult, SecretRequestParams, SecretRequestResult, SecretSaveParams,
+    SecretSavedResult, SecretStatus, SecretUseParams, SecretUseResult,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -69,6 +75,9 @@ const REMEMBERED: Duration = Duration::from_hours(2);
 /// The longest label, reason, placeholder, and secret, in bytes.
 const MAX_TEXT_BYTES: usize = 2 * 1024;
 const MAX_SECRET_BYTES: usize = 64 * 1024;
+
+/// The longest saved secret's name, in bytes.
+const MAX_NAME_BYTES: usize = 100;
 
 /// The most extensions a request's `accept` lists, and the longest one, in bytes.
 const MAX_ACCEPT: usize = 16;
@@ -322,6 +331,161 @@ pub(crate) async fn answer(
         }
     }
     Ok(SecretAnswerResult {})
+}
+
+/// Refuses on a host with no keystore (Windows, PLX-23).
+fn need_keystore() -> Result<(), ErrorObject> {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        return Ok(());
+    }
+    Err(ErrorObject::parallax(
+        ErrorKind::KeychainUnavailable,
+        crate::keystore::UNAVAILABLE_MESSAGE,
+    ))
+}
+
+/// The names of the secrets saved for every thread, for its instructions.
+pub(crate) fn saved_names(db: &parallax_store::Store) -> Result<Vec<String>, ErrorObject> {
+    let secrets = db.saved_secrets().map_err(|e| store_error(&e))?;
+    let now = Timestamp::now();
+    Ok(secrets
+        .into_iter()
+        .filter(|secret| secret.expires_at.is_none_or(|at| at > now))
+        .map(|secret| secret.name)
+        .collect())
+}
+
+/// `secret/list`: see the module documentation.
+pub(crate) async fn list(daemon: &Daemon) -> Result<SecretListResult, ErrorObject> {
+    let secrets = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.saved_secrets().map_err(|e| store_error(&e))
+        })
+        .await?;
+    Ok(SecretListResult {
+        secrets: secrets
+            .into_iter()
+            .map(|secret| SavedSecret {
+                id: secret.id.hyphenated().to_string(),
+                name: secret.name,
+                created_at: secret.created_at,
+                expires_at: secret.expires_at,
+            })
+            .collect(),
+    })
+}
+
+/// `secret/save`: keeps the value in the keystore under a new id, then records it by name. The
+/// one it replaces leaves the keystore.
+pub(crate) async fn save_named(
+    daemon: &Daemon,
+    params: SecretSaveParams,
+) -> Result<SecretSavedResult, ErrorObject> {
+    let SecretSaveParams {
+        name,
+        value,
+        expires_at,
+    } = params;
+    let value = Zeroizing::new(value);
+    need_keystore()?;
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(char::is_control) {
+        return Err(ErrorObject::invalid_params(format!(
+            "the name must be 1 to {MAX_NAME_BYTES} bytes, on one line"
+        )));
+    }
+    if value.trim().is_empty() || value.len() > MAX_SECRET_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "the secret must be 1 to {MAX_SECRET_BYTES} bytes"
+        )));
+    }
+    if expires_at.is_some_and(|at| at <= Timestamp::now()) {
+        return Err(ErrorObject::invalid_params(
+            "the expiry must be in the future",
+        ));
+    }
+    let key = AccountId::generate();
+    let keys = Arc::clone(&daemon.keys);
+    tokio::task::spawn_blocking(move || keys.set(key, &value))
+        .await
+        .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+        .map_err(|error| crate::methods::keychain_error(&error))?;
+    let recorded = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            db.save_secret(key.into(), &name, expires_at)
+                .map_err(|e| store_error(&e))
+        })
+        .await;
+    match recorded {
+        Ok(replaced) => {
+            if let Some(old) = replaced.and_then(|id| AccountId::try_from(id).ok()) {
+                forget(daemon, vec![old]).await;
+            }
+        }
+        Err(error) => {
+            forget(daemon, vec![key]).await;
+            return Err(error);
+        }
+    }
+    daemon.secrets.refs.notify_one();
+    Ok(SecretSavedResult {})
+}
+
+/// `secret/delete`: removes a saved secret and its value. An unknown id changes nothing.
+pub(crate) async fn delete(
+    daemon: &Daemon,
+    params: SecretDeleteParams,
+) -> Result<SecretSavedResult, ErrorObject> {
+    let id = Uuid::try_parse(&params.id)
+        .map_err(|_| ErrorObject::invalid_params(format!("{:?} is not a secret id", params.id)))?;
+    let deleted = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            db.delete_saved_secret(id).map_err(|e| store_error(&e))
+        })
+        .await?;
+    if let Some(key) = deleted.then(|| AccountId::try_from(id).ok()).flatten() {
+        forget(daemon, vec![key]).await;
+    }
+    Ok(SecretSavedResult {})
+}
+
+/// `secret/use`: writes saved secret `name` to a new file for `run`'s commands: its path.
+pub(crate) async fn use_saved(
+    daemon: &Daemon,
+    params: SecretUseParams,
+) -> Result<SecretUseResult, ErrorObject> {
+    let SecretUseParams { run_id, name } = params;
+    need_keystore()?;
+    run_row(daemon, run_id)
+        .await?
+        .ok_or_else(|| crate::agents::run_not_found(run_id))?;
+    let missing = || {
+        ErrorObject::invalid_params(format!(
+            "no secret is saved as {name:?}; ask for it with request_secret"
+        ))
+    };
+    let lookup = name.clone();
+    let saved = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            db.saved_secret(&lookup).map_err(|e| store_error(&e))
+        })
+        .await?
+        .filter(|secret| secret.expires_at.is_none_or(|at| at > Timestamp::now()))
+        .ok_or_else(missing)?;
+    let key = AccountId::try_from(saved.id).map_err(|_| missing())?;
+    let keys = Arc::clone(&daemon.keys);
+    let value = tokio::task::spawn_blocking(move || keys.get(key))
+        .await
+        .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+        .map_err(|error| crate::methods::keychain_error(&error))?
+        .ok_or_else(missing)?;
+    let file = save_file(daemon, run_id, Zeroizing::new(value.as_bytes().to_vec())).await?;
+    daemon.secrets.refs.notify_one();
+    Ok(SecretUseResult { file })
 }
 
 /// Closes request `id` and refuses its answer if `run`'s turn has ended. The agent waits inside the
@@ -600,11 +764,14 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             .store
             .run(&CancellationToken::new(), |db| {
                 let error = |error| store_error(&error);
-                let (expired, next) = db.secret_ref_expiry(Timestamp::now()).map_err(error)?;
+                let now = Timestamp::now();
+                let (mut expired, next) = db.secret_ref_expiry(now).map_err(error)?;
                 for id in &expired {
                     db.take_secret_ref(*id).map_err(error)?;
                 }
-                Ok((expired, next))
+                let (saved, next_saved) = db.take_expired_saved_secrets(now).map_err(error)?;
+                expired.extend(saved);
+                Ok((expired, next.into_iter().chain(next_saved).min()))
             })
             .await;
         let next = match swept {

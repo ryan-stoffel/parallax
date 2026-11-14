@@ -41,6 +41,65 @@ impl Conn {
     }
 }
 
+/// 0105: a thread's next CLI process is told the names of the secrets saved since its last, and
+/// never their values.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn a_saved_secret_s_name_reaches_the_next_cli_s_instructions() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(WithInstructions {
+            fake: fake_backend(editing()),
+            seen: Arc::clone(&seen),
+        }),
+    );
+    // Saved secrets need a keystore, never the real one.
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(backends);
+    config.keys = Some(Arc::new(crate::thread_tools::Keys::default()));
+    let host = Host {
+        server: InProcess::start(config),
+        dir,
+        work: temp_dir(),
+    };
+    let mut client = host.client().await;
+    let chat = client
+        .call::<ThreadStart>(start_params(None, "Plan a trip"))
+        .await
+        .unwrap()
+        .thread;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(chat.repo))).await;
+    runs.until(updated_to(AgentStatus::Completed)).await;
+    client
+        .call::<parallax_protocol::methods::SecretSave>(parallax_protocol::SecretSaveParams {
+            name: "deploy token".to_owned(),
+            value: "plx1558-value".to_owned(),
+            expires_at: None,
+        })
+        .await
+        .unwrap();
+    client
+        .call::<AgentSend>(message(chat.id, "And a packing list"))
+        .await
+        .unwrap();
+    runs.until(updated_to(AgentStatus::Completed)).await;
+
+    let seen = seen.lock().unwrap().clone();
+    let (first, last) = (
+        seen[0].as_deref().unwrap_or_default(),
+        seen.last().unwrap().as_deref().unwrap_or_default(),
+    );
+    assert!(!first.contains("use_secret"), "{seen:?}");
+    assert!(last.contains("use_secret"), "{seen:?}");
+    assert!(last.contains(r#""deploy token""#), "{seen:?}");
+    assert!(!last.contains("plx1558-value"), "{seen:?}");
+    host.server.stop().await;
+}
+
 #[tokio::test]
 async fn a_thread_added_to_a_project_gets_its_instructions_and_leaves_when_it_goes() {
     let seen = Arc::new(Mutex::new(Vec::new()));

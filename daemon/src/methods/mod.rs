@@ -530,6 +530,10 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ThreadMergeBack => |p| crate::delegation::merge_back(daemon, p),
         SecretRequest => |p| crate::secrets::request(daemon, p),
         SecretAnswer => |p| crate::secrets::answer(daemon, p),
+        SecretList => |_| crate::secrets::list(daemon),
+        SecretSave => |p| crate::secrets::save_named(daemon, p),
+        SecretDelete => |p| crate::secrets::delete(daemon, p),
+        SecretUse => |p| crate::secrets::use_saved(daemon, p),
         RepoSaveScripts => |p| crate::setup_scripts::save(daemon, p),
     })
 }

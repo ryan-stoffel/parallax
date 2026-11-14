@@ -97,6 +97,7 @@ import { OrchestratorSettings } from "./settings/OrchestratorSettings";
 import { ProjectSettings } from "./settings/ProjectSettings";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
+import { SecretSettings } from "./settings/SecretSettings";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
 import { ThreadSettings } from "./settings/ThreadSettings";
@@ -261,6 +262,8 @@ export function Settings({
           <ComputerSettings />
         ) : section === "schedules" ? (
           <ScheduleSettings />
+        ) : section === "secrets" ? (
+          <SecretSettings />
         ) : section === "storage" ? (
           <StorageSettings />
         ) : section === "about" ? (

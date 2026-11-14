@@ -3609,28 +3609,33 @@ impl Actor {
     /// and so does an orchestrator thread added to one (0093).
     async fn standing_instructions(&self) -> Result<Option<String>, String> {
         let (scope, run) = (Uuid::from(self.project), Uuid::from(self.id));
-        let project = store(&self.daemon, move |db| {
+        let (project, saved) = store(&self.daemon, move |db| {
             let error = |error| store_error(&error);
             let added = db
                 .get_thread(run)
                 .map_err(error)?
                 .and_then(|t| t.project_id);
-            Ok(db
+            let project = db
                 .get_repo(added.unwrap_or(scope))
                 .map_err(error)?
-                .and_then(|repo| crate::projects::thread_instructions(&repo)))
+                .and_then(|repo| crate::projects::thread_instructions(&repo));
+            Ok((project, crate::secrets::saved_names(db)?))
         })
         .await
         .map_err(|error| error.message)?;
-        // Windows refuses `request_secret` until PLX-23.
+        // Windows refuses `request_secret` and `use_secret` until PLX-23.
         if cfg!(windows) {
             return Ok(project);
         }
-        let secrets = crate::mcp::delegation::INSTRUCTIONS;
-        Ok(Some(project.map_or_else(
-            || secrets.to_owned(),
-            |project| format!("{secrets}\n\n{project}"),
-        )))
+        let mut secrets = crate::mcp::delegation::INSTRUCTIONS.to_owned();
+        // The secrets the user saved in Settings (0105), as they are when the CLI starts.
+        if let Some(saved) = crate::mcp::delegation::saved_secrets_instructions(&saved) {
+            secrets = format!("{secrets}\n\n{saved}");
+        }
+        Ok(Some(match project {
+            Some(project) => format!("{secrets}\n\n{project}"),
+            None => secrets,
+        }))
     }
 
     async fn orchestrator_setup(&mut self, repo: Option<&Path>) -> Result<Setup, String> {

@@ -427,6 +427,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "repoLogo",
     "repoRefs",
     "runOptions",
+    "savedSecrets",
     "schedules",
     "secrets",
     "sendAccount",

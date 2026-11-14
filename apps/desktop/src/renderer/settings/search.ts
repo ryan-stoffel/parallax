@@ -55,6 +55,12 @@ export const settingsSections: {
     keywords: msg("cron timers automation"),
   },
   {
+    id: "secrets",
+    name: "Secrets",
+    group: "Agents",
+    keywords: "passwords sudo api keys tokens env credentials keychain",
+  },
+  {
     id: "browser",
     name: msg("Browser"),
     group: msg("Agents"),
@@ -503,6 +509,13 @@ export const settingsIndex: SettingEntry[] = [
       msg("Scheduled tasks"),
       msg("Prompts on a timer or webhook"),
       msg("cron timer webhook recurring automation pause"),
+    ],
+  ]),
+  ...entries("secrets", undefined, [
+    [
+      "Saved secrets",
+      "Secrets every agent can use without asking",
+      "password sudo api key token env expire keychain",
     ],
   ]),
   ...entries("sourceControl", undefined, [

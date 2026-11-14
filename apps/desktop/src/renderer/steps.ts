@@ -368,6 +368,7 @@ const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>
   delete_scheduled_task: [msg("Deleting a scheduled task"), msg("Deleted a scheduled task")],
   run_scheduled_task_now: [msg("Running a scheduled task"), msg("Ran a scheduled task")],
   request_secret: [msg("Asking you for a secret"), msg("Asked you for a secret")],
+  use_secret: [msg("Using a saved secret"), msg("Used a saved secret")],
   present_files: [msg("Presenting files"), msg("Presented files")],
   html_render: [msg("Rendering a page"), msg("Rendered a page")],
   html_preview: [msg("Previewing a page"), msg("Previewed a page")],

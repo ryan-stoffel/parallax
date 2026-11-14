@@ -71,6 +71,7 @@ mod queue;
 mod remote;
 mod remote_control;
 mod review;
+mod saved_secrets;
 mod schedule;
 mod scripts;
 mod terminal;
@@ -261,6 +262,10 @@ pub use review::{
     AgentFileResult, AgentFileSide, AgentFileStatus, AgentFileWriteParams, AgentFileWriteResult,
     AgentFilesParams, AgentFilesResult, AgentMerge, AgentMergeKind, AgentOpenPrParams,
     AgentOpenPrResult, AgentRequestChangesParams,
+};
+pub use saved_secrets::{
+    SavedSecret, SecretDeleteParams, SecretListParams, SecretListResult, SecretSaveParams,
+    SecretSavedResult, SecretUseParams, SecretUseResult,
 };
 pub use schedule::{
     PrFailureLog, PrFailureLogParams, PrFailureLogResult, PrStatusCheck, PrStatusFile,
