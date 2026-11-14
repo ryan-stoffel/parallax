@@ -20,6 +20,7 @@ A secret given through the card (0098, 0099) lasts 24 hours and belongs to the t
 ## Consequences
 
 - Any thread on the computer can read a saved secret, including one the user didn't expect to need it. The page says so.
+- Deleting or expiring a saved secret doesn't remove the files `use_secret` already wrote. Each lasts its 24 hours, as a `delivery: file` answer does.
 - A thread whose CLI started before a secret was saved doesn't know its name until its CLI restarts. It can still call `use_secret` if told the name.
 - Windows refuses, as `request_secret` does until PLX-23.
 - The phone app has no Secrets page yet.
