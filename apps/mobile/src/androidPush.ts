@@ -29,16 +29,22 @@ async function savedKeys(): Promise<Record<string, string>> {
   }
 }
 
+/** The last change to the keys. Each waits for the one before, so two computers connecting at once
+ *  don't both read the same keys and drop each other's. */
+let changing = Promise.resolve();
+const change = (step: () => Promise<void>) => (changing = changing.then(step).catch(() => {}));
+
 /** Keeps `key`, the push key of the computer with relay id `hostId`. */
-export async function saveAndroidPushKey(hostId: string, key: string): Promise<void> {
-  const keys = await savedKeys();
-  if (keys[hostId] === key) return;
-  await SecureStore.setItemAsync(KEYS, JSON.stringify({ ...keys, [hostId]: key })).catch(() => {});
+export function saveAndroidPushKey(hostId: string, key: string): Promise<void> {
+  return change(async () => {
+    const keys = await savedKeys();
+    if (keys[hostId] !== key) await SecureStore.setItemAsync(KEYS, JSON.stringify({ ...keys, [hostId]: key }));
+  });
 }
 
 /** Takes every push key off this phone, for signing out. */
-export async function forgetAndroidPushKeys(): Promise<void> {
-  await SecureStore.deleteItemAsync(KEYS).catch(() => {});
+export function forgetAndroidPushKeys(): Promise<void> {
+  return change(() => SecureStore.deleteItemAsync(KEYS));
 }
 
 /** The push a task payload carries, if it's one from the relay. */
