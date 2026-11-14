@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Check, ChevronRight, Copy, RotateCcw } from "lucide-react";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -17,7 +18,7 @@ import { defaultIcon, iconColors, projectIcons } from "../projectIcons";
 import { workspaces } from "../RunTargetMenu";
 import { RepoIcon, SharedRepoIcons } from "../Sidebar";
 import { isRepository, repoIconOf, setRepoIcons, type ThreadsView } from "../threads";
-import { IconButton, Picker } from "../ui";
+import { IconButton, Picker, type PickerOption } from "../ui";
 import {
   allHosts,
   field,
@@ -43,6 +44,13 @@ const pickerBox = "rounded-lg border border-border bg-background";
 type Entry = { host: Host; view: ThreadsView; repo: Repo };
 
 const keyOf = (e: Entry) => `${e.host.id}/${e.repo.id}`;
+
+/** An option from a table marked with `msg`, in the shown language. */
+const shown = (o: PickerOption): PickerOption => ({
+  ...o,
+  label: t(o.label),
+  description: o.description && t(o.description),
+});
 
 /**
  * Settings > Projects: the repositories and Projects of every computer, or the one picked, opening
@@ -90,11 +98,11 @@ export function ProjectSettings({
           scope={
             <Picker
               field
-              label="Project"
+              label={t("Project")}
               value={current ? keyOf(current) : allProjects}
               onChange={(key) => setChosen(key === allProjects ? undefined : key)}
               options={[
-                { value: allProjects, label: "All projects" },
+                { value: allProjects, label: t("All projects") },
                 ...all.map((e) => ({
                   value: keyOf(e),
                   label: e.repo.name,
@@ -102,7 +110,7 @@ export function ProjectSettings({
                   hint: named ? e.host.name : undefined,
                 })),
               ]}
-              search={all.length > 8 ? "Search projects" : undefined}
+              search={all.length > 8 ? t("Search projects") : undefined}
               className="max-w-56"
               panelClassName="min-w-56"
             />
@@ -125,12 +133,12 @@ export function ProjectSettings({
         <>
           <p className="mb-4 text-reading text-muted-foreground">
             {all.length
-              ? "Choose a project to manage its icon and its own settings."
-              : "Add a repository from the sidebar, and its settings show here."}
+              ? t("Choose a project to manage its icon and its own settings.")
+              : t("Add a repository from the sidebar, and its settings show here.")}
           </p>
           {repos.length > 0 && (
             <ProjectList
-              title="Repositories"
+              title={t("Repositories")}
               rows={repos}
               detail={(e) => <RepoDetail entry={e} named={named} />}
               onChoose={setChosen}
@@ -138,9 +146,11 @@ export function ProjectSettings({
           )}
           {chats.length > 0 && (
             <ProjectList
-              title="Projects"
+              title={t("Projects")}
               rows={chats}
-              detail={(e) => `${named ? `${e.host.name} · ` : ""}Chats with their own instructions`}
+              detail={(e) =>
+                `${named ? `${e.host.name} · ` : ""}${t("Chats with their own instructions")}`
+              }
               onChoose={setChosen}
             />
           )}
@@ -190,7 +200,8 @@ function RepoDetail({ entry, named }: { entry: Entry; named: boolean }) {
     <>
       {named && `${entry.host.name} · `}
       {entry.repo.path}
-      {count > 0 && ` · ${count} ${count === 1 ? "default" : "defaults"} changed`}
+      {count > 0 &&
+        ` · ${t("{{count}} defaults changed", { count, defaultValue_one: "{{count}} default changed" })}`}
     </>
   );
 }
@@ -217,7 +228,11 @@ function IconRow({
     if (repo.project)
       void view.updateRepo(repo.id, { icon: next }).then((failed) => {
         if (failed)
-          notify({ tone: "error", title: `Couldn't save ${repo.name}'s icon`, body: failed });
+          notify({
+            tone: "error",
+            title: t("Couldn't save {{name}}'s icon", { name: repo.name }),
+            body: failed,
+          });
       });
     else
       setRepoIcons(
@@ -230,25 +245,26 @@ function IconRow({
   const upload = async (chosen: File) => {
     const image = await readIcon(chosen, maxBytes!);
     if (typeof image === "string")
-      notify({ tone: "error", title: "Couldn't use that image", body: image });
+      notify({ tone: "error", title: t("Couldn't use that image"), body: image });
     else {
       const { name, color } = icon ?? defaultIcon;
       save({ name, ...(color && { color }), image });
     }
   };
   const glyph = projectIcons.find((i) => i.name === icon?.name)?.label ?? icon?.name;
-  const color = iconColors.find((c) => c.key === icon?.color)?.label;
+  const colorLabel = iconColors.find((c) => c.key === icon?.color)?.label;
+  const color = colorLabel && t(colorLabel);
   return (
     <>
       <Row
-        title="Project icon"
+        title={t("Project icon")}
         description={
           !icon
             ? repo.project
-              ? "The Project glyph"
-              : "Its initials"
+              ? t("The Project glyph")
+              : t("Its initials")
             : icon.image
-              ? "An uploaded image"
+              ? t("An uploaded image")
               : [glyph, color].filter(Boolean).join(" · ")
         }
       >
@@ -261,18 +277,18 @@ function IconRow({
           className={outlineButton}
           onClick={() => setChoosing(!choosing)}
         >
-          {choosing ? "Done" : "Choose icon"}
+          {choosing ? t("Done") : t("Choose icon")}
         </button>
         {maxBytes !== undefined && (
           <>
             <button type="button" className={outlineButton} onClick={() => file.current?.click()}>
-              Choose file
+              {t("Choose file")}
             </button>
             <input
               ref={file}
               type="file"
               hidden
-              aria-label={`Image for ${repo.name}'s icon`}
+              aria-label={t("Image for {{name}}'s icon", { name: repo.name })}
               accept="image/png,image/jpeg,image/gif,image/webp"
               onChange={(e) => {
                 const chosen = e.currentTarget.files?.[0];
@@ -289,11 +305,11 @@ function IconRow({
   );
 }
 
-/** Resets a default to follow the global one, shown only once it's set. */
+/** Resets a default to follow the global one, shown only once it's set. `label` names the button. */
 function ResetDefault({ label, set, reset }: { label: string; set: boolean; reset: () => void }) {
   return (
     set && (
-      <IconButton label={`Use the default ${label}`} onClick={reset}>
+      <IconButton label={label} onClick={reset}>
         <RotateCcw aria-hidden />
       </IconButton>
     )
@@ -353,7 +369,8 @@ function Repository({
 
   const blocked: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
-    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
+    if (!i.enabled)
+      blocked[i.id] = t("{{name}} is turned off in Settings > Providers.", { name: i.name });
   const choices = catalog.models.filter((m) => !blocked[m.provider]);
   const wanted = prefs.model ?? global.model;
   const model =
@@ -379,27 +396,32 @@ function Repository({
             {named && `${host.name} · `}
             {repo.path}
           </span>
-          <IconButton size="sm" label="Copy path" onClick={() => copy(repo.path)}>
+          <IconButton size="sm" label={t("Copy path")} onClick={() => copy(repo.path)}>
             {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
           </IconButton>
         </span>
       </PageTitle>
       {"threadAttention" in view.capabilities && (
-        <Section title="General">
+        <Section title={t("General")}>
           <IconRow repo={repo} view={view} listed={listed} />
         </Section>
       )}
       <Section
-        title="New thread defaults"
+        title={t("New thread defaults")}
         action={
           copies.length > 1 && (
-            <span className="text-meta text-muted-foreground">On {copies.length} computers</span>
+            <span className="text-meta text-muted-foreground">
+              {t("On {{count}} computers", {
+                count: copies.length,
+                defaultValue_one: "On {{count}} computer",
+              })}
+            </span>
           )
         }
       >
-        <Row title="Model" description="The model a new thread here starts on.">
+        <Row title={t("Model")} description={t("The model a new thread here starts on.")}>
           <ResetDefault
-            label="model"
+            label={t("Use the default model")}
             set={!!prefs.model}
             reset={() => set({ model: undefined, context: undefined })}
           />
@@ -415,13 +437,16 @@ function Repository({
               />
             </span>
           ) : (
-            <span className="text-body text-muted-foreground">No models</span>
+            <span className="text-body text-muted-foreground">{t("No models")}</span>
           )}
         </Row>
         {model && instance?.efforts !== false && (
-          <Row title="Reasoning" description="How hard it thinks, and its context and fast mode.">
+          <Row
+            title={t("Reasoning")}
+            description={t("How hard it thinks, and its context and fast mode.")}
+          >
             <ResetDefault
-              label="reasoning"
+              label={t("Use the default reasoning")}
               set={reasoningSet}
               reset={() => set({ effort: undefined, context: undefined, fast: undefined })}
             />
@@ -440,64 +465,71 @@ function Repository({
           </Row>
         )}
         {permissions.length > 1 && (
-          <Row title="Permissions" description="What a new thread here may do without asking.">
+          <Row
+            title={t("Permissions")}
+            description={t("What a new thread here may do without asking.")}
+          >
             <ResetDefault
-              label="permissions"
+              label={t("Use the default permissions")}
               set={!!prefs.permission}
               reset={() => set({ permission: undefined })}
             />
             <Picker
               field
-              label="Permissions"
+              label={t("Permissions")}
               value={permission}
               onChange={(value) => set({ permission: value as AgentPermission })}
-              options={permissions.map((p) => accessOptions[p])}
+              options={permissions.map((p) => shown(accessOptions[p]))}
               align="end"
               className="w-56"
               panelClassName="w-[25rem]"
             />
           </Row>
         )}
-        <Row title="Workspace" description="Where a new thread here works.">
+        <Row title={t("Workspace")} description={t("Where a new thread here works.")}>
           <ResetDefault
-            label="workspace"
+            label={t("Use the default workspace")}
             set={!!prefs.workspace}
             reset={() => set({ workspace: undefined })}
           />
           <Picker
             field
-            label="Workspace"
+            label={t("Workspace")}
             value={workspace}
             onChange={(value) => set({ workspace: value as RepoPrefs["workspace"] })}
-            options={workspaces}
+            options={workspaces.map(shown)}
             align="end"
             className="w-56"
             panelClassName="w-[24rem]"
           />
         </Row>
-        <Row title="Base branch" description="The branch a new worktree here starts from.">
+        <Row
+          title={t("Base branch")}
+          description={t("The branch a new worktree here starts from.")}
+        >
           <ResetDefault
-            label="base branch"
+            label={t("Use the default base branch")}
             set={!!prefs.base}
             reset={() => set({ base: undefined })}
           />
           <Picker
             field
-            label="Base branch"
+            label={t("Base branch")}
             value={prefs.base ?? ""}
             onChange={(base) => set({ base: base || undefined })}
             options={[
               {
                 value: "",
-                label: global.worktreeBase === "current" ? "Current branch" : "Default branch",
-                hint: "default",
+                label:
+                  global.worktreeBase === "current" ? t("Current branch") : t("Default branch"),
+                hint: t("default"),
               },
               ...(prefs.base && !refs?.some((r) => r.name === prefs.base)
                 ? [{ value: prefs.base, label: prefs.base }]
                 : []),
               ...(refs ?? []).map((r) => ({ value: r.name, label: r.name })),
             ]}
-            search={(refs?.length ?? 0) > 8 ? "Search branches" : undefined}
+            search={(refs?.length ?? 0) > 8 ? t("Search branches") : undefined}
             align="end"
             className="w-56"
             panelClassName="w-72"
@@ -506,14 +538,14 @@ function Repository({
       </Section>
       <RepoScripts hostId={hostId} repo={repo} />
       <Section title="Git">
-        <Row title="Remote" description="Where its pull requests go.">
-          <GitValue text={remote} missing="No origin" />
+        <Row title={t("Remote")} description={t("Where its pull requests go.")}>
+          <GitValue text={remote} missing={t("No origin")} />
         </Row>
-        <Row title="Current branch" description="What its checkout has out.">
-          <GitValue text={refs?.find((r) => r.current)?.name} missing="Detached" />
+        <Row title={t("Current branch")} description={t("What its checkout has out.")}>
+          <GitValue text={refs?.find((r) => r.current)?.name} missing={t("Detached")} />
         </Row>
-        <Row title="Default branch" description="What origin/HEAD names.">
-          <GitValue text={refs?.find((r) => r.default)?.name} missing="Unknown" />
+        <Row title={t("Default branch")} description={t("What origin/HEAD names.")}>
+          <GitValue text={refs?.find((r) => r.default)?.name} missing={t("Unknown")} />
         </Row>
       </Section>
     </>
@@ -534,15 +566,20 @@ function ChatProject({
   const [instructions, setInstructions] = useState(repo.instructions ?? "");
   const save = async (change: { name?: string; instructions?: string }) => {
     const failed = await view.updateRepo(repo.id, change);
-    if (failed) notify({ tone: "error", title: `Couldn't save ${repo.name}`, body: failed });
+    if (failed)
+      notify({
+        tone: "error",
+        title: t("Couldn't save {{name}}", { name: repo.name }),
+        body: failed,
+      });
   };
   return (
     <>
-      <PageTitle title={repo.name}>A group of chats, with no repository of yours.</PageTitle>
-      <Section title="General">
-        <Row title="Name" description="How the sidebar names it.">
+      <PageTitle title={repo.name}>{t("A group of chats, with no repository of yours.")}</PageTitle>
+      <Section title={t("General")}>
+        <Row title={t("Name")} description={t("How the sidebar names it.")}>
           <input
-            aria-label="Name"
+            aria-label={t("Name")}
             value={name}
             maxLength={128}
             onChange={(e) => setName(e.target.value)}
@@ -559,13 +596,13 @@ function ChatProject({
         </Row>
         <IconRow repo={repo} view={view} listed={listed} />
       </Section>
-      <Section title="Instructions">
+      <Section title={t("Instructions")}>
         <div className="px-4 py-3">
           <span className="block text-meta text-muted-foreground">
-            What every thread in it is told. They&apos;re pinned to its system prompt.
+            {t("What every thread in it is told. They're pinned to its system prompt.")}
           </span>
           <textarea
-            aria-label="Instructions"
+            aria-label={t("Instructions")}
             rows={6}
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}

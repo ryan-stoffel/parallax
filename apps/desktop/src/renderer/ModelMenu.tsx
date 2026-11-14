@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Check, ChevronDown, Network, Search, SearchX, Star } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
@@ -157,7 +158,7 @@ export function ModelMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={`Model: ${chosen.name}`}
+        aria-label={t("Model: {{model}}", { model: chosen.name })}
         className={`${menuButton} min-w-0 [&>svg]:-translate-y-[0.5px]`}
       >
         <Logo />
@@ -188,7 +189,7 @@ export function ModelMenu({
           <div className="model-menu-rail flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border py-2">
             <button
               type="button"
-              aria-label="Favorites"
+              aria-label={t("Favorites")}
               aria-pressed={!q && tab === null}
               onClick={() => setTab(null)}
               className={`${railButton} aria-pressed:[&_svg]:fill-current aria-pressed:[&_svg]:text-amber-500`}
@@ -246,8 +247,8 @@ export function ModelMenu({
               <input
                 ref={search}
                 type="search"
-                aria-label="Search models"
-                placeholder="Search models…"
+                aria-label={t("Search models")}
+                placeholder={t("Search models…")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -264,7 +265,7 @@ export function ModelMenu({
                       {instance(account)?.hubName ?? kindOf(instance(account)?.kind ?? "").name}
                     </span>
                     <Segmented
-                      label={instance(account)?.hub ? "Provider" : "Account"}
+                      label={instance(account)?.hub ? t("Provider") : t("Account")}
                       value={account}
                       onChange={setAccount}
                       wrap
@@ -329,10 +330,10 @@ export function ModelMenu({
                         </span>
                         {isNew(m) && (
                           <span
-                            title="Newly released or first discovered in the past week"
+                            title={t("Newly released or first discovered in the past week")}
                             className="shrink-0 rounded-full bg-accent/12 px-1.5 text-caption leading-4 font-medium text-accent"
                           >
-                            New
+                            {t("New", { context: "model badge" })}
                           </span>
                         )}
                         {mixed && (
@@ -350,7 +351,11 @@ export function ModelMenu({
                     {/* Shown while its row is hovered or focused, or once it's a favorite. */}
                     <button
                       type="button"
-                      aria-label={favorite ? `Unfavorite ${m.name}` : `Favorite ${m.name}`}
+                      aria-label={
+                        favorite
+                          ? t("Unfavorite {{model}}", { model: m.name })
+                          : t("Favorite {{model}}", { model: m.name })
+                      }
                       aria-pressed={favorite}
                       onClick={() => toggleFavorite(catalog.hostId, m.provider, m.id)}
                       className="mr-1 grid size-6 shrink-0 place-items-center rounded-sm text-faint-foreground opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 hover:text-foreground aria-pressed:text-amber-500 aria-pressed:opacity-100 [&_svg]:size-3.5 aria-pressed:[&_svg]:fill-current"
@@ -367,17 +372,17 @@ export function ModelMenu({
                   </span>
                   <span className="text-body font-medium">
                     {q
-                      ? "No matching models"
+                      ? t("No matching models")
                       : tab === null
-                        ? "No favorites yet"
-                        : "No models available"}
+                        ? t("No favorites yet")
+                        : t("No models available")}
                   </span>
                   <span className="text-meta text-faint-foreground">
                     {q
-                      ? "Try another name."
+                      ? t("Try another name.")
                       : tab === null
-                        ? "Star a model to keep it here."
-                        : "Check your providers in Settings."}
+                        ? t("Star a model to keep it here.")
+                        : t("Check your providers in Settings.")}
                   </span>
                 </li>
               )}

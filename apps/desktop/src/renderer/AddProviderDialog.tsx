@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { ExternalLink, Plus, Search, TriangleAlert, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import { msg } from "../i18n";
 import { HOME_VARS, type RegistryAgent } from "../preload/bridge";
 import type { ProviderEnvVar, ProviderInstance } from "../protocol/generated/protocol";
 import {
@@ -24,9 +26,9 @@ type Draft = Omit<Preset, "blurb"> & { icon?: string };
 
 /**
  * Registry agents plxd runs as a kind of its own, tuned to it, by registry id: they start from the
- * kind's defaults, not the registry's command.
+ * kind's defaults, not the registry's command. A function, so its hint is in the language shown.
  */
-const tuned: Record<string, Draft> = {
+const tuned = (): Record<string, Draft> => ({
   opencode: { kind: "opencode", name: "OpenCode" },
   "pi-acp": withVersion({ kind: "pi", name: "Pi", args: [], env: [] }, versions["pi"]![0]!),
   "grok-build": { kind: "grokBuild", name: "Grok Build" },
@@ -34,18 +36,19 @@ const tuned: Record<string, Draft> = {
     kind: "antigravity",
     name: "Antigravity",
     program: "",
-    programHint:
+    programHint: t(
       "The full path to agy_acp_server.par, from the ACP Registry's Google Antigravity archive.",
+    ),
   },
   cursor: { kind: "cursor", name: "Cursor" },
-};
+});
 
 /**
  * `agent`'s Draft: a kind plxd tunes, or an ACP agent run with npx, or uvx, or else its binary
  * for `platform`, if it has one.
  */
 function registryDraft(agent: RegistryAgent, platform: string): Draft | undefined {
-  const own = tuned[agent.id];
+  const own = tuned()[agent.id];
   if (own) return own;
   const { npx, uvx, binary } = agent.distribution;
   const env = (vars: Record<string, string> = {}): ProviderEnvVar[] =>
@@ -67,11 +70,14 @@ function registryDraft(agent: RegistryAgent, platform: string): Draft | undefine
     program,
     args: build.args ?? [],
     env: env(build.env),
-    programHint: `Install ${agent.name} on the host from its archive, then give the full path to ${program}, or put it on the host's PATH.`,
+    programHint: t(
+      "Install {{name}} on the host from its archive, then give the full path to {{program}}, or put it on the host's PATH.",
+      { name: agent.name, program },
+    ),
   };
 }
 
-const steps = ["Provider", "Identity", "Config"];
+const steps = [msg("Provider"), msg("Identity"), msg("Config")];
 
 /**
  * Add provider, a native modal <dialog> open while it's mounted, in three steps: a provider card
@@ -120,9 +126,9 @@ export function AddProviderDialog({
   const base = builtIn && !ids.includes(draft.kind) ? draft.kind : slug(name);
   const id = pickedId ?? unique(base, ids, "-");
   const idError = !/^[a-z0-9-]+$/.test(id)
-    ? "Lowercase letters, digits, and -."
+    ? t("Lowercase letters, digits, and -.")
     : ids.includes(id)
-      ? "Another provider on this host has it."
+      ? t("Another provider on this host has it.")
       : undefined;
   // Pi and OpenCode ask only what T3 Code asks; Settings has the rest once they're installed.
   const short = draft?.kind === "pi" || draft?.kind === "opencode";
@@ -202,13 +208,13 @@ export function AddProviderDialog({
         <div className="flex items-start gap-3 px-5 pt-4 pb-3">
           <div className="flex-1">
             <h2 id={titleId} className="text-reading font-semibold">
-              Add provider
+              {t("Add provider")}
             </h2>
             <p className="mt-0.5 text-body text-muted-foreground">
-              Add an account or configure a provider on {hostName}.
+              {t("Add an account or configure a provider on {{host}}.", { host: hostName })}
             </p>
           </div>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label={t("Close")} onClick={close}>
             <X />
           </IconButton>
         </div>
@@ -225,7 +231,7 @@ export function AddProviderDialog({
               >
                 {i + 1}
               </span>
-              {s}
+              {t(s)}
             </li>
           ))}
         </ol>
@@ -245,7 +251,10 @@ export function AddProviderDialog({
               <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
               <div>
                 <p className="font-medium text-foreground">
-                  {hostName} already has a {kindOf(draft.kind).name} account.
+                  {t("{{host}} already has a {{provider}} account.", {
+                    host: hostName,
+                    provider: kindOf(draft.kind).name,
+                  })}
                 </p>
                 <SeveralAccountsNote
                   onHubs={
@@ -262,7 +271,7 @@ export function AddProviderDialog({
           {step === 1 && (
             <div className="flex flex-col gap-4">
               <label className="text-body text-muted-foreground">
-                Display name
+                {t("Display name")}
                 <input
                   // The native attribute, so a step's first field takes focus.
                   autoFocus
@@ -275,7 +284,7 @@ export function AddProviderDialog({
                 />
               </label>
               <label className="text-body text-muted-foreground">
-                Id
+                {t("Id")}
                 <input
                   value={id}
                   onChange={(e) => setId(e.target.value)}
@@ -288,7 +297,7 @@ export function AddProviderDialog({
                   role={idError ? "alert" : undefined}
                   className={`mt-1 block ${idError ? "text-danger" : "text-faint-foreground"}`}
                 >
-                  {idError ?? "How plxd and its logs name it. It can't change later."}
+                  {idError ?? t("How plxd and its logs name it. It can't change later.")}
                 </span>
               </label>
             </div>
@@ -297,7 +306,7 @@ export function AddProviderDialog({
             <div className="flex flex-col gap-4">
               {draft.kind === "pi" ? (
                 <label className="text-body text-muted-foreground">
-                  Binary path
+                  {t("Binary path")}
                   <input
                     autoFocus
                     placeholder="pi"
@@ -309,13 +318,13 @@ export function AddProviderDialog({
                     className={`${field} font-mono`}
                   />
                   <span className="mt-1 block text-faint-foreground">
-                    Path to the Pi coding agent binary.
+                    {t("Path to the Pi coding agent binary.")}
                   </span>
                 </label>
               ) : draft.kind === "opencode" ? (
                 <>
                   <label className="text-body text-muted-foreground">
-                    Binary path
+                    {t("Binary path")}
                     <input
                       autoFocus
                       placeholder="opencode"
@@ -326,11 +335,11 @@ export function AddProviderDialog({
                       className={`${field} font-mono`}
                     />
                     <span className="mt-1 block text-faint-foreground">
-                      Path to the OpenCode binary.
+                      {t("Path to the OpenCode binary.")}
                     </span>
                   </label>
                   <label className="text-body text-muted-foreground">
-                    Server URL
+                    {t("Server URL")}
                     <input
                       type="url"
                       placeholder="http://127.0.0.1:4096"
@@ -341,21 +350,21 @@ export function AddProviderDialog({
                       className={`${field} font-mono`}
                     />
                     <span className="mt-1 block text-faint-foreground">
-                      Leave blank to let Parallax start the server when needed.
+                      {t("Leave blank to let Parallax start the server when needed.")}
                     </span>
                   </label>
                   <label className="text-body text-muted-foreground">
-                    Server password
+                    {t("Server password")}
                     <input
                       type="password"
-                      placeholder="Optional"
+                      placeholder={t("Optional")}
                       value={valueOf("OPENCODE_SERVER_PASSWORD")}
                       onChange={(e) => setVar("OPENCODE_SERVER_PASSWORD", e.target.value, true)}
                       autoComplete="off"
                       className={field}
                     />
                     <span className="mt-1 block text-faint-foreground">
-                      Kept in the host's keychain.
+                      {t("Kept in the host's keychain.")}
                     </span>
                   </label>
                 </>
@@ -363,9 +372,9 @@ export function AddProviderDialog({
                 <>
                   {choices && (
                     <div className="flex items-center justify-between gap-4 text-body text-muted-foreground">
-                      Version
+                      {t("Version")}
                       <Segmented
-                        label="Version"
+                        label={t("Version")}
                         options={choices.map((v) => ({ value: v.label, name: v.label }))}
                         value={version!.label}
                         onChange={(label) => {
@@ -381,7 +390,7 @@ export function AddProviderDialog({
                     </div>
                   )}
                   <label className="text-body text-muted-foreground">
-                    Binary path
+                    {t("Binary path")}
                     <input
                       autoFocus
                       required={!!draft.programHint || draft.kind === "acp"}
@@ -398,9 +407,9 @@ export function AddProviderDialog({
                   </label>
                   {homeVar && (
                     <label className="text-body text-muted-foreground">
-                      {homeVar} path
+                      {t("{{variable}} path", { variable: homeVar })}
                       <input
-                        placeholder="Default"
+                        placeholder={t("Default")}
                         value={home}
                         onChange={(e) => setHome(e.target.value)}
                         spellCheck={false}
@@ -408,12 +417,12 @@ export function AddProviderDialog({
                         className={`${field} font-mono`}
                       />
                       <span className="mt-1 block text-faint-foreground">
-                        Its own home, for a second account.
+                        {t("Its own home, for a second account.")}
                       </span>
                     </label>
                   )}
                   <label className="text-body text-muted-foreground">
-                    {kindOf(draft.kind).wholeArgs ? "Arguments" : "Launch arguments"}
+                    {kindOf(draft.kind).wholeArgs ? t("Arguments") : t("Launch arguments")}
                     <input
                       value={args}
                       onChange={(e) => setArgs(e.target.value)}
@@ -435,11 +444,11 @@ export function AddProviderDialog({
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
           <button type="button" onClick={close} className={quietButton}>
-            Cancel
+            {t("Cancel")}
           </button>
           {step > 0 && (
             <button type="button" onClick={() => setStep(step - 1)} className={quietButton}>
-              Back
+              {t("Back")}
             </button>
           )}
           <button
@@ -449,7 +458,7 @@ export function AddProviderDialog({
             }
             className={primaryButton}
           >
-            {step === 2 ? "Add provider" : "Next"}
+            {step === 2 ? t("Add provider") : t("Next")}
           </button>
         </div>
       </form>
@@ -509,24 +518,26 @@ function ProviderStep({
               <Logo className="mt-0.5 size-4 shrink-0" />
               <span className="min-w-0">
                 <span className="block truncate text-body font-medium">{p.name}</span>
-                <span className="block truncate text-meta text-muted-foreground">{p.blurb}</span>
+                <span className="block truncate text-meta text-muted-foreground">{t(p.blurb)}</span>
               </span>
             </button>
           );
         })}
       </div>
       <div className="mt-5 mb-2 flex items-center justify-between gap-4">
-        <h3 className="text-body font-medium text-muted-foreground">Or choose from ACP Registry</h3>
+        <h3 className="text-body font-medium text-muted-foreground">
+          {t("Or choose from ACP Registry")}
+        </h3>
         <button type="button" onClick={onManual} className={quietButton}>
-          Enter manually
+          {t("Enter manually")}
         </button>
       </div>
       <label className="mb-2 flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5">
         <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
         <input
           type="search"
-          aria-label="Search the ACP Registry"
-          placeholder="Search agents…"
+          aria-label={t("Search the ACP Registry")}
+          placeholder={t("Search agents…")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
@@ -537,9 +548,9 @@ function ProviderStep({
           {registry}
         </p>
       ) : !registry ? (
-        <p className="text-body text-muted-foreground">Loading the registry…</p>
+        <p className="text-body text-muted-foreground">{t("Loading the registry…")}</p>
       ) : (
-        <ul aria-label="ACP Registry" className="flex flex-col">
+        <ul aria-label={t("ACP Registry")} className="flex flex-col">
           {agents.map((agent) => {
             const draft = registryDraft(agent, window.parallax.platform);
             const link = agent.repository ?? agent.website;
@@ -560,7 +571,7 @@ function ProviderStep({
                     href={link}
                     target="_blank"
                     rel="noreferrer"
-                    aria-label={`${agent.name}'s page`}
+                    aria-label={t("{{name}}'s page", { name: agent.name })}
                     className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
                   >
                     <ExternalLink aria-hidden />
@@ -569,18 +580,18 @@ function ProviderStep({
                 <button
                   type="button"
                   disabled={!draft}
-                  title={draft ? undefined : "No build for this host's OS"}
-                  aria-label={`Add ${agent.name}`}
+                  title={draft ? undefined : t("No build for this host's OS")}
+                  aria-label={t("Add {{name}}", { name: agent.name })}
                   onClick={() => draft && onChoose(draft)}
                   className={`${quietButton} border border-border disabled:opacity-50`}
                 >
-                  Add
+                  {t("Add")}
                 </button>
               </li>
             );
           })}
           {agents.length === 0 && (
-            <li className="py-2 text-body text-faint-foreground">No matching agents</li>
+            <li className="py-2 text-body text-faint-foreground">{t("No matching agents")}</li>
           )}
         </ul>
       )}
@@ -600,11 +611,11 @@ function EnvEditor({
     onChange(env.map((v, j) => (j === i ? { ...v, ...change } : v)));
   return (
     <fieldset className="text-body text-muted-foreground">
-      <legend>Environment</legend>
+      <legend>{t("Environment")}</legend>
       {env.map((v, i) => (
         <div key={i} className="mt-1.5 flex items-center gap-2">
           <input
-            aria-label={`Variable ${i + 1} name`}
+            aria-label={t("Variable {{number}} name", { number: i + 1 })}
             required={!!v.value}
             pattern="[A-Za-z_][A-Za-z0-9_]*"
             placeholder="NAME"
@@ -621,7 +632,11 @@ function EnvEditor({
             className={`${field} mt-0 w-56 font-mono`}
           />
           <input
-            aria-label={v.name ? `Value of ${v.name}` : `Variable ${i + 1} value`}
+            aria-label={
+              v.name
+                ? t("Value of {{name}}", { name: v.name })
+                : t("Variable {{number}} value", { number: i + 1 })
+            }
             // A preset's secret, such as an API key, has to be given.
             required={v.secret && !!v.name}
             type={v.secret ? "password" : "text"}
@@ -637,10 +652,14 @@ function EnvEditor({
               checked={v.secret}
               onChange={(e) => set(i, { secret: e.target.checked })}
             />
-            Secret
+            {t("Secret")}
           </label>
           <IconButton
-            label={`Remove ${v.name || `variable ${i + 1}`}`}
+            label={
+              v.name
+                ? t("Remove {{name}}", { name: v.name })
+                : t("Remove variable {{number}}", { number: i + 1 })
+            }
             onClick={() => onChange(env.filter((_, j) => j !== i))}
           >
             <X aria-hidden />
@@ -653,7 +672,7 @@ function EnvEditor({
         className={`${quietButton} mt-1.5 -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
       >
         <Plus aria-hidden />
-        Add variable
+        {t("Add variable")}
       </button>
     </fieldset>
   );

@@ -1,6 +1,7 @@
 // What a transcript's Markdown links, for the desktop's MarkdownText (AgentChat.tsx) and the
 // phone's (apps/mobile ui.tsx), both drawn by Enriched Markdown: inline code that names a file,
 // which its link recognition makes a link to it, and the images that stay links. Pure, for the test.
+import { t } from "i18next";
 
 /**
  * Inline code that names a file, after T3 Code's pattern: a path that starts at `./`,
@@ -40,7 +41,7 @@ export function unloadedImages(
         const start = text.lastIndexOf("\n", at - 1) + 1;
         const end = text.indexOf("\n", at) < 0 ? text.length : text.indexOf("\n", at);
         const alone = start === at && /^[^)]*\)\s*$/.test(text.slice(at + all.length, end));
-        return shown(url, alone) ? all : `[${alt || "Image"}](${open}${url}`;
+        return shown(url, alone) ? all : `[${alt || t("Image")}](${open}${url}`;
       })
       .replace(imageByReference, "$1")
       // Every image left on a line of its own is one `shown` kept there.

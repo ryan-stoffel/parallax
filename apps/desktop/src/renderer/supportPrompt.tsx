@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { GitHubLogo, GitHubStarIcon, KoFiLogo } from "./logos";
 import { notify } from "./notifications";
 
@@ -22,10 +24,10 @@ export async function countSentPrompt() {
   if (!first || count + 1 > PROMPTS_BEFORE_ASK) return;
   notify({
     tone: "info",
-    title: "Enjoying Parallax?",
-    body: "A GitHub star helps people find it, and Ko-fi helps fund the work.",
+    title: t("Enjoying Parallax?"),
+    body: t("A GitHub star helps people find it, and Ko-fi helps fund the work."),
     action: {
-      label: "Star on GitHub",
+      label: t("Star on GitHub"),
       href: "https://github.com/ryan-stoffel/parallax",
       icon: (
         <>
@@ -35,7 +37,7 @@ export async function countSentPrompt() {
       ),
     },
     secondLink: {
-      label: "Support on Ko-fi",
+      label: t("Support on Ko-fi"),
       href: "https://ko-fi.com/parallax_team",
       icon: <KoFiLogo className="mr-0.5 size-3.5" />,
     },

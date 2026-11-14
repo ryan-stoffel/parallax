@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Check, ChevronDown } from "lucide-react";
 import {
   Fragment,
@@ -156,7 +157,7 @@ export function SetUpGithub({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className="shrink-0 rounded-md border border-border px-2 py-0.5 text-meta font-medium text-foreground hover:bg-hover"
     >
-      Set up GitHub
+      {t("Set up GitHub")}
     </button>
   );
 }
@@ -535,7 +536,7 @@ export function Picker({
           popoverTarget={menuId}
           disabled={disabled}
           aria-haspopup="menu"
-          aria-label={`${label}: ${current?.label ?? "none"}`}
+          aria-label={`${label}: ${current?.label ?? t("none")}`}
           title={current?.label}
           // It can shrink, cutting a long choice (a branch name) short rather than widening its row.
           className={field ? `${fieldControl} ${className}` : `${menuButton} min-w-0 ${className}`}
@@ -606,7 +607,7 @@ export function Picker({
             </>
           )}
           {shown.length === 0 && !typed && (
-            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">{t("No matches")}</p>
           )}
         </div>
         {footer && <div className="border-t border-border p-1">{footer(close)}</div>}
@@ -632,7 +633,7 @@ export interface Crumb {
  */
 export function Breadcrumb({ items, tight }: { items: Crumb[]; tight?: boolean }) {
   return (
-    <nav aria-label="Breadcrumb" className="-ml-1.5 min-w-0 overflow-x-clip">
+    <nav aria-label={t("Breadcrumb")} className="-ml-1.5 min-w-0 overflow-x-clip">
       <ol className="flex min-w-0 items-center gap-0.5 text-body">
         {items.map(({ label, icon, onClick }, i) => {
           const current = i === items.length - 1 && !onClick;

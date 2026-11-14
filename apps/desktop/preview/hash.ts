@@ -1,5 +1,6 @@
 // Opens a view from the URL's hash, since the app's views are plain state with no routes:
-// it clicks through the UI as a person would, once each step's button is on screen.
+// it clicks through the UI as a person would, once each step's button is on screen. Labels go
+// through `t`, so it works in any language.
 //
 //   #orchestrator=parallax                an orchestrator, by its favorite's name
 //   #orchestrator=parallax&panel=Agents  and a side panel view, by its name
@@ -10,6 +11,8 @@
 //   #signedout                            signed out of Parallax, without onboarding
 //   #moved                                signed out at launch by the move to production Clerk
 
+import { t } from "i18next";
+
 /** An element to click, `true` when there is nothing to do, or nothing while it isn't there yet. */
 type Step = () => HTMLElement | true | null | undefined;
 
@@ -19,8 +22,8 @@ const byText = (root: ParentNode | null, selector: string, text: string) =>
     el.textContent?.trim().toLowerCase().startsWith(text.toLowerCase()),
   );
 const byLabel = (label: string) =>
-  document.querySelector<HTMLElement>(`button[aria-label="${CSS.escape(label)}"]`);
-const panel = () => document.querySelector<HTMLElement>('aside[aria-label="Side panel"]');
+  document.querySelector<HTMLElement>(`button[aria-label="${CSS.escape(t(label))}"]`);
+const panel = () => document.querySelector<HTMLElement>(`aside[aria-label="${t("Side panel")}"]`);
 
 /** Clicks each step's element in turn, waiting up to 5 s for it to show up. */
 async function run(steps: Step[]) {
@@ -42,12 +45,12 @@ function openPanelView(name: string): Step[] {
   return [
     () => (panel()?.checkVisibility() ? true : byLabel("Show side panel")),
     () =>
-      byText(panel(), 'ul[aria-label="Open views"] button', name) ??
+      byText(panel(), `ul[aria-label="${t("Open views")}"] button`, name) ??
       byText(panel(), 'nav[aria-labelledby="side-panel-views"] button', name) ??
       panel()?.querySelector<HTMLElement>("#side-panel-open-view"),
     () =>
       byText(panel(), 'nav[aria-labelledby="side-panel-views"] button', name) ??
-      byText(panel(), 'ul[aria-label="Open views"] button[aria-current]', name),
+      byText(panel(), `ul[aria-label="${t("Open views")}"] button[aria-current]`, name),
   ];
 }
 
@@ -64,7 +67,7 @@ export function openFromHash() {
       // The Projects drawer (PLX-1043), opened unless it is.
       () => {
         const drawer = [...document.querySelectorAll("#sidebar details")].find((d) =>
-          d.querySelector("summary")?.textContent?.startsWith("Projects"),
+          d.querySelector("summary")?.textContent?.startsWith(t("Projects")),
         );
         return drawer?.hasAttribute("open") ? true : drawer?.querySelector("summary");
       },
@@ -82,14 +85,14 @@ export function openFromHash() {
   const thread = params.get("thread");
   if (thread)
     steps.push(() =>
-      [...document.querySelectorAll<HTMLElement>('ul[aria-label="Threads"] *')].find(
+      [...document.querySelectorAll<HTMLElement>(`ul[aria-label="${t("Threads")}"] *`)].find(
         (el) => el.childElementCount === 0 && el.textContent?.trim() === thread,
       ),
     );
   const agent = params.get("agent");
   if (agent)
     steps.push(
-      () => document.querySelector<HTMLElement>(`section[aria-label="Agents"] > button`),
+      () => document.querySelector<HTMLElement>(`section[aria-label="${t("Agents")}"] > button`),
       () => byText(document, "[popover] button", agent),
     );
   const view = params.get("panel");

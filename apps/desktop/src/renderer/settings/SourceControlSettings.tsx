@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { ArrowUpRight, Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { msg } from "../../i18n";
 import type { RpcError } from "../../preload/bridge";
 import type { GithubStatus, PrMergeMethod } from "../../protocol/generated/protocol";
 import { useCopy } from "../AgentChat";
@@ -42,15 +44,16 @@ export function SourceControlSettings({ hostId: opened }: { hostId?: string }) {
   const targets = hostsOf(hosts, scope);
   return (
     <>
-      <PageTitle title="Source control">
-        Parallax opens and follows pull requests with the GitHub CLI on each host. How worktrees and
-        branches work is in Worktrees.
+      <PageTitle title={t("Source control")}>
+        {t(
+          "Parallax opens and follows pull requests with the GitHub CLI on each host. How worktrees and branches work is in Worktrees.",
+        )}
       </PageTitle>
       {targets.map((host, i) => (
         <GitHub
           key={host.id}
           host={host}
-          title={targets.length > 1 ? `Hosting on ${host.name}` : "Hosting"}
+          title={targets.length > 1 ? t("Hosting on {{host}}", { host: host.name }) : t("Hosting")}
           picker={i === 0 && <HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
         />
       ))}
@@ -62,12 +65,12 @@ export function SourceControlSettings({ hostId: opened }: { hostId?: string }) {
 const mergeMethods: { value: PrMergeMethod | "default"; label: string; description?: string }[] = [
   {
     value: "default",
-    label: "Repository's first",
-    description: "Whichever the repository lists first.",
+    label: msg("Repository's first"),
+    description: msg("Whichever the repository lists first."),
   },
-  { value: "squash", label: "Squash and merge" },
-  { value: "merge", label: "Create a merge commit" },
-  { value: "rebase", label: "Rebase and merge" },
+  { value: "squash", label: msg("Squash and merge") },
+  { value: "merge", label: msg("Create a merge commit") },
+  { value: "rebase", label: msg("Rebase and merge") },
 ];
 
 /** How pull requests open and merge, on this computer. */
@@ -75,16 +78,16 @@ function PullRequests() {
   const prefs = behaviorPrefs.use();
   const mac = window.parallax.platform === "darwin";
   return (
-    <Section title="Pull requests">
-      <Row title="Open pull requests in" description="Where Open on GitHub goes.">
+    <Section title={t("Pull requests")}>
+      <Row title={t("Open pull requests in")} description={t("Where Open on GitHub goes.")}>
         <Picker
           field
-          label="Open pull requests in"
+          label={t("Open pull requests in")}
           value={prefs.openPrsIn}
           onChange={(v) => setBehaviorPrefs({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
           options={[
-            { value: "external", label: "System browser" },
-            { value: "browser", label: "Side panel browser" },
+            { value: "external", label: t("System browser") },
+            { value: "browser", label: t("Side panel browser") },
           ]}
           align="end"
           className="w-56"
@@ -92,17 +95,19 @@ function PullRequests() {
         />
       </Row>
       <Row
-        title="Click a pull request link to"
-        description={`A link to the thread's pull request. ${mac ? "⌘-click" : "Ctrl+click"} does the other.`}
+        title={t("Click a pull request link to")}
+        description={t("A link to the thread's pull request. {{click}} does the other.", {
+          click: mac ? "⌘-click" : "Ctrl+click",
+        })}
       >
         <Picker
           field
-          label="Click a pull request link to"
+          label={t("Click a pull request link to")}
           value={prefs.prLinkClick}
           onChange={(v) => setBehaviorPrefs({ prLinkClick: v as BehaviorPrefs["prLinkClick"] })}
           options={[
-            { value: "parallax", label: "Open in Parallax" },
-            { value: "github", label: "Open on GitHub" },
+            { value: "parallax", label: t("Open in Parallax") },
+            { value: "github", label: t("Open on GitHub") },
           ]}
           align="end"
           className="w-56"
@@ -110,28 +115,34 @@ function PullRequests() {
         />
       </Row>
       <Row
-        title="Merge method"
-        description="What a pull request's merge box starts on, where the repository allows it."
+        title={t("Merge method")}
+        description={t(
+          "What a pull request's merge box starts on, where the repository allows it.",
+        )}
       >
         <Picker
           field
-          label="Merge method"
+          label={t("Merge method")}
           value={prefs.mergeMethod ?? "default"}
           onChange={(v) =>
             setBehaviorPrefs({ mergeMethod: v === "default" ? undefined : (v as PrMergeMethod) })
           }
-          options={mergeMethods}
+          options={mergeMethods.map((m) => ({
+            ...m,
+            label: t(m.label),
+            description: m.description && t(m.description),
+          }))}
           align="end"
           className="w-56"
           panelClassName="w-72"
         />
       </Row>
       <Row
-        title="Delete branch on merge"
-        description="Whether the merge box's Delete branch starts checked."
+        title={t("Delete branch on merge")}
+        description={t("Whether the merge box's Delete branch starts checked.")}
       >
         <Switch
-          label="Delete branch on merge"
+          label={t("Delete branch on merge")}
           checked={prefs.deleteBranchOnMerge}
           onChange={(deleteBranchOnMerge) => setBehaviorPrefs({ deleteBranchOnMerge })}
         />
@@ -197,15 +208,15 @@ function GitHub({
     before.current = status;
     if (!was || !status) return;
     const key = `github/${host.id}`;
-    const on = `On ${host.name}.`;
+    const on = t("On {{host}}.", { host: host.name });
     if (was.installing && !status.installing)
       notify(
         status.installed
-          ? { key, tone: "success", title: "GitHub CLI installed", body: on }
+          ? { key, tone: "success", title: t("GitHub CLI installed"), body: on }
           : {
               key,
               tone: "error",
-              title: "Couldn't install the GitHub CLI",
+              title: t("Couldn't install the GitHub CLI"),
               body: status.setupNote,
             },
       );
@@ -214,44 +225,44 @@ function GitHub({
         notify({
           key,
           tone: "success",
-          title: "Signed in to GitHub",
-          body: status.account ? `As @${status.account}. ${on}` : on,
+          title: t("Signed in to GitHub"),
+          body: status.account ? `${t("As @{{account}}.", { account: status.account })} ${on}` : on,
         });
       else if (status.setupNote)
         notify({
           key,
           tone: "error",
-          title: "GitHub sign-in didn't finish",
+          title: t("GitHub sign-in didn't finish"),
           body: status.setupNote,
         });
   }, [status, host.id, host.name]);
 
   const install = async () => {
     const answer = await window.parallax.request(host.id, "github/install", {});
-    if ("error" in answer) refused("Couldn't install the GitHub CLI", answer.error);
+    if ("error" in answer) refused(t("Couldn't install the GitHub CLI"), answer.error);
     else setStatus(answer.result);
   };
   const signIn = async () => {
     setStarting(true);
     const answer = await window.parallax.request(host.id, "github/signIn", {});
     setStarting(false);
-    if ("error" in answer) return refused("Couldn't sign in to GitHub", answer.error);
+    if ("error" in answer) return refused(t("Couldn't sign in to GitHub"), answer.error);
     setStatus((s) => s && { ...s, signingIn: answer.result, setupNote: undefined });
     // The device page opens here even for an SSH host, whose browser is this computer's.
     window.open(answer.result.url, "_blank");
   };
   const cancel = async () => {
     const answer = await window.parallax.request(host.id, "github/signInCancel", {});
-    if ("error" in answer) refused("Couldn't cancel the GitHub sign-in", answer.error);
+    if ("error" in answer) refused(t("Couldn't cancel the GitHub sign-in"), answer.error);
     await load(true);
   };
 
   let detail: string;
   let tone: "on" | "off" | "warn" = "warn";
-  if (!connected) detail = connection ? statusLabel(connection) : "Connecting…";
-  else if (!supported) detail = "Update plxd on this host to see GitHub here.";
+  if (!connected) detail = connection ? statusLabel(connection) : t("Connecting…");
+  else if (!supported) detail = t("Update plxd on this host to see GitHub here.");
   else if (error) detail = error;
-  else if (!status) detail = "Checking…";
+  else if (!status) detail = t("Checking…");
   else ({ detail, tone } = githubLine(status, setup));
 
   let action: ReactNode = null;
@@ -260,19 +271,19 @@ function GitHub({
       action = (
         <span className={`${quietButton} flex items-center gap-1.5 [&_svg]:size-3.5`}>
           <LoaderCircle aria-hidden className="animate-spin" />
-          Installing
+          {t("Installing")}
         </span>
       );
     else if (!status.installed)
       action = (
         <button type="button" className={primaryButton} onClick={() => void install()}>
-          Install
+          {t("Install")}
         </button>
       );
     else if (status.signingIn)
       action = (
         <button type="button" className={quietButton} onClick={() => void cancel()}>
-          Cancel
+          {t("Cancel")}
         </button>
       );
     else if (status.signedIn === false)
@@ -283,7 +294,7 @@ function GitHub({
           disabled={starting}
           onClick={() => void signIn()}
         >
-          {starting ? "Starting…" : "Sign in"}
+          {starting ? t("Starting…") : t("Sign in")}
         </button>
       );
   } else if (status && !status.installed)
@@ -294,7 +305,7 @@ function GitHub({
         rel="noreferrer"
         className={`${quietButton} flex shrink-0 items-center gap-1 [&_svg]:size-3.5`}
       >
-        Install
+        {t("Install")}
         <ArrowUpRight aria-hidden />
       </a>
     );
@@ -307,7 +318,11 @@ function GitHub({
       action={
         <div className="flex items-center gap-2">
           {picker}
-          <IconButton label="Refresh" disabled={!supported || checking} onClick={() => void load()}>
+          <IconButton
+            label={t("Refresh")}
+            disabled={!supported || checking}
+            onClick={() => void load()}
+          >
             <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
           </IconButton>
         </div>
@@ -322,7 +337,7 @@ function GitHub({
               {status?.version && (
                 <span className="truncate font-mono text-meta text-faint-foreground">
                   gh {status.version}
-                  {status.managed && " · installed by Parallax"}
+                  {status.managed && ` · ${t("installed by Parallax")}`}
                 </span>
               )}
             </span>
@@ -346,11 +361,13 @@ function GitHub({
         <div className={`${settingRow} flex-wrap`}>
           <div className="min-w-0">
             <span className="block text-body text-muted-foreground">
-              Enter this code at {pending.url.replace(/^https:\/\//, "")}. It expires at{" "}
-              {new Date(pending.expiresAt).toLocaleTimeString(locale(), clockOptions())}.
+              {t("Enter this code at {{url}}. It expires at {{time}}.", {
+                url: pending.url.replace(/^https:\/\//, ""),
+                time: new Date(pending.expiresAt).toLocaleTimeString(locale(), clockOptions()),
+              })}
             </span>
             <span
-              aria-label="One-time code"
+              aria-label={t("One-time code")}
               className="mt-1 block font-mono text-heading font-semibold tracking-widest select-all"
             >
               {pending.code}
@@ -363,14 +380,14 @@ function GitHub({
               onClick={() => copy(pending.code)}
             >
               {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-              {copied ? "Copied" : "Copy"}
+              {copied ? t("Copied") : t("Copy")}
             </button>
             <button
               type="button"
               className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
               onClick={() => window.open(pending.url, "_blank")}
             >
-              Open GitHub
+              {t("Open GitHub")}
               <ArrowUpRight aria-hidden />
             </button>
           </div>

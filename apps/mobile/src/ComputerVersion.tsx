@@ -1,5 +1,6 @@
 // A computer's Parallax row (PLX-1366): its plxd version, Update when its channel has a newer
 // release for it, and how the update is going.
+import { t } from "i18next";
 import { ActivityIndicator } from "react-native";
 
 import { isOlder } from "../../desktop/src/main/hostUpdate";
@@ -25,11 +26,11 @@ export function ComputerVersion({ m }: { m: Computer }) {
     const threads = await restartCutsOff(id);
     if (!threads) return go();
     showAlert(
-      `Update ${m.machine.name}?`,
-      `Parallax restarts there now, which cuts off ${threads}. They go on afterward if Continue threads after restarts is on.`,
+      t("Update {{name}}?", { name: m.machine.name }),
+      t("Parallax restarts there now, which cuts off {{threads}}. They go on afterward if Continue threads after restarts is on.", { threads }),
       [
-        { text: "Cancel", style: "cancel" },
-        { text: "Update", style: "destructive", onPress: go },
+        { text: t("Cancel"), style: "cancel" },
+        { text: t("Update"), style: "destructive", onPress: go },
       ],
     );
   };
@@ -37,14 +38,14 @@ export function ComputerVersion({ m }: { m: Computer }) {
   const busy = <ActivityIndicator size="small" color={c.mutedForeground} />;
   switch (update?.stage) {
     case "installing":
-      return <Row title="Parallax" detail={`Downloading ${update.version}…`} right={busy} />;
+      return <Row title="Parallax" detail={t("Downloading {{version}}…", { version: update.version })} right={busy} />;
     case "restarting":
-      return <Row title="Parallax" detail={`Restarting on ${update.version}…`} right={busy} />;
+      return <Row title="Parallax" detail={t("Restarting on {{version}}…", { version: update.version })} right={busy} />;
     case "waiting":
       return (
         <Row
           title="Parallax"
-          detail={`Restarts on ${update.version} when ${update.running === 1 ? "1 running thread ends" : `${update.running} running threads end`}.`}
+          detail={t("Restarts on {{version}} when {{count}} running threads end.", { version: update.version, count: update.running, defaultValue_one: "Restarts on {{version}} when {{count}} running thread ends." })}
           right={busy}
         />
       );
@@ -56,7 +57,7 @@ export function ComputerVersion({ m }: { m: Computer }) {
         <Row
           title="Parallax"
           detail={update.error}
-          right={plxd ? <Action label="Retry" onPress={() => void start(update.version)} /> : undefined}
+          right={plxd ? <Action label={t("Retry")} onPress={() => void start(update.version)} /> : undefined}
         />
       );
   }
@@ -65,8 +66,8 @@ export function ComputerVersion({ m }: { m: Computer }) {
     return (
       <Row
         title="Parallax"
-        detail={`${plxd} · ${newest} is out`}
-        right={<Action label="Update" onPress={() => void start(newest)} />}
+        detail={t("{{current}} · {{newest}} is out", { current: plxd, newest })}
+        right={<Action label={t("Update")} onPress={() => void start(newest)} />}
       />
     );
   return <Row title="Parallax" detail={shown} />;

@@ -2,6 +2,7 @@
 // the desktop's PR view does: one sheet to write in, for a review, a comment, a line comment, a
 // reply, or the title and description; a review thread with Reply and Resolve; and the Guide tab,
 // the agent-written walkthrough of the head commit.
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import { CircleCheck, FileText, MessageSquareReply, RotateCw } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
@@ -86,10 +87,10 @@ export function WriteSheet({
         )}
         {shown?.titleField !== undefined && (
           <TextInput
-            accessibilityLabel="Title"
+            accessibilityLabel={t("Title")}
             value={title}
             onChangeText={setTitle}
-            placeholder="Title"
+            placeholder={t("Title")}
             placeholderTextColor={c.faintForeground}
             selectionColor={c.accent}
             style={[styles.field, { color: c.foreground, backgroundColor: c.code, borderColor: c.border }]}
@@ -111,7 +112,7 @@ export function WriteSheet({
           {shown?.actions.map((a) => (
             <Button
               key={a.label}
-              label={sending === a.label ? "Sending…" : a.label}
+              label={sending === a.label ? t("Sending…") : a.label}
               primary={a.primary}
               destructive={a.destructive}
               disabled={!!sending || (!a.empty && !text) || (shown.titleField !== undefined && !title.trim())}
@@ -140,15 +141,15 @@ export function reviewWriting(pendingReviewId: string | undefined, pending: numb
     write: (body) => (pendingReviewId ? { kind: "submitReview", reviewId: pendingReviewId, event, body } : { kind: "review", event, body }),
   });
   return {
-    title: "Review",
-    note: pending ? `Sends with your ${pending} pending ${pending === 1 ? "comment" : "comments"}.` : undefined,
-    placeholder: "Leave a comment",
+    title: t("Review", { context: "noun" }),
+    note: pending ? t("Sends with your {{count}} pending comments.", { count: pending, defaultValue_one: "Sends with your {{count}} pending comment." }) : undefined,
+    placeholder: t("Leave a comment"),
     actions: [
-      verdict("Comment", "comment"),
-      verdict("Request changes", "requestChanges"),
-      verdict("Approve", "approve", true),
+      verdict(t("Comment", { context: "verb" }), "comment"),
+      verdict(t("Request changes"), "requestChanges"),
+      verdict(t("Approve"), "approve", true),
       ...(pendingReviewId
-        ? [{ label: "Discard pending", destructive: true, empty: true, write: (): PrWrite => ({ kind: "discardReview", reviewId: pendingReviewId }) }]
+        ? [{ label: t("Discard pending"), destructive: true, empty: true, write: (): PrWrite => ({ kind: "discardReview", reviewId: pendingReviewId }) }]
         : []),
     ],
   };
@@ -177,7 +178,7 @@ export function ThreadCard({
   const card = useCard();
   const lines = thread.startLine ? `${thread.startLine}–${thread.line}` : thread.line;
   const pending = thread.comments.every((m) => m.pending);
-  const marks = [thread.isOutdated && "Outdated", thread.isResolved && "Resolved", pending && "Pending"].filter(Boolean);
+  const marks = [thread.isOutdated && t("Outdated"), thread.isResolved && t("Resolved"), pending && t("Pending")].filter(Boolean);
   const open = !thread.isResolved && !pending;
   return (
     <View style={[styles.thread, { backgroundColor: card, borderColor: c.border }]}>
@@ -204,7 +205,7 @@ export function ThreadCard({
               {m.author}
             </T>
             <T faint style={{ fontSize: 12, lineHeight: 16 }}>
-              {m.pending ? "Pending" : ago(m.createdAt)}
+              {m.pending ? t("Pending") : ago(m.createdAt)}
             </T>
           </View>
           <Markdown text={githubText(m.body)} images="github" />
@@ -212,8 +213,8 @@ export function ThreadCard({
       ))}
       {open && (onReply || onResolve) && (
         <View style={[styles.line, { gap: 8 }]}>
-          {onReply && <Small icon={MessageSquareReply} label="Reply" onPress={onReply} />}
-          {onResolve && <Small icon={CircleCheck} label="Resolve" onPress={onResolve} />}
+          {onReply && <Small icon={MessageSquareReply} label={t("Reply", { context: "verb" })} onPress={onReply} />}
+          {onResolve && <Small icon={CircleCheck} label={t("Resolve")} onPress={onResolve} />}
         </View>
       )}
     </View>
@@ -289,7 +290,7 @@ export function Guide({
   }, [generating, state]);
   const again = () => setRound((r) => ({ regenerate: true, n: r.n + 1 }));
 
-  if (!model) return <T muted style={styles.note}>Writing a guide needs Claude or Codex on this computer.</T>;
+  if (!model) return <T muted style={styles.note}>{t("Writing a guide needs Claude or Codex on this computer.")}</T>;
   if (typeof state === "string") return <T alert style={{ ...styles.note, color: c.danger }}>{state}</T>;
   const guide = state?.guide;
   if (!guide)
@@ -298,15 +299,15 @@ export function Guide({
         {state?.error ? (
           <>
             <T muted style={{ fontSize: 14, textAlign: "center" }}>
-              The guide couldn't be written. {state.error}
+              {t("The guide couldn't be written. {{error}}", { error: state.error })}
             </T>
-            <Button label="Try again" icon={RotateCw} onPress={again} />
+            <Button label={t("Try again")} icon={RotateCw} onPress={again} />
           </>
         ) : (
           <>
             <ActivityIndicator color={c.accent} />
             <T muted style={{ fontSize: 14 }}>
-              Writing a guide to this pull request…
+              {t("Writing a guide to this pull request…")}
             </T>
           </>
         )}
@@ -318,10 +319,10 @@ export function Guide({
       {(stale || generating) && (
         <T muted style={{ fontSize: 13, lineHeight: 17 }}>
           {!generating
-            ? "This guide is for an older commit."
+            ? t("This guide is for an older commit.")
             : stale
-              ? "Writing a guide for the latest commit. This one is for an older commit."
-              : "Writing a new guide."}
+              ? t("Writing a guide for the latest commit. This one is for an older commit.")
+              : t("Writing a new guide.")}
         </T>
       )}
       <Markdown text={guide.overview} />
@@ -340,7 +341,7 @@ export function Guide({
             <Pressable
               key={j}
               accessibilityRole="button"
-              accessibilityLabel={`Open ${h.path} at line ${h.start}`}
+              accessibilityLabel={t("Open {{path}} at line {{line}}", { path: h.path, line: h.start })}
               onPress={() => onOpen(h.path, h.start)}
               style={({ pressed }) => [styles.hunk, { backgroundColor: card, borderColor: c.border }, pressed && { opacity: 0.6 }]}
             >
@@ -355,12 +356,12 @@ export function Guide({
       ))}
       {!!guide.omitted?.length && (
         <T faint style={{ fontSize: 13, lineHeight: 17 }}>
-          Not read to fit the diff: {guide.omitted.join(", ")}
+          {t("Not read to fit the diff: {{files}}", { files: guide.omitted.join(", ") })}
         </T>
       )}
       {!generating && (
         <View style={{ alignItems: "flex-start" }}>
-          <Button label="Write it again" icon={RotateCw} onPress={again} />
+          <Button label={t("Write it again")} icon={RotateCw} onPress={again} />
         </View>
       )}
     </View>

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { isOlder } from "../main/hostUpdate";
@@ -51,14 +52,18 @@ const cliNames: Record<CliKind, string> = {
 /** Hosts whose plxd restarts: a remote one for its update, this computer for the app's. */
 export const restarts = (plan: HostPlan) => plan.server !== undefined || plan.app !== undefined;
 
-const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
-
 /** "2 servers and 2 providers", counting this computer's app as a server, as T3 Code does. */
 export function planSummary(plans: HostPlan[]): string {
   const servers = plans.filter(restarts).length;
   const providers = plans.reduce((n, plan) => n + plan.providers.length, 0);
-  const parts = [servers && count(servers, "server"), providers && count(providers, "provider")];
-  return parts.filter(Boolean).join(" and ");
+  const serverCount =
+    servers > 0 && t("{{count}} servers", { count: servers, defaultValue_one: "{{count}} server" });
+  const providerCount =
+    providers > 0 &&
+    t("{{count}} providers", { count: providers, defaultValue_one: "{{count}} provider" });
+  if (serverCount && providerCount)
+    return t("{{servers}} and {{providers}}", { servers: serverCount, providers: providerCount });
+  return serverCount || providerCount || "";
 }
 
 /** One thing to update, as the Update card and dialog list it. */
@@ -377,7 +382,7 @@ export async function updateEverything(
           notify({
             key,
             tone: "error",
-            title: `Couldn't update ${name} on ${plan.name}`,
+            title: t("Couldn't update {{name}} on {{computer}}", { name, computer: plan.name }),
             body: error,
           });
         } else {
@@ -386,8 +391,8 @@ export async function updateEverything(
           notify({
             key,
             tone: "success",
-            title: `Updated ${name} on ${plan.name}`,
-            body: `Now ${version}.`,
+            title: t("Updated {{name}} on {{computer}}", { name, computer: plan.name }),
+            body: t("Now {{version}}.", { version }),
           });
           upgraded(plan.hostId, cli);
         }
@@ -404,7 +409,8 @@ export async function updateEverything(
   if (!appReady) {
     const ready = downloaded();
     await window.parallax.update();
-    if (!(await ready)) return onStatus("app", { state: "failed", error: "The download failed." });
+    if (!(await ready))
+      return onStatus("app", { state: "failed", error: t("The download failed.") });
   }
   await window.parallax.update();
 }

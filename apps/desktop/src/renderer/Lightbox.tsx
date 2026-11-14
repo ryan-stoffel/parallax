@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -61,12 +62,12 @@ export function Lightbox({
             className="pointer-events-auto flex items-center gap-1.5 rounded-full px-3 py-1.5 hover:bg-white/15 [&_svg]:size-4"
           >
             <Download aria-hidden />
-            Download
+            {t("Download")}
           </button>
         )}
         <button
           type="button"
-          aria-label="Close"
+          aria-label={t("Close")}
           onClick={() => dialog.current?.close()}
           className="pointer-events-auto grid size-8 place-items-center rounded-full hover:bg-white/15 [&_svg]:size-5"
         >
@@ -109,7 +110,7 @@ export function Lightbox({
         <>
           <button
             type="button"
-            aria-label="Previous"
+            aria-label={t("Previous")}
             onClick={() => go(-1)}
             className={`${arrow} left-4`}
           >
@@ -117,7 +118,7 @@ export function Lightbox({
           </button>
           <button
             type="button"
-            aria-label="Next"
+            aria-label={t("Next")}
             onClick={() => go(1)}
             className={`${arrow} right-4`}
           >

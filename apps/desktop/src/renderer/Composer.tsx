@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowUp,
   Brain,
@@ -76,6 +77,7 @@ import {
   type RefObject,
 } from "react";
 
+import { msg } from "../i18n";
 import type {
   AgentCommand,
   AgentEffort,
@@ -142,7 +144,8 @@ const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
   icon,
 });
 
-// The access levels (catalog.ts), each with its icon.
+// The access levels (catalog.ts), each with its icon, in English: show the label and description
+// with `t`.
 export const accessOptions: Record<AgentPermission, PickerOption> = {
   manual: access("manual", <Hand />),
   edit: access("edit", <FilePen />),
@@ -296,7 +299,7 @@ function ImageRef({ imageKey: key }: { imageKey: string }) {
               // Its room is kept while hidden, so hovering doesn't move the text after the chip.
               <button
                 type="button"
-                aria-label={`Remove image ${i + 1}`}
+                aria-label={t("Remove image {{number}}", { number: i + 1 })}
                 onClick={() => removeImage(i)}
                 className="invisible inline-flex group-hover/chip:visible hover:text-foreground"
               >
@@ -314,7 +317,7 @@ function ImageRef({ imageKey: key }: { imageKey: string }) {
         )
       }
     >
-      {image ? `Image ${i + 1}` : "Removed image"}
+      {image ? t("Image {{number}}", { number: i + 1 }) : t("Removed image")}
     </Chip>
   );
 }
@@ -359,7 +362,7 @@ function CiteRef({ node, updateAttributes, editor }: NodeViewProps) {
         </span>
         <button
           type="button"
-          aria-label="Edit comment"
+          aria-label={t("Edit comment")}
           onClick={(e) =>
             setEditing(e.currentTarget.closest("[data-chip]")!.getBoundingClientRect())
           }
@@ -655,10 +658,17 @@ function formats(event: KeyboardEvent) {
 const imageShare = ({ maxImages, maxImageBytes, maxTotalBytes }: ImageCaps) =>
   Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));
 
-/** Supervised's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
+/**
+ * Supervised's description where its requests are denied, by why (`ComposerProps.manualDenied`),
+ * in English for `t`.
+ */
 const manualDenials = {
-  host: "Asks before edits and commands. This host's plxd can't show those requests, so they're denied.",
-  run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
+  host: msg(
+    "Asks before edits and commands. This host's plxd can't show those requests, so they're denied.",
+  ),
+  run: msg(
+    "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
+  ),
 };
 
 /** What a `/`, `@`, or `#` at the start of a word, up to the cursor, is typing: its kind, what
@@ -815,6 +825,7 @@ interface MenuEntry {
   where?: ReactNode;
   /** Muted text at the row's end, such as how long ago a thread was prompted. */
   meta?: string;
+  /** Its heading, in English, shown with `t`. */
   group: "Controls" | "Commands and skills" | "Computers" | "Threads" | "Files" | "Pull requests";
   /** Shown dimmed, and picking it does nothing. `detail` says why. */
   disabled?: boolean;
@@ -1130,7 +1141,7 @@ export function Composer({
   // Why an image, file, or thread wasn't added, in a notification an add that takes clears.
   const setAttachError = (why?: string) =>
     why
-      ? notify({ key: attachKey, tone: "error", title: "Couldn't attach that", body: why })
+      ? notify({ key: attachKey, tone: "error", title: t("Couldn't attach that"), body: why })
       : dismiss(attachKey);
   // Whether a sidebar row is dragged over the box, which outlines it.
   const [dropOver, setDropOver] = useState(false);
@@ -1155,7 +1166,7 @@ export function Composer({
   const blocked: Partial<Record<Provider, string>> = { ...unavailable };
   for (const i of catalog.instances)
     if (!i.enabled && !(started && i === run))
-      blocked[i.id] ??= `${i.name} is turned off in Settings > Providers.`;
+      blocked[i.id] ??= t("{{name}} is turned off in Settings > Providers.", { name: i.name });
   // Any instance whose models aren't unavailable: an open run moves to it, a new thread starts there.
   const choices = catalog.models.filter((m) => !blocked[m.provider]);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
@@ -1164,7 +1175,7 @@ export function Composer({
     run &&
     (catalog.known.find((m) => m.provider === run.id && m.id === started.model) ?? {
       id: started.model ?? "",
-      name: started.model ?? "Default model",
+      name: started.model ?? t("Default model"),
       provider: run.id,
       contexts: [],
     });
@@ -1276,7 +1287,7 @@ export function Composer({
     (run?.kind === "claude" || run?.kind === "codex");
   const compactNow = async () => {
     const failed = await onSend!("/compact", options, [], []);
-    if (failed) notify({ tone: "error", title: "Couldn't compact the context", body: failed });
+    if (failed) notify({ tone: "error", title: t("Couldn't compact the context"), body: failed });
   };
   // The `/`, `@`, and `#` menus: what's typed, the lists, and the highlighted row. Esc closes the
   // menu until what opened it goes.
@@ -1436,37 +1447,38 @@ export function Composer({
       .focus()
       .command(({ tr }) => !!tr.insertText(text, at.from, at.to))
       .run();
-  // The composer's own controls, as commands where they're shown and can change.
-  const openControl = (label: string) =>
-    controls.current?.querySelector<HTMLButtonElement>(`[aria-label^="${label}"]`)?.click();
+  // The composer's own controls, as commands where they're shown and can change, found by the class
+  // each control's button (or the text in it) has, since their labels are translated.
+  const openControl = (selector: string) =>
+    controls.current?.querySelector(selector)?.closest("button")?.click();
   const own =
     !run || optionsDisabled
       ? []
       : [
           model && {
             name: "model",
-            description: "Pick the model",
+            description: t("Pick the model"),
             icon: <Cpu />,
-            act: () => openControl("Model:"),
+            act: () => openControl(".composer-model"),
           },
           efforts && {
             name: "effort",
-            description: "Set the reasoning effort",
+            description: t("Set the reasoning effort"),
             icon: <Brain />,
-            act: () => openControl("Reasoning effort:"),
+            act: () => openControl(".composer-effort"),
           },
           efforts &&
             hasFast && {
               name: "fast",
-              description: fast ? "Turn fast mode off" : "Turn fast mode on",
+              description: fast ? t("Turn fast mode off") : t("Turn fast mode on"),
               icon: <Zap />,
               act: () => setFast(!fast),
             },
           permissions.length > 1 && {
             name: "permissions",
-            description: "Choose what it may do without asking",
+            description: t("Choose what it may do without asking"),
             icon: <LockOpen />,
-            act: () => openControl("Access:"),
+            act: () => openControl(".composer-access"),
           },
         ].filter((c) => !!c);
   let entries: MenuEntry[] = [];
@@ -1478,7 +1490,7 @@ export function Composer({
         description: c.description,
         detail: c.description,
         icon: c.icon,
-        group: "Controls",
+        group: msg("Controls"),
         pick: () => {
           replaceTrigger(trigger, "");
           c.act();
@@ -1500,7 +1512,7 @@ export function Composer({
           hint: c.argumentHint,
           icon: <SquareSlash />,
           badge: at > 0 ? c.name.slice(0, at) : undefined,
-          group: "Commands and skills",
+          group: msg("Commands and skills"),
           pick: () => replaceTrigger(trigger, `${c.text} `),
         };
       }),
@@ -1529,7 +1541,7 @@ export function Composer({
         ),
         detail: repo?.path,
         meta: look.age,
-        group: "Threads",
+        group: msg("Threads"),
         pick: () => addThreads([id], trigger),
       };
     });
@@ -1539,23 +1551,27 @@ export function Composer({
       .map((o): MenuEntry => {
         const on = workOn[o.host.id];
         const why = !o.capable
-          ? "Needs a newer plxd"
+          ? t("Needs a newer plxd")
           : on === undefined
-            ? "Checking…"
+            ? t("Checking…")
             : on
               ? undefined
-              : "Agents can't work here";
+              : t("Agents can't work here");
         return {
           key: `computer:${o.relayId}`,
           label: o.host.name,
           description: why,
           detail: !o.capable
-            ? `${o.host.name}'s plxd is too old to take work from your other computers.`
+            ? t("{{name}}'s plxd is too old to take work from your other computers.", {
+                name: o.host.name,
+              })
             : why && on === false
-              ? `Turn on ${o.host.name} under Agents can work here, in Settings > Connections.`
+              ? t("Turn on {{name}} under Agents can work here, in Settings > Connections.", {
+                  name: o.host.name,
+                })
               : undefined,
           icon: hostIcon(o.host),
-          group: "Computers",
+          group: msg("Computers"),
           disabled: !!why,
           pick: () =>
             addMention("computerRef", { computer: o.relayId, name: o.host.name }, trigger),
@@ -1583,7 +1599,7 @@ export function Composer({
           </>
         ),
         meta: look.age,
-        group: "Threads",
+        group: msg("Threads"),
         pick: () =>
           addMention(
             "remoteThreadRef",
@@ -1600,7 +1616,7 @@ export function Composer({
         description: slash > 0 ? path.slice(0, slash) : undefined,
         detail: path,
         icon: fileIcon(path),
-        group: "Files",
+        group: msg("Files"),
         pick: () => replaceTrigger(trigger, `@${path} `),
       };
     });
@@ -1619,14 +1635,14 @@ export function Composer({
       description: title(url),
       detail: title(url) || url,
       icon: <GitHubLogo />,
-      group: "Pull requests",
+      group: msg("Pull requests"),
       pick: () => replaceTrigger(trigger, `${url} `),
     }));
   }
   // What the menu still waits for, shown as a row of its own.
   const loading =
-    (wantsCommands && !loadedCommands && "Loading commands…") ||
-    (wantsPaths && !loadedPaths && "Loading files…") ||
+    (wantsCommands && !loadedCommands && t("Loading commands…")) ||
+    (wantsPaths && !loadedPaths && t("Loading files…")) ||
     undefined;
   const menuOpen =
     !!menus && !!trigger && trigger.from !== closedAt && (entries.length > 0 || !!loading);
@@ -1698,7 +1714,7 @@ export function Composer({
       // Only text, which is read now so a file that can't go is refused as it's added.
       let room = MAX_INLINE_BYTES - files.reduce((total, f) => total + f.size, 0);
       const taken: File[] = [];
-      let why = added.some(isImage) ? IMAGES_REFUSED : undefined;
+      let why = added.some(isImage) ? t(IMAGES_REFUSED) : undefined;
       for (const file of added.filter((f) => !isImage(f))) {
         const read = await readTextFile(file, room);
         if ("error" in read) why ??= read.error;
@@ -1718,11 +1734,14 @@ export function Composer({
     const picked = added.filter(isImage);
     setAttachError(
       tooLarge &&
-        `${tooLarge.name} is larger than ${sizeOf(uploadBytes!.maxBytes)}, the most a file can be.`,
+        t("{{name}} is larger than {{size}}, the most a file can be.", {
+          name: tooLarge.name,
+          size: sizeOf(uploadBytes!.maxBytes),
+        }),
     );
     if (picked.length === 0) return [];
     if (!imageCaps) {
-      setAttachError("This host's plxd can't take images.");
+      setAttachError(t("This host's plxd can't take images."));
       return [];
     }
     const { maxImages } = imageCaps;
@@ -1730,7 +1749,13 @@ export function Composer({
     const share = imageShare(imageCaps);
     const read = await Promise.all(picked.slice(0, room).map((f) => readImage(f, share)));
     const errors = read.filter((r) => typeof r === "string");
-    if (picked.length > room) errors.push(`A message takes at most ${maxImages} images.`);
+    if (picked.length > room)
+      errors.push(
+        t("A message takes at most {{count}} images.", {
+          count: maxImages,
+          defaultValue_one: "A message takes at most {{count}} image.",
+        }),
+      );
     setAttachError(errors[0]);
     const ok = read.filter((r) => typeof r !== "string");
     setImages((all) => [...all, ...ok].slice(0, maxImages));
@@ -1783,7 +1808,9 @@ export function Composer({
       editor.setEditable(false);
       const paths = await uploadFiles(host!, uploads, uploadBytes?.chunkBytes, (file, share) =>
         setSending({ file, share }),
-      ).catch((error: unknown) => `A file couldn't be read: ${String(error)}`);
+      ).catch((error: unknown) =>
+        t("A file couldn't be read: {{error}}", { error: String(error) }),
+      );
       if (!editor.isDestroyed) editor.setEditable(true);
       setUploading(false);
       // A file that stopped partway keeps its bar, marked failed (PLX-835).
@@ -1791,14 +1818,14 @@ export function Composer({
         typeof paths === "string" && s && s.share < 1 ? { ...s, failed: true } : undefined,
       );
       if (typeof paths === "string")
-        return notify({ tone: "error", title: "Couldn't upload the files", body: paths });
+        return notify({ tone: "error", title: t("Couldn't upload the files"), body: paths });
       sentText = withFiles(sentText, paths);
     }
     if (inlineFiles && sentFiles.length > 0) {
       const read = await Promise.all(sentFiles.map((f) => readTextFile(f)));
       const failed = read.find((r) => "error" in r);
       if (failed && "error" in failed)
-        return notify({ tone: "error", title: "Couldn't attach the files", body: failed.error });
+        return notify({ tone: "error", title: t("Couldn't attach the files"), body: failed.error });
       const texts = read.map((r) => ("text" in r ? r.text : ""));
       sentText = withInlineFiles(
         sentText,
@@ -1836,7 +1863,7 @@ export function Composer({
       keepThreadCap();
       keepMentionCap();
       setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
-      if (failed) notify({ tone: "error", title: "Couldn't send the message", body: failed });
+      if (failed) notify({ tone: "error", title: t("Couldn't send the message"), body: failed });
     }
   };
 
@@ -1846,7 +1873,7 @@ export function Composer({
     const failed = await onStop?.();
     if (failed) {
       setStopping(false);
-      notify({ tone: "error", title: "Couldn't stop the thread", body: failed });
+      notify({ tone: "error", title: t("Couldn't stop the thread"), body: failed });
     } else if (back && !editor.isDestroyed) {
       // Back ahead of anything typed meanwhile, as plain lines: they send as the same Markdown.
       // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
@@ -1892,8 +1919,8 @@ export function Composer({
     disabledReason ??
     hint ??
     (newThread
-      ? "Build a feature, fix a bug, paste an image, use /skills, @files or threads"
-      : "Reply, add detail, or steer what it does next");
+      ? t("Build a feature, fix a bug, paste an image, use /skills, @files or threads")
+      : t("Reply, add detail, or steer what it does next"));
   // A known /skill, an @ naming one of the thread's files, or the URL of one of its pull requests
   // becomes a chip.
   const known = (token: string) =>
@@ -1931,7 +1958,7 @@ export function Composer({
       attributes: {
         id: "composer-input",
         role: "textbox",
-        "aria-label": "Message",
+        "aria-label": t("Message"),
         "aria-multiline": "true",
         "aria-placeholder": placeholder,
         "aria-autocomplete": "list",
@@ -2118,13 +2145,16 @@ export function Composer({
           if (image === carried && !added.includes(carried)) {
             // As an added file is: an even share of the total cap each.
             const why = inlineFiles
-              ? IMAGES_REFUSED
+              ? t(IMAGES_REFUSED)
               : !imageCaps
-                ? "This host's plxd can't take images."
+                ? t("This host's plxd can't take images.")
                 : images.length + added.length >= imageCaps.maxImages
-                  ? `A message takes at most ${imageCaps.maxImages} images.`
+                  ? t("A message takes at most {{count}} images.", {
+                      count: imageCaps.maxImages,
+                      defaultValue_one: "A message takes at most {{count}} image.",
+                    })
                   : carried.data.length > imageShare(imageCaps)
-                    ? "That image is too large to send."
+                    ? t("That image is too large to send.")
                     : undefined;
             if (why) {
               refused = why;
@@ -2285,18 +2315,19 @@ export function Composer({
   // One permission is no choice, so there's nothing to show.
   const accessPicker = permissions.length > 1 && (
     <Picker
-      label="Access"
+      label={t("Access")}
       value={permission}
       onChange={(value) => {
         const picked = value as AgentPermission;
         setPermission(picked);
         if (run && started && target === backend && picked !== permission) onPermission?.(picked);
       }}
-      options={permissions.map((p) =>
-        p === "manual" && manualDenied
-          ? { ...accessOptions[p], description: manualDenials[manualDenied] }
-          : accessOptions[p],
-      )}
+      options={permissions.map((p) => {
+        const option = accessOptions[p];
+        const description =
+          p === "manual" && manualDenied ? manualDenials[manualDenied] : option.description;
+        return { ...option, label: t(option.label), description: description && t(description) };
+      })}
       panelClassName="w-[25rem]"
       className="composer-access"
     />
@@ -2413,12 +2444,12 @@ export function Composer({
                   role="listbox"
                   aria-label={
                     trigger.kind === "/"
-                      ? "Commands"
+                      ? t("Commands")
                       : trigger.kind === "#"
-                        ? "Pull requests"
+                        ? t("Pull requests")
                         : entries[0] && entries[0].group !== "Files"
-                          ? "Threads and files"
-                          : "Files"
+                          ? t("Threads and files")
+                          : t("Files")
                   }
                   className="max-h-72 overflow-y-auto p-1.5"
                 >
@@ -2429,7 +2460,7 @@ export function Composer({
                           role="presentation"
                           className="px-2.5 pt-2 pb-1 text-meta font-medium text-faint-foreground"
                         >
-                          {entry.group}
+                          {t(entry.group)}
                         </div>
                       )}
                       <div
@@ -2499,9 +2530,9 @@ export function Composer({
                   </p>
                   <span aria-hidden className="flex shrink-0 items-center gap-2.5">
                     {[
-                      ["↑↓", "move"],
-                      ["↵", "pick"],
-                      ["esc", "close"],
+                      ["↑↓", t("move")],
+                      ["↵", t("pick")],
+                      ["esc", t("close")],
                     ].map(([key, what]) => (
                       <span key={key} className="flex items-center gap-1">
                         <kbd className="rounded-sm border border-border px-1 font-sans text-caption leading-4">
@@ -2526,19 +2557,19 @@ export function Composer({
                   <span key={i} className="relative">
                     <button
                       type="button"
-                      aria-label={`Open image ${i + 1}`}
+                      aria-label={t("Open image {{number}}", { number: i + 1 })}
                       onClick={() => setShown(image)}
                       className="block cursor-zoom-in rounded-xl"
                     >
                       <img
                         src={imageUrl(image)}
-                        alt={`Image ${i + 1}`}
+                        alt={t("Image {{number}}", { number: i + 1 })}
                         className="size-14 rounded-xl border border-border object-cover"
                       />
                     </button>
                     <button
                       type="button"
-                      aria-label={`Remove image ${i + 1}`}
+                      aria-label={t("Remove image {{number}}", { number: i + 1 })}
                       onClick={() => removeImage(i)}
                       className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
                     >
@@ -2556,7 +2587,9 @@ export function Composer({
                   />
                 ))}
                 {files.length > 0 && !sendsFiles && (
-                  <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
+                  <span className="text-meta text-faint-foreground">
+                    {t("Not sent to the agent yet")}
+                  </span>
                 )}
               </fieldset>
             )}
@@ -2564,7 +2597,7 @@ export function Composer({
               <Lightbox
                 images={images.map((image, i) => ({
                   src: imageUrl(image),
-                  name: `Image ${i + 1}`,
+                  name: t("Image {{number}}", { number: i + 1 }),
                 }))}
                 index={images.indexOf(shown)}
                 onIndex={(i) => setShown(images[i])}
@@ -2622,8 +2655,8 @@ export function Composer({
               )}
               <button
                 type="button"
-                aria-label="Attach files"
-                title="Attach files"
+                aria-label={t("Attach files")}
+                title={t("Attach files")}
                 onClick={() => filePicker.current?.click()}
                 className="composer-action composer-attach"
               >
@@ -2631,8 +2664,8 @@ export function Composer({
               </button>
               <button
                 type="button"
-                aria-label="Voice input"
-                title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
+                aria-label={t("Voice input")}
+                title={voice.hotkey ? t("Voice input (hold Fn)") : t("Voice input")}
                 disabled={!onSend || !!disabledReason || uploading}
                 onClick={voice.start}
                 className="composer-action composer-mic"
@@ -2644,24 +2677,31 @@ export function Composer({
                 <button
                   type="button"
                   aria-pressed={!keepHistory}
-                  aria-label={`Compact ${tokensShort(stale)} tokens of history before sending`}
+                  aria-label={t("Compact {{tokens}} tokens of history before sending", {
+                    tokens: tokensShort(stale),
+                  })}
                   title={
                     keepHistory
-                      ? `Next send keeps all ${tokensShort(stale)} tokens. Click to compact first.`
-                      : `Next send compacts ${tokensShort(stale)} tokens first. Click to keep the full history.`
+                      ? t("Next send keeps all {{tokens}} tokens. Click to compact first.", {
+                          tokens: tokensShort(stale),
+                        })
+                      : t(
+                          "Next send compacts {{tokens}} tokens first. Click to keep the full history.",
+                          { tokens: tokensShort(stale) },
+                        )
                   }
                   onClick={() => setKeepHistory((keep) => !keep)}
                   className="composer-compact"
                 >
                   <Minimize2 aria-hidden />
-                  <span className="composer-detail">{keepHistory ? "Keep" : "Compact"}</span>
+                  <span className="composer-detail">{keepHistory ? t("Keep") : t("Compact")}</span>
                   <span className="text-muted-foreground">{tokensShort(stale)}</span>
                 </button>
               )}
               {showStop ? (
                 <button
                   type="button"
-                  aria-label={stopping ? "Stopping" : "Stop"}
+                  aria-label={stopping ? t("Stopping") : t("Stop")}
                   disabled={stopping}
                   onClick={() => void stop()}
                   className="composer-pop composer-action composer-stop"
@@ -2675,7 +2715,7 @@ export function Composer({
               ) : (
                 <button
                   type="button"
-                  aria-label="Send"
+                  aria-label={t("Send")}
                   aria-busy={!!sendWaits}
                   title={sendWaits}
                   disabled={!canSend}

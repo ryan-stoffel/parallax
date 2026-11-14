@@ -1,6 +1,8 @@
 // Images sent with a message (PLX-193, decision 0026): read from a pasted, dropped, or picked
 // file into what plxd takes, and fetched back for the transcript. Also an orchestrator's or repo's
 // icon image (PLX-341, decision 0038).
+import { t } from "i18next";
+
 import type { ConnectionState } from "../preload/bridge";
 import type { ImageMediaType, PromptImage, RepoLogo } from "../protocol/generated/protocol";
 
@@ -40,13 +42,14 @@ const maxEdge = 2000;
  * transparency. Resolves to why not, for people, when it isn't an image plxd takes or can't fit.
  */
 export async function readImage(file: Blob, maxBytes: number): Promise<PromptImage | string> {
-  if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be sent.";
+  if (!mediaTypes.includes(file.type))
+    return t("Only PNG, JPEG, GIF, and WebP images can be sent.");
   let bitmap: ImageBitmap | undefined;
   try {
     bitmap = await createImageBitmap(file);
     return await fit(file, bitmap, maxBytes);
   } catch {
-    return "That image couldn't be read.";
+    return t("That image couldn't be read.");
   } finally {
     // Its decoded pixels are megabytes for a photo: free them now, not whenever GC runs.
     bitmap?.close();
@@ -76,7 +79,7 @@ async function fit(
     const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
     if (image.data.length <= maxBytes) return image;
   }
-  return "That image is too large to send.";
+  return t("That image is too large to send.");
 }
 
 /** The `iconImages` cap on an icon image's base64 (0038). Undefined while the host isn't connected, or when its plxd keeps no icon images. */
@@ -97,7 +100,8 @@ const iconEdge = 128;
  * why not, for people, when it isn't an image plxd takes, can't be read, or is over `maxBytes`.
  */
 export async function readIcon(file: Blob, maxBytes: number): Promise<PromptImage | string> {
-  if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be used.";
+  if (!mediaTypes.includes(file.type))
+    return t("Only PNG, JPEG, GIF, and WebP images can be used.");
   let bitmap: ImageBitmap | undefined;
   try {
     bitmap = await createImageBitmap(file);
@@ -118,9 +122,9 @@ export async function readIcon(file: Blob, maxBytes: number): Promise<PromptImag
       iconEdge,
     );
     const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
-    return image.data.length <= maxBytes ? image : "That image is too large for an icon.";
+    return image.data.length <= maxBytes ? image : t("That image is too large for an icon.");
   } catch {
-    return "That image couldn't be read.";
+    return t("That image couldn't be read.");
   } finally {
     bitmap?.close();
   }

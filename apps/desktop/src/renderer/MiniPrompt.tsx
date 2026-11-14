@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ArrowUp, Check, ChevronDown, LoaderCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
@@ -74,15 +75,15 @@ export function MiniPrompt({
       return notify({
         key: "knowledge",
         tone: "error",
-        title: "Couldn't send the change",
+        title: t("Couldn't send the change"),
         body: describeError(answer.error),
       });
     setText("");
     notify({
       key: "knowledge",
       tone: "info",
-      title: "Sent",
-      body: "The orchestrator's rewrite shows up as a proposal.",
+      title: t("Sent"),
+      body: t("The orchestrator's rewrite shows up as a proposal."),
     });
     box.current?.focus();
   };
@@ -98,13 +99,13 @@ export function MiniPrompt({
       >
         <textarea
           ref={box}
-          aria-label="Change knowledge"
+          aria-label={t("Change knowledge")}
           placeholder={
             orchestratorRun
               ? large
-                ? "Tell the orchestrator what changed, what to remember, or what to forget"
-                : "Change what it knows, in plain words"
-              : "Start the orchestrator to change what it knows"
+                ? t("Tell the orchestrator what changed, what to remember, or what to forget")
+                : t("Change what it knows, in plain words")
+              : t("Start the orchestrator to change what it knows")
           }
           rows={large ? 2 : 1}
           value={text}
@@ -121,7 +122,7 @@ export function MiniPrompt({
         />
         <button
           type="submit"
-          aria-label="Send"
+          aria-label={t("Send")}
           disabled={!canSend}
           className={`send-sky grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground ${large ? "size-9" : "size-7"}`}
         >
@@ -174,7 +175,7 @@ function ModelPick({
         type="button"
         popoverTarget={id}
         aria-haspopup="listbox"
-        aria-label={`Model: ${value.name}`}
+        aria-label={t("Model: {{model}}", { model: value.name })}
         className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3"
       >
         {Logo && <Logo aria-hidden />}
@@ -192,7 +193,7 @@ function ModelPick({
         {providers.length > 1 && (
           <div
             role="tablist"
-            aria-label="Provider"
+            aria-label={t("Provider")}
             className="mb-1 flex gap-0.5 border-b border-border px-0.5 pb-1"
           >
             {providers.map((p) => {
@@ -214,7 +215,7 @@ function ModelPick({
             })}
           </div>
         )}
-        <div role="listbox" aria-label="Model">
+        <div role="listbox" aria-label={t("Model")}>
           {list.map((m) => {
             const on = m.id === value.id && m.provider === value.provider;
             return (
@@ -230,7 +231,11 @@ function ModelPick({
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body hover:bg-hover"
               >
                 <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                {isNew(m) && <span className="text-caption text-accent">New</span>}
+                {isNew(m) && (
+                  <span className="text-caption text-accent">
+                    {t("New", { context: "model badge" })}
+                  </span>
+                )}
                 {on && <Check aria-hidden className="size-3.5 text-accent" />}
               </button>
             );

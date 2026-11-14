@@ -1,5 +1,6 @@
 // A pull request's Markdown as GitHub writes it, for the desktop's PR panel and the mobile app's:
 // which images load, its HTML images as Markdown ones, and a screenshot's name. Pure.
+import { t } from "i18next";
 
 /** A pull request's number, from its URL. */
 export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
@@ -39,5 +40,5 @@ const images = (text: string) =>
 /** A screenshot's name: its alt text, or without a useful one, its file's name. */
 export function shotName(src: string, alt: string): string {
   if (alt.trim() && alt.trim().toLowerCase() !== "image") return alt.trim();
-  return decodeURIComponent(new URL(src).pathname.split("/").at(-1) || "Screenshot");
+  return decodeURIComponent(new URL(src).pathname.split("/").at(-1) || t("Screenshot"));
 }

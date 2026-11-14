@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Info } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
@@ -69,7 +70,7 @@ export function WaitingBar({
     setStopping(false);
     const failed = answers.find((answer) => "error" in answer);
     if (failed && "error" in failed)
-      notify({ tone: "error", title: "Couldn't stop waiting", body: failed.error.message });
+      notify({ tone: "error", title: t("Couldn't stop waiting"), body: failed.error.message });
   }
 
   const stopButton = (
@@ -79,7 +80,7 @@ export function WaitingBar({
       onClick={() => void stop()}
       className="shrink-0 rounded-md px-2 py-0.5 font-medium text-foreground hover:bg-hover disabled:opacity-40"
     >
-      {stopping ? "Stopping…" : "Stop"}
+      {stopping ? t("Stopping…") : t("Stop")}
     </button>
   );
   // As the title counts them: the subagents the tab beside it lists only when they're all there is.
@@ -88,13 +89,13 @@ export function WaitingBar({
   const kindsShown = new Set(counted.map((item) => item.kind));
   const verb =
     kindsShown.size === 1 && kindsShown.has("command")
-      ? "Running"
+      ? t("Running")
       : kindsShown.size === 1 && kindsShown.has("pull request")
-        ? "Monitoring"
-        : "Waiting";
+        ? t("Monitoring")
+        : t("Waiting");
   // The pull requests' numbers show as their chips, not in the title or labels.
   const title =
-    counted.length === 1 && watching.length === 1 ? "Monitoring pull request" : shown.title;
+    counted.length === 1 && watching.length === 1 ? t("Monitoring pull request") : shown.title;
   const labels =
     shown.labels &&
     others
@@ -103,7 +104,7 @@ export function WaitingBar({
       .join(", ");
 
   return (
-    <section aria-label="Waiting on" className="min-w-0 text-body">
+    <section aria-label={t("Waiting on")} className="min-w-0 text-body">
       {compact ? (
         <button
           type="button"
@@ -135,7 +136,7 @@ export function WaitingBar({
           <button
             type="button"
             popoverTarget={`${id}-details`}
-            aria-label="What it waits on"
+            aria-label={t("What it waits on")}
             aria-haspopup="dialog"
             className="ml-auto grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
           >
@@ -148,7 +149,7 @@ export function WaitingBar({
         id={`${id}-details`}
         popover="auto"
         role="dialog"
-        aria-label="Waiting on"
+        aria-label={t("Waiting on")}
         className={
           compact
             ? `inset-auto m-0 mb-2 rounded-xl border border-border bg-surface p-3 text-body text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
@@ -156,20 +157,24 @@ export function WaitingBar({
         }
       >
         <p className="mb-2 text-muted-foreground">
-          The agent picks up when one of these ends or changes.
+          {t("The agent picks up when one of these ends or changes.")}
         </p>
         <ul className="max-h-60 space-y-1.5 overflow-y-auto">
           {shown.items
             .filter((item) => item.kind !== "pull request")
             .map((item, i) => (
               <li key={i} className="flex min-w-0 gap-2">
-                <span className="w-20 shrink-0 text-muted-foreground capitalize">{item.kind}</span>
+                <span className="w-20 shrink-0 text-muted-foreground capitalize">
+                  {kindName(item.kind)}
+                </span>
                 <span className="min-w-0 break-words">{item.label}</span>
               </li>
             ))}
           {watching.map((url) => (
             <li key={url} className="flex min-w-0 items-center gap-2">
-              <span className="w-20 shrink-0 text-muted-foreground capitalize">Pull request</span>
+              <span className="w-20 shrink-0 text-muted-foreground capitalize">
+                {t("Pull request")}
+              </span>
               {pullRequest(url)}
               <span className="min-w-0 truncate text-muted-foreground">
                 {pullRequests?.get(url)?.pr?.title}
@@ -181,6 +186,23 @@ export function WaitingBar({
       </div>
     </section>
   );
+}
+
+/** An item's kind as `presentWaiting` names it in English ("command"), in the current language. */
+function kindName(kind: string) {
+  const context = "kind of background task";
+  switch (kind) {
+    case "subagent":
+      return t("subagent", { context });
+    case "command":
+      return t("command", { context });
+    case "monitor":
+      return t("monitor", { context });
+    case "pull request":
+      return t("pull request", { context });
+    default:
+      return kind;
+  }
 }
 
 /**
@@ -222,7 +244,10 @@ function FittingChips({ details, children }: { details: string; children: ReactE
           type="button"
           popoverTarget={details}
           aria-haspopup="dialog"
-          aria-label={`${wrapped} more pull requests`}
+          aria-label={t("{{count}} more pull requests", {
+            count: wrapped,
+            defaultValue_one: "{{count}} more pull request",
+          })}
           className="shrink-0 rounded-sm bg-hover px-1.5 text-foreground tabular-nums hover:brightness-125"
         >
           +{wrapped}

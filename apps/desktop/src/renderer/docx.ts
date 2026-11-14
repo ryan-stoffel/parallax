@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 /**
  * A .docx as the side panel shows it (PLX-755), view-only: its body drawn as HTML by docx-preview
  * (PLX-1025), with Word's styles, fonts, list numbering, tables, and images, on pages its first
@@ -132,7 +134,7 @@ export async function openDocx(bytes: Uint8Array): Promise<Docx> {
     useBase64URL: true,
   };
   const parsed = await parseAsync(bytes, options).catch(() => {
-    throw new Error("This file has no Word document in it.");
+    throw new Error(t("This file has no Word document in it."));
   });
   const nodes = await renderDocument(parsed, options);
   const sections = nodes.filter((node): node is HTMLElement => node.nodeName === "SECTION");

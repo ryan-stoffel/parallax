@@ -1,6 +1,8 @@
 // What the phone needs of an orchestrator (0093): its children with their status, the count its row
 // folds them under, what a thread links back to, where a new one can be made, and starting one. No
 // React Native here, so it's tested without it.
+import { t } from "i18next";
+
 import type { AgentRun, Orchestrator, Repo, Thread } from "../../desktop/src/protocol/generated/protocol";
 import { childOrder, runAttention, type Attention } from "../../desktop/src/renderer/attention";
 import { describeError } from "../../desktop/src/renderer/errors";
@@ -63,7 +65,7 @@ export function parentLink(state: ThreadsState, thread: Thread): { name: string;
   const orchestrator = state.orchestrators.find((o) => o.id === id);
   if (orchestrator?.run && orchestrator.run !== thread.id) return { name: orchestrator.name, runId: orchestrator.run };
   const parent = parentOf(state, thread);
-  return parent && { name: state.titles[parent.id] ?? "Thread", runId: parent.id };
+  return parent && { name: state.titles[parent.id] ?? t("Thread"), runId: parent.id };
 }
 
 /** Whether a computer can run an orchestrator now. Offline, its capabilities are gone. */
@@ -88,7 +90,7 @@ export async function startOrchestrator(view: ThreadsView, orchestrator: string,
     if (typeof accounts === "string") return accounts;
     const first = accounts[0];
     if (!first)
-      return "No account can run the orchestrator yet. Sign in to Claude Code, or add an API key, then try again.";
+      return t("No account can run the orchestrator yet. Sign in to Claude Code, or add an API key, then try again.");
     error = await view.startOrchestrator(orchestrator, runId, prompt, [], { account: first.account });
   }
   return error && describeError(error);

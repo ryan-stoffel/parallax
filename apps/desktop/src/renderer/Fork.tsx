@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { GitFork } from "lucide-react";
 import { createContext, useContext, useId, useRef, useState, type RefObject } from "react";
 
@@ -46,7 +47,7 @@ export function ForkMenu({
     return found ? logoOf(found) : kindOf(p).Logo;
   };
   const kept = catalog.known.find((m) => m.provider === run.backend && m.id === (run.model ?? ""));
-  const keptName = kept?.name ?? run.model ?? "the current model";
+  const keptName = kept?.name ?? run.model;
   const others = catalog.models.filter((m) => m !== kept && instance(m.provider)?.enabled);
   const KeptLogo = logo(run.backend);
 
@@ -58,7 +59,7 @@ export function ForkMenu({
     if (failed)
       notify({
         tone: "error",
-        title: "Couldn't fork the thread",
+        title: t("Couldn't fork the thread"),
         body: forkError(failed, isRunning(run.status)),
       });
   };
@@ -67,7 +68,7 @@ export function ForkMenu({
     <Menu
       ref={menu}
       id={id}
-      label="Fork"
+      label={t("Fork")}
       align={align}
       className="w-64 p-1 text-body"
       onBeforeToggle={(e) => e.newState === "open" && setOpen(true)}
@@ -76,7 +77,7 @@ export function ForkMenu({
       {open && (
         <>
           <p className="px-2 pt-1 pb-1.5 text-meta font-medium text-faint-foreground">
-            Fork into a new thread
+            {t("Fork into a new thread")}
           </p>
           <button
             type="button"
@@ -86,13 +87,15 @@ export function ForkMenu({
             className={`${menuItem} disabled:opacity-50`}
           >
             <KeptLogo aria-hidden />
-            <span className="truncate">Keep {keptName}</span>
+            <span className="truncate">
+              {keptName ? t("Keep {{model}}", { model: keptName }) : t("Keep the current model")}
+            </span>
           </button>
           {others.length > 0 && (
             <>
               <div className="my-1 h-px bg-border" />
               <p className="px-2 pt-0.5 pb-1 text-meta font-medium text-faint-foreground">
-                Or pick another model
+                {t("Or pick another model")}
               </p>
               <div className="max-h-56 overflow-y-auto">
                 {others.map((m) => {
@@ -149,8 +152,8 @@ export function ForkButton({ turnId }: { turnId?: string }) {
     <>
       <button
         type="button"
-        aria-label="Fork from here"
-        title="Fork from here"
+        aria-label={t("Fork from here")}
+        title={t("Fork from here")}
         popoverTarget={id}
         className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
       >

@@ -3,6 +3,7 @@
 // thread's page, the repository's icon and a greeting over the message box that starts it.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { ChevronDown, ChevronLeft, Layers, MonitorSmartphone, Plus, Search, SquareDashed } from "lucide-react-native";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
@@ -160,15 +161,15 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
           importantForAccessibility={step !== 0 ? "no-hide-descendants" : "auto"}
         >
           <T accessibilityRole="header" style={styles.title}>
-            New thread
+            {t("New thread")}
           </T>
           <View style={[styles.search, { backgroundColor: c.selected }]}>
             <Icon icon={Search} size={16} color={c.faintForeground} />
             <TextInput
-              accessibilityLabel="Search repositories"
+              accessibilityLabel={t("Search repositories")}
               value={query}
               onChangeText={setQuery}
-              placeholder="Search repositories"
+              placeholder={t("Search repositories")}
               placeholderTextColor={c.faintForeground}
               autoCorrect={false}
               autoCapitalize="none"
@@ -179,7 +180,7 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
           <Section>
             {names.length === 0 && (
               <T muted style={{ padding: 16, fontSize: 14 }}>
-                {q ? "No repository matches." : "No computer has a repository yet."}
+                {q ? t("No repository matches.") : t("No computer has a repository yet.")}
               </T>
             )}
             {names.map((name, i) => {
@@ -189,7 +190,7 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
                   key={name}
                   leading={<RepoIcon repo={at[0]!.repo} shared={shared} size={28} />}
                   title={name}
-                  detail={at.length === 1 ? at[0]!.computer.machine.name : `${at.length} computers`}
+                  detail={at.length === 1 ? at[0]!.computer.machine.name : t("{{count}} computers", { count: at.length, defaultValue_one: "{{count}} computer" })}
                   label={name}
                   last={i === names.length - 1}
                   onPress={() => pickRepo(name)}
@@ -200,9 +201,9 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
           <Section>
             <Choice
               leading={<Icon icon={SquareDashed} size={24} color={c.faintForeground} />}
-              title="No repo"
-              detail="A thread in a folder of its own"
-              label="No repo"
+              title={t("No repo")}
+              detail={t("A thread in a folder of its own")}
+              label={t("No repo")}
               last
               onPress={() => pickRepo(null)}
             />
@@ -211,9 +212,9 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
             <Section>
               <Choice
                 leading={<Icon icon={Layers} size={24} color={c.faintForeground} />}
-                title="New orchestrator"
-                detail="A focused chat where agents coordinate work"
-                label="New orchestrator"
+                title={t("New orchestrator")}
+                detail={t("A focused chat where agents coordinate work")}
+                label={t("New orchestrator")}
                 last
                 onPress={() => {
                   void Haptics.selectionAsync();
@@ -234,7 +235,7 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
           <View style={styles.stepHeader}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Back to repositories"
+              accessibilityLabel={t("Back to repositories")}
               hitSlop={8}
               onPress={() => go(0)}
               style={({ pressed }) => [styles.back, { backgroundColor: pressed ? c.selected : c.hover }]}
@@ -243,10 +244,10 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
             </Pressable>
             <View style={{ flex: 1 }}>
               <T medium numberOfLines={1} style={{ fontSize: 17, fontWeight: "600" }}>
-                {picked ?? "No repo"}
+                {picked ?? t("No repo")}
               </T>
               <T faint style={{ fontSize: 13, lineHeight: 17 }}>
-                Which computer should it run on?
+                {t("Which computer should it run on?")}
               </T>
             </View>
           </View>
@@ -258,12 +259,12 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
                 title={computer.machine.name}
                 detail={[
                   repo && homeless(repo.path),
-                  computer.machine.id === defaultId && "Default",
-                  !computer.shownConnected && "Offline",
+                  computer.machine.id === defaultId && t("Default"),
+                  !computer.shownConnected && t("Offline"),
                 ]
                   .filter(Boolean)
                   .join(" · ")}
-                label={`${picked ?? "No repo"} on ${computer.machine.name}`}
+                label={t("{{repo}} on {{computer}}", { repo: picked ?? t("No repo"), computer: computer.machine.name })}
                 disabled={!computer.shownConnected}
                 last={i === places.length - 1}
                 onPress={() => pickComputer(computer.machine.id, repo?.id ?? noRepo)}
@@ -295,7 +296,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
   const computer = useComputer(hostId);
   const [draft, setDraft] = useState("");
   const repo = groupId === noRepo ? undefined : computer?.view.state.repos.find((r) => r.id === groupId);
-  const name = computer?.machine.name ?? "this computer";
+  const name = computer?.machine.name ?? t("this computer");
   const shared = useSharedIcons();
 
   useLayoutEffect(() => {
@@ -303,7 +304,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
   }, [navigation]);
 
   async function start({ text, images, options }: Start) {
-    if (!computer?.shownConnected) return `${name} isn't connected.`;
+    if (!computer?.shownConnected) return t("{{name}} isn't connected.", { name });
     const runId = uuidv7();
     const at = repo ? groupId : noRepo;
     const failed = await computer.view.start({
@@ -318,7 +319,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
     if (failed) {
       const kind = failed.data?.kind;
       return kind === "noDefaultAccount" || kind === "accountNotFound"
-        ? `${name} has no default account. Choose one in its Settings › Accounts.`
+        ? t("{{name}} has no default account. Choose one in its Settings › Accounts.", { name })
         : failed.message;
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -336,10 +337,10 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
         <Icon icon={MonitorSmartphone} size={48} color={c.faintForeground} />
         <T style={styles.greeting}>{greeting(new Date().getHours(), user?.given_name)}</T>
         <T muted style={{ fontSize: 15, lineHeight: 21, textAlign: "center", paddingHorizontal: 32 }}>
-          Add a computer that runs Parallax to start threads on it from here.
+          {t("Add a computer that runs Parallax to start threads on it from here.")}
         </T>
         <Button
-          label="Add computer"
+          label={t("Add computer")}
           icon={Plus}
           primary
           onPress={() => navigation.navigate("Settings", { screen: "AddComputer", initial: false })}
@@ -354,7 +355,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
         <T style={styles.greeting}>{greeting(new Date().getHours(), user?.given_name)}</T>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${repo?.name ?? "No repo"} on ${name}. Change`}
+          accessibilityLabel={t("{{repo}} on {{computer}}. Change", { repo: repo?.name ?? t("No repo"), computer: name })}
           hitSlop={10}
           onPress={() => {
             void Haptics.selectionAsync();
@@ -363,7 +364,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
           style={({ pressed }) => [styles.where, pressed && { opacity: 0.5 }]}
         >
           <T muted numberOfLines={1} style={{ fontSize: 15, flexShrink: 1 }}>
-            {repo?.name ?? "No repo"} on {name}
+            {t("{{repo}} on {{computer}}", { repo: repo?.name ?? t("No repo"), computer: name })}
           </T>
           <Icon icon={ChevronDown} size={15} color={c.mutedForeground} />
         </Pressable>
@@ -374,7 +375,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
         onDraft={setDraft}
         onStart={start}
         repo={repo?.id}
-        placeholder={repo ? `Ask anything in ${repo.name}` : "Ask anything"}
+        placeholder={repo ? t("Ask anything in {{repo}}", { repo: repo.name }) : t("Ask anything")}
         bottom={Math.max(insets.bottom, 8)}
       />
     </KeyboardAvoidingView>

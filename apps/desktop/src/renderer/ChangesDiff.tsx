@@ -1,4 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { t } from "i18next";
 import {
   useEffect,
   useId,
@@ -273,7 +274,10 @@ export function ChangesDiff({
     return {
       selected: !!lit && lit.side === side && n >= lit.start && n <= lit.end,
       active: comments.canRetarget,
-      label: `Comment on line ${n}${side === "left" ? " of the old file" : ""}`,
+      label:
+        side === "left"
+          ? t("Comment on line {{line}} of the old file", { line: n })
+          : t("Comment on line {{line}}", { line: n }),
       onPointerDown: (e) => {
         if (e.button !== 0) return;
         // Not a text selection, and the button's focus would scroll.
@@ -337,18 +341,18 @@ export function ChangesDiff({
           (compact ? (
             <span
               role="img"
-              aria-label="Changed since viewed"
-              title="Changed since viewed"
+              aria-label={t("Changed since viewed")}
+              title={t("Changed since viewed")}
               className="size-1.5 shrink-0 rounded-full bg-warning"
             />
           ) : (
-            <span className="shrink-0 text-meta text-warning">Changed since viewed</span>
+            <span className="shrink-0 text-meta text-warning">{t("Changed since viewed")}</span>
           ))}
         {comments?.canRetarget && (
           <span className="opacity-0 transition-opacity group-hover/file:opacity-100 focus-within:opacity-100">
             <IconButton
               size="sm"
-              label={`Comment on ${file.path}`}
+              label={t("Comment on {{path}}", { path: file.path })}
               onClick={() => {
                 if (shut(path)) toggle(path);
                 comments.onTarget({ path });
@@ -370,7 +374,7 @@ export function ChangesDiff({
               }}
             >
               <span className={compact ? "sr-only" : "text-meta text-muted-foreground"}>
-                Viewed
+                {t("Viewed")}
               </span>
             </Checkbox>
           </span>
@@ -401,7 +405,7 @@ export function ChangesDiff({
         >
           {kinds.map((k) => (
             <span key={k.kind} className="flex items-center justify-between gap-3 py-0.5">
-              <span className="text-muted-foreground">{k.kind}</span>
+              <span className="text-muted-foreground">{t(k.kind)}</span>
               <DiffStat added={k.added} removed={k.removed} />
             </span>
           ))}
@@ -412,17 +416,20 @@ export function ChangesDiff({
     <div ref={root} className="flex min-h-0 flex-1 flex-col">
       <div
         role="toolbar"
-        aria-label="Diff"
+        aria-label={t("Diff")}
         className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2 text-meta text-muted-foreground"
       >
         {leading}
         {files.length === 0 ? (
-          <span className="px-1">No files changed.</span>
+          <span className="px-1">{t("No files changed.")}</span>
         ) : (
           <>
             {!leading && (
               <span className="shrink-0 px-1 tabular-nums">
-                {files.length} {files.length === 1 ? "file" : "files"}
+                {t("{{count}} files", {
+                  count: files.length,
+                  defaultValue_one: "{{count}} file",
+                })}
               </span>
             )}
             {!tight && stat}
@@ -430,7 +437,7 @@ export function ChangesDiff({
               <span className="flex min-w-0 items-center gap-3 overflow-hidden pl-1 whitespace-nowrap text-faint-foreground">
                 {kinds.map((k) => (
                   <span key={k.kind} className="flex items-center gap-1.5">
-                    {k.kind}
+                    {t(k.kind)}
                     <DiffStat added={k.added} removed={k.removed} />
                   </span>
                 ))}
@@ -441,17 +448,21 @@ export function ChangesDiff({
         {truncated && (
           <icons.warning
             role="img"
-            aria-label="Cut short, open it on GitHub for the rest"
+            aria-label={t("Cut short, open it on GitHub for the rest")}
             className="size-3.5 shrink-0 text-warning"
           >
-            <title>Cut short, open it on GitHub for the rest</title>
+            <title>{t("Cut short, open it on GitHub for the rest")}</title>
           </icons.warning>
         )}
         <span className="flex-1" />
         {onViewed && files.length > 0 && !tighter && (
-          <span title={`${seen} of ${files.length} files viewed`} className="shrink-0 tabular-nums">
-            {seen}/{files.length}
-            {compact ? "" : " viewed"}
+          <span
+            title={t("{{seen}} of {{total}} files viewed", { seen, total: files.length })}
+            className="shrink-0 tabular-nums"
+          >
+            {compact
+              ? `${seen}/${files.length}`
+              : t("{{seen}}/{{total}} viewed", { seen, total: files.length })}
           </span>
         )}
         {actions}
@@ -468,29 +479,29 @@ export function ChangesDiff({
           ) : (
             <>
               {narrow && chosen === "split" && (
-                <span className="shrink-0 text-faint-foreground">Too narrow for split</span>
+                <span className="shrink-0 text-faint-foreground">{t("Too narrow for split")}</span>
               )}
               <Segmented
-                label="Diff layout"
+                label={t("Diff layout")}
                 value={layout}
                 onChange={setLayout}
                 options={[
                   {
                     value: "unified",
-                    title: "Unified",
-                    name: layoutName(icons.unified, "Unified"),
+                    title: t("Unified"),
+                    name: layoutName(icons.unified, t("Unified")),
                   },
                   {
                     value: "split",
-                    name: layoutName(icons.split, "Split"),
+                    name: layoutName(icons.split, t("Split")),
                     disabled: narrow,
-                    title: narrow ? "Too narrow for split" : "Split",
+                    title: narrow ? t("Too narrow for split") : t("Split"),
                   },
                 ]}
               />
               <IconButton
                 size="sm"
-                label={allShut ? "Expand all files" : "Collapse all files"}
+                label={allShut ? t("Expand all files") : t("Collapse all files")}
                 disabled={foldable.length === 0}
                 onClick={foldAll}
               >
@@ -502,7 +513,7 @@ export function ChangesDiff({
           (treeFits ? (
             <IconButton
               size="sm"
-              label={treeOn ? "Hide file tree" : "Show file tree"}
+              label={treeOn ? t("Hide file tree") : t("Show file tree")}
               aria-pressed={treeOn}
               onClick={() => setTree(!treeOn)}
             >
@@ -512,7 +523,7 @@ export function ChangesDiff({
             <>
               <IconButton
                 size="sm"
-                label="Files"
+                label={t("Files")}
                 aria-haspopup="dialog"
                 popoverTarget={`${treeId}-tree`}
               >
@@ -540,7 +551,7 @@ export function ChangesDiff({
       <div className="flex min-h-0 flex-1">
         {treeBeside && (
           <nav
-            aria-label="Files"
+            aria-label={t("Files")}
             style={{ width: TREE_WIDTH }}
             className="shrink-0 overflow-y-auto border-r border-border p-1"
           >
@@ -555,7 +566,7 @@ export function ChangesDiff({
         )}
         <div
           ref={scroll}
-          aria-label="Changed files"
+          aria-label={t("Changed files")}
           className="min-h-0 min-w-0 flex-1 overflow-y-auto"
         >
           {stuck && <div className="sticky top-0 z-10 h-0">{fileHeader(stuck, true)}</div>}
@@ -617,7 +628,7 @@ export function ChangesDiff({
                           }
                         />
                       ) : (
-                        <p className="px-3 text-faint-foreground">Binary file not shown</p>
+                        <p className="px-3 text-faint-foreground">{t("Binary file not shown")}</p>
                       )}
                     </div>
                   )}
@@ -650,21 +661,21 @@ function DiffOptions({
   const id = useId();
   return (
     <>
-      <IconButton size="sm" label="Diff options" aria-haspopup="menu" popoverTarget={id}>
+      <IconButton size="sm" label={t("Diff options")} aria-haspopup="menu" popoverTarget={id}>
         <icons.options aria-hidden />
       </IconButton>
-      <Menu id={id} label="Diff options" align="end" className="w-56 p-1">
+      <Menu id={id} label={t("Diff options")} align="end" className="w-56 p-1">
         <MenuOption
-          option={{ value: "unified", label: "Unified", icon: <icons.unified aria-hidden /> }}
+          option={{ value: "unified", label: t("Unified"), icon: <icons.unified aria-hidden /> }}
           checked={layout === "unified"}
           onClick={() => onLayout("unified")}
         />
         <MenuOption
           option={{
             value: "split",
-            label: "Split",
+            label: t("Split"),
             icon: <icons.split aria-hidden />,
-            hint: narrow ? "Too narrow" : undefined,
+            hint: narrow ? t("Too narrow") : undefined,
           }}
           checked={layout === "split"}
           disabled={narrow}
@@ -673,7 +684,7 @@ function DiffOptions({
         <MenuOption
           option={{
             value: "fold",
-            label: allShut ? "Expand all files" : "Collapse all files",
+            label: allShut ? t("Expand all files") : t("Collapse all files"),
             icon: allShut ? <icons.expandAll aria-hidden /> : <icons.collapseAll aria-hidden />,
             divider: true,
           }}
@@ -709,7 +720,9 @@ export function DiffFileHeader({
       <button
         type="button"
         aria-expanded={!shut}
-        aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
+        aria-label={
+          shut ? t("Show {{path}}", { path: file.path }) : t("Hide {{path}}", { path: file.path })
+        }
         onClick={onToggle}
         className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
       >
@@ -729,7 +742,10 @@ export function DiffFileHeader({
       </span>
       {threads > 0 && (
         <span
-          title={`${threads} review ${threads === 1 ? "thread" : "threads"}`}
+          title={t("{{count}} review threads", {
+            count: threads,
+            defaultValue_one: "{{count}} review thread",
+          })}
           className="flex shrink-0 items-center gap-1 text-faint-foreground"
         >
           <icons.comment aria-hidden className="size-3" />
@@ -854,7 +870,7 @@ function LineNumber({ n, gutter }: { n?: number; gutter?: Gutter }) {
 /** What a change is, for screen readers, since a colored bar says it by sight alone. */
 const ChangeName = ({ op }: { op: DiffLine["op"] }) =>
   op === "+" || op === "-" ? (
-    <span className="sr-only">{op === "+" ? "Added: " : "Removed: "}</span>
+    <span className="sr-only">{op === "+" ? t("Added:") : t("Removed:")} </span>
   ) : null;
 
 /**
@@ -900,7 +916,10 @@ function HunkBand({ line }: { line: DiffLine }) {
     >
       {!!hidden && (
         <span className="shrink-0">
-          {hidden} unmodified {hidden === 1 ? "line" : "lines"}
+          {t("{{count}} unmodified lines", {
+            count: hidden,
+            defaultValue_one: "{{count}} unmodified line",
+          })}
         </span>
       )}
       {context && <span className="min-w-0 truncate font-mono">{context}</span>}
@@ -973,7 +992,7 @@ function FileTree({
             type="button"
             title={
               changed?.has(node.file.path)
-                ? `${node.file.path}, changed since viewed`
+                ? t("{{path}}, changed since viewed", { path: node.file.path })
                 : node.file.path
             }
             aria-current={here || undefined}
@@ -985,12 +1004,12 @@ function FileTree({
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
             {changed?.has(node.file.path) && (
               <span
-                aria-label="Changed since viewed"
+                aria-label={t("Changed since viewed")}
                 className="size-1.5 shrink-0 rounded-full bg-warning"
               />
             )}
             {seen ? (
-              <icons.done aria-label="Viewed" className="size-3.5 shrink-0 text-added" />
+              <icons.done aria-label={t("Viewed")} className="size-3.5 shrink-0 text-added" />
             ) : (
               <DiffStat added={node.file.additions} removed={node.file.deletions} />
             )}

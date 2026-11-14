@@ -1,4 +1,5 @@
 import { app, ipcMain, session, shell } from "electron";
+import { t } from "i18next";
 import { lstat, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -24,19 +25,19 @@ function items(): Record<Folder, { name: string; folder: string; files: string[]
   const userData = app.getPath("userData");
   return {
     history: {
-      name: "Threads and history",
+      name: t("Threads and history"),
       folder: plxd,
       files: ["plxd.sqlite3", "plxd.sqlite3-wal", "plxd.sqlite3-shm"].map((f) =>
         path.join(plxd, f),
       ),
     },
     worktrees: {
-      name: "Worktrees",
+      name: t("Worktrees"),
       folder: path.join(plxd, "worktrees"),
       files: [path.join(plxd, "worktrees")],
     },
-    logs: { name: "Logs", folder: path.join(plxd, "logs"), files: [path.join(plxd, "logs")] },
-    app: { name: "App data", folder: userData, files: [userData] },
+    logs: { name: t("Logs"), folder: path.join(plxd, "logs"), files: [path.join(plxd, "logs")] },
+    app: { name: t("App data"), folder: userData, files: [userData] },
   };
 }
 
@@ -64,7 +65,7 @@ export function startStorage(): void {
     const cache = (await Promise.all(cacheFolders().map(sizeOf))).reduce((a, b) => a + b, 0);
     const appData = listed.find((item) => item.id === "app")!;
     appData.bytes -= cache;
-    return [...listed, { id: "cache", name: "Cache", folder: "", bytes: cache }];
+    return [...listed, { id: "cache", name: t("Cache"), folder: "", bytes: cache }];
   });
   ipcMain.handle("parallax:showFolder", async (_event, id: unknown) => {
     const item = Object.hasOwn(items(), String(id)) && items()[id as Folder];

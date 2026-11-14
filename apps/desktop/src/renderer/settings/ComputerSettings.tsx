@@ -1,5 +1,7 @@
+import { t } from "i18next";
 import { AppWindowMac, Eye, LoaderCircle, MousePointerClick, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState, type ComponentType, type SVGProps } from "react";
+import { Trans } from "react-i18next";
 
 import type { ComputerStatus } from "../../protocol/generated/protocol";
 import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
@@ -53,27 +55,31 @@ export function ComputerSettings() {
   const remove = async (app: string) => {
     const answer = await window.parallax.request(localId, "computer/forget", { app });
     if ("error" in answer)
-      notify({ tone: "error", title: `Couldn't remove ${app}`, body: describeError(answer.error) });
+      notify({
+        tone: "error",
+        title: t("Couldn't remove {{name}}", { name: app }),
+        body: describeError(answer.error),
+      });
     else setStatus(answer.result);
   };
 
   const unavailable = !connected
     ? connection
       ? statusLabel(connection)
-      : "Connecting…"
+      : t("Connecting…")
     : !supported
-      ? "Computer use needs plxd on macOS. Update Parallax, or use a Mac, to turn it on."
+      ? t("Computer use needs plxd on macOS. Update Parallax, or use a Mac, to turn it on.")
       : undefined;
 
   return (
     <>
-      <PageTitle title="Computer use">
-        Agents can see and operate the apps on this Mac: read a window, click, type, scroll, and
-        press keys, while your pointer and keyboard stay yours. A thread asks before it first uses
-        each app.
+      <PageTitle title={t("Computer use")}>
+        {t(
+          "Agents can see and operate the apps on this Mac: read a window, click, type, scroll, and press keys, while your pointer and keyboard stay yours. A thread asks before it first uses each app.",
+        )}
       </PageTitle>
       {unavailable ? (
-        <Section title="Permissions">
+        <Section title={t("Permissions")}>
           <div className={settingRow}>
             <span className="text-body text-muted-foreground">{unavailable}</span>
           </div>
@@ -81,7 +87,7 @@ export function ComputerSettings() {
       ) : (
         <>
           <Section
-            title="Permissions"
+            title={t("Permissions")}
             action={
               missing && (
                 <button
@@ -91,21 +97,21 @@ export function ComputerSettings() {
                   onClick={() => void grant()}
                 >
                   {asking && <LoaderCircle aria-hidden className="animate-spin" />}
-                  Grant access
+                  {t("Grant access")}
                 </button>
               )
             }
           >
             <Permission
               Icon={MousePointerClick}
-              title="Accessibility"
-              description="Reads app windows, and clicks, types, and scrolls in them."
+              title={t("Accessibility")}
+              description={t("Reads app windows, and clicks, types, and scrolls in them.")}
               granted={status?.accessibility}
             />
             <Permission
               Icon={Eye}
-              title="Screen Recording"
-              description="Takes a screenshot of the window an agent works in."
+              title={t("Screen Recording")}
+              description={t("Takes a screenshot of the window an agent works in.")}
               granted={status?.screenRecording}
             />
             {error && (
@@ -118,20 +124,24 @@ export function ComputerSettings() {
           </Section>
           {missing && status && (
             <p className="-mt-6 mb-8 px-1 text-meta leading-relaxed text-faint-foreground">
-              macOS lists Parallax's background service as{" "}
-              <span className="font-mono text-muted-foreground">{status.program}</span> under
-              Privacy & Security. Turn it on there for each permission.
+              <Trans values={{ program: status.program }}>
+                macOS lists Parallax's background service as{" "}
+                <span className="font-mono text-muted-foreground">{"{{program}}"}</span> under
+                Privacy & Security. Turn it on there for each permission.
+              </Trans>
             </p>
           )}
-          <Section title="Always allowed">
+          <Section title={t("Always allowed")}>
             {!status ? (
               <div className={settingRow}>
-                <span className="text-body text-muted-foreground">Checking…</span>
+                <span className="text-body text-muted-foreground">{t("Checking…")}</span>
               </div>
             ) : status.apps.length === 0 ? (
               <div className={settingRow}>
                 <span className="text-body text-muted-foreground">
-                  No apps yet. When a thread asks to use an app, choose Always allow to add it here.
+                  {t(
+                    "No apps yet. When a thread asks to use an app, choose Always allow to add it here.",
+                  )}
                 </span>
               </div>
             ) : (
@@ -144,10 +154,10 @@ export function ComputerSettings() {
                   <button
                     type="button"
                     className={quietButton}
-                    aria-label={`Remove ${app}`}
+                    aria-label={t("Remove {{name}}", { name: app })}
                     onClick={() => void remove(app)}
                   >
-                    Remove
+                    {t("Remove")}
                   </button>
                 </div>
               ))
@@ -155,8 +165,9 @@ export function ComputerSettings() {
           </Section>
           <p className="flex items-start gap-2 px-1 text-meta leading-relaxed text-faint-foreground">
             <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-            Computer use never controls terminals, script runners, Parallax itself, or Keychain
-            Access, and agents are told not to type passwords, pay, or send messages unless you ask.
+            {t(
+              "Computer use never controls terminals, script runners, Parallax itself, or Keychain Access, and agents are told not to type passwords, pay, or send messages unless you ask.",
+            )}
           </p>
         </>
       )}
@@ -186,11 +197,11 @@ function Permission({
       </div>
       <span className="flex shrink-0 items-center gap-1.5 text-body text-muted-foreground">
         {granted === undefined ? (
-          "Checking…"
+          t("Checking…")
         ) : (
           <>
             <StatusDot tone={granted ? "on" : "off"} />
-            {granted ? "On" : "Off"}
+            {granted ? t("On") : t("Off")}
           </>
         )}
       </span>

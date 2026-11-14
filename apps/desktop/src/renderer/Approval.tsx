@@ -3,6 +3,7 @@
 // the run's own requests and, in an orchestrator, those of its other runs. Tool input is untrusted:
 // it renders only as text, and a plan only through the transcript's safe Markdown. Pure helpers
 // first, then the components.
+import { t } from "i18next";
 import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import {
   ChevronDown,
@@ -29,6 +30,7 @@ import {
   type RefObject,
   type SVGProps,
 } from "react";
+import { Trans } from "react-i18next";
 
 import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
@@ -45,6 +47,8 @@ import {
 } from "./transcript";
 import { clockOptions } from "./prefs";
 import { diffLines } from "./diffLines";
+import { locale } from "./locale";
+import { msg } from "../i18n";
 
 /** How the transcript names a tool (AgentChat's `describeTool`): its kind's icon, label, and target. */
 export interface ToolLook {
@@ -137,7 +141,7 @@ export function useAnswers(hostId: string) {
       notify({
         key: `approval/${approvalId}`,
         tone: "error",
-        title: "Your answer didn't reach the agent",
+        title: t("Your answer didn't reach the agent"),
         body: next.error,
       });
     }
@@ -158,9 +162,9 @@ export function useAnswers(hostId: string) {
 /** A time on the clock, with the date unless it's today: "2:31 PM", "Sep 30, 2:31 PM". */
 export function clock(iso: string, now = Date.now()): string {
   const when = new Date(iso);
-  const time = when.toLocaleString("en", clockOptions());
+  const time = when.toLocaleString(locale(), clockOptions());
   if (when.toDateString() === new Date(now).toDateString()) return time;
-  return `${when.toLocaleString("en", { month: "short", day: "numeric" })}, ${time}`;
+  return `${when.toLocaleString(locale(), { month: "short", day: "numeric" })}, ${time}`;
 }
 
 /** How a request came out, for its line in the transcript: words, an icon, and its color. */
@@ -172,22 +176,29 @@ interface Outcome {
   color: string;
 }
 
-/** Who denied a request; anyone else reads as "Denied". */
-const deniedBy: Partial<Record<string, string>> = {
-  user: "Denied by you",
-  cancel: "Denied when the run was stopped",
-  stop: "Denied when plxd stopped",
-};
+/** Who denied a request and when, in a sentence; anyone else reads as "Denied". */
+function deniedWho(by: string, time?: string): string {
+  if (by === "user") return time ? t("Denied by you at {{time}}.", { time }) : t("Denied by you.");
+  if (by === "cancel")
+    return time
+      ? t("Denied when the run was stopped at {{time}}.", { time })
+      : t("Denied when the run was stopped.");
+  if (by === "stop")
+    return time
+      ? t("Denied when plxd stopped at {{time}}.", { time })
+      : t("Denied when plxd stopped.");
+  return time ? t("Denied at {{time}}.", { time }) : t("Denied.");
+}
 
 /** A request's outcome, by its resolution. A decision newer than this app reads as ended. */
 export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Outcome {
   const plan = isPlan(request);
-  const at = resolved?.at ? ` at ${clock(resolved.at, now)}` : "";
-  if (questionsOf(request).length > 0) return questionOutcome(resolved, at);
+  const time = resolved?.at ? clock(resolved.at, now) : undefined;
+  if (questionsOf(request).length > 0) return questionOutcome(resolved, time);
   if (!resolved)
     return {
-      verb: plan ? "Plan waiting for approval" : "Waiting for approval",
-      who: "Nobody has answered yet.",
+      verb: plan ? t("Plan waiting for approval") : t("Waiting for approval"),
+      who: t("Nobody has answered yet."),
       Icon: ShieldQuestion,
       color: "text-foreground",
     };
@@ -195,33 +206,49 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
   if (resolved.gone)
     return {
       ...quiet,
-      verb: plan ? "Plan no longer waiting" : "No longer waiting",
-      who: "It ended before your answer reached it.",
+      verb: plan ? t("Plan no longer waiting") : t("No longer waiting"),
+      who: t("It ended before your answer reached it."),
     };
   const { decision, by, always } = resolved;
   const computer = isComputer(request);
   if (decision === "allowed")
     return {
       verb: plan
-        ? "Approved the plan"
+        ? t("Approved the plan")
         : always
-          ? "Always allowed"
+          ? t("Always allowed")
           : computer
-            ? "Allowed"
-            : "Approved",
+            ? t("Allowed")
+            : t("Approved"),
       who: computer
-        ? `Allowed by you${at}, ${always ? "for every thread until you remove it in Settings" : "for this thread"}.`
-        : `Approved by you${at}${always ? ", with its rules for the rest of the session" : ""}.`,
+        ? always
+          ? time
+            ? t("Allowed by you at {{time}}, for every thread until you remove it in Settings.", {
+                time,
+              })
+            : t("Allowed by you, for every thread until you remove it in Settings.")
+          : time
+            ? t("Allowed by you at {{time}}, for this thread.", { time })
+            : t("Allowed by you, for this thread.")
+        : always
+          ? time
+            ? t("Approved by you at {{time}}, with its rules for the rest of the session.", {
+                time,
+              })
+            : t("Approved by you, with its rules for the rest of the session.")
+          : time
+            ? t("Approved by you at {{time}}.", { time })
+            : t("Approved by you."),
       Icon: ShieldCheck,
       color: "text-muted-foreground",
     };
   if (decision === "denied") {
     const stopped = by === "cancel" || by === "stop";
-    const who = `${deniedBy[by] ?? "Denied"}${at}.`;
+    const who = deniedWho(by, time);
     if (plan && by === "user")
-      return { verb: "Kept planning", who, Icon: ListRestart, color: "text-muted-foreground" };
+      return { verb: t("Kept planning"), who, Icon: ListRestart, color: "text-muted-foreground" };
     return {
-      verb: plan ? "Plan not approved" : "Denied",
+      verb: plan ? t("Plan not approved") : t("Denied"),
       who,
       Icon: ShieldX,
       color: stopped ? "text-muted-foreground" : "text-danger",
@@ -229,31 +256,41 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
   }
   if (decision === "expired")
     return {
-      verb: plan ? "Plan timed out" : "Timed out",
-      who: `Nobody answered in time, so plxd denied it${at}.`,
+      verb: plan ? t("Plan timed out") : t("Timed out"),
+      who: time
+        ? t("Nobody answered in time, so plxd denied it at {{time}}.", { time })
+        : t("Nobody answered in time, so plxd denied it."),
       Icon: TimerOff,
       color: "text-faint-foreground",
     };
   if (decision === "withdrawn")
     return {
       ...quiet,
-      verb: plan ? "Plan withdrawn" : "Withdrawn",
+      verb: plan ? t("Plan withdrawn") : t("Withdrawn"),
       who:
         by === "stop"
-          ? `The run ended before anyone answered${at}.`
-          : `The agent stopped waiting for an answer${at}.`,
+          ? time
+            ? t("The run ended before anyone answered at {{time}}.", { time })
+            : t("The run ended before anyone answered.")
+          : time
+            ? t("The agent stopped waiting for an answer at {{time}}.", { time })
+            : t("The agent stopped waiting for an answer."),
     };
-  return { ...quiet, verb: plan ? "Plan ended" : "Ended", who: `It ended${at}.` };
+  return {
+    ...quiet,
+    verb: plan ? t("Plan ended") : t("Ended"),
+    who: time ? t("It ended at {{time}}.", { time }) : t("It ended."),
+  };
 }
 
-/** How an agent's question came out (PLX-245). `at` says when, as a phrase. */
-function questionOutcome(resolved: ApprovalResolution | undefined, at: string): Outcome {
+/** How an agent's question came out (PLX-245). `time` says when, on the clock. */
+function questionOutcome(resolved: ApprovalResolution | undefined, time?: string): Outcome {
   const Icon = MessageCircleQuestion;
   const quiet = { Icon, color: "text-faint-foreground" };
   if (!resolved)
     return {
-      verb: "Waiting for your answer",
-      who: "Nobody has answered yet.",
+      verb: t("Waiting for your answer"),
+      who: t("Nobody has answered yet."),
       Icon,
       color: "text-foreground",
     };
@@ -261,19 +298,29 @@ function questionOutcome(resolved: ApprovalResolution | undefined, at: string): 
   if (gone)
     return {
       ...quiet,
-      verb: "Question no longer waiting",
-      who: "It ended before your answer reached it.",
+      verb: t("Question no longer waiting"),
+      who: t("It ended before your answer reached it."),
     };
   if (decision === "allowed")
     return {
-      verb: "Answered",
-      who: `Answered by you${at}.`,
+      verb: t("Answered"),
+      who: time ? t("Answered by you at {{time}}.", { time }) : t("Answered by you."),
       Icon,
       color: "text-muted-foreground",
     };
   if (decision === "denied" && by === "user")
-    return { ...quiet, verb: "Skipped", who: `Skipped by you${at}.` };
-  return { ...quiet, verb: "Question ended", who: `It ended before anyone answered${at}.` };
+    return {
+      ...quiet,
+      verb: t("Skipped"),
+      who: time ? t("Skipped by you at {{time}}.", { time }) : t("Skipped by you."),
+    };
+  return {
+    ...quiet,
+    verb: t("Question ended"),
+    who: time
+      ? t("It ended before anyone answered at {{time}}.", { time })
+      : t("It ended before anyone answered."),
+  };
 }
 
 // The input field a card's header shows beside the tool's name, by the names common tools use:
@@ -328,7 +375,11 @@ function ShowAll({ all, onToggle, lines }: { all: boolean; onToggle: () => void;
       ) : (
         <ChevronDown aria-hidden className="size-3.5" />
       )}
-      {all ? "Show less" : lines && lines > previewLines ? `Show all ${lines} lines` : "Show all"}
+      {all
+        ? t("Show less")
+        : lines && lines > previewLines
+          ? t("Show all {{count}} lines", { count: lines })
+          : t("Show all")}
     </button>
   );
 }
@@ -376,7 +427,7 @@ export function DiffRow({ op, text }: { op: " " | "+" | "-"; text: string }) {
       <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[op].sign}`}>
         {op === "-" ? "−" : op}
       </span>
-      {op !== " " && <span className="sr-only">{op === "+" ? "Added: " : "Removed: "}</span>}
+      {op !== " " && <span className="sr-only">{op === "+" ? t("Added:") : t("Removed:")} </span>}
       <span className="code-lines min-w-0 break-words whitespace-pre-wrap">{text || " "}</span>
     </div>
   );
@@ -393,13 +444,21 @@ function Diff({ before, after }: { before: string; after: string }) {
     <div>
       <div
         role="group"
-        aria-label={`Diff: ${added} ${added === 1 ? "line" : "lines"} added, ${removed} removed`}
+        aria-label={t("Diff: {{count}} lines added, {{removed}} removed", {
+          count: added,
+          removed,
+          defaultValue_one: "Diff: {{count}} line added, {{removed}} removed",
+        })}
         className={diffBox}
       >
         {shown.map((line, i) =>
           line.op === "gap" ? (
             <div key={i} className={diffBand}>
-              ⋯ {line.count} unchanged {line.count === 1 ? "line" : "lines"}
+              ⋯{" "}
+              {t("{{count}} unchanged lines", {
+                count: line.count,
+                defaultValue_one: "{{count}} unchanged line",
+              })}
             </div>
           ) : (
             <DiffRow key={i} op={line.op} text={line.text} />
@@ -484,7 +543,9 @@ export function RequestPreview({
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
     return (
       <p className="text-body text-muted-foreground">
-        Its input is too large to show ({Math.ceil(bytes / 1024)} KB). Approving runs it as asked.
+        {t("Its input is too large to show ({{size}} KB). Approving runs it as asked.", {
+          size: Math.ceil(bytes / 1024),
+        })}
       </p>
     );
   }
@@ -497,7 +558,9 @@ export function RequestPreview({
         <div className="space-y-1.5">
           <Diff before={text("old_string") ?? ""} after={text("new_string") ?? ""} />
           {isObject(input) && input["replace_all"] === true && (
-            <p className="text-meta text-muted-foreground">Replaces every match in the file.</p>
+            <p className="text-meta text-muted-foreground">
+              {t("Replaces every match in the file.")}
+            </p>
           )}
         </div>
       );
@@ -520,12 +583,12 @@ export function RequestPreview({
       return (
         <div className="space-y-1.5">
           <Diff before="" after={text("content") ?? ""} />
-          <p className="text-meta text-muted-foreground">Writes the whole file.</p>
+          <p className="text-meta text-muted-foreground">{t("Writes the whole file.")}</p>
         </div>
       );
     case "NotebookEdit":
       return text("edit_mode") === "delete" ? (
-        <p className="text-body text-muted-foreground">Deletes a cell.</p>
+        <p className="text-body text-muted-foreground">{t("Deletes a cell.")}</p>
       ) : (
         <Diff before="" after={text("new_source") ?? ""} />
       );
@@ -566,10 +629,12 @@ function Context({ request }: { request: ApprovalRequest }) {
       {reason && <p className="break-words">{reason}</p>}
       {blockedPath && (
         <p className="break-words">
-          Path: <span className="font-mono">{blockedPath}</span>
+          <Trans values={{ blockedPath }}>
+            Path: <span className="font-mono">{"{{blockedPath}}"}</span>
+          </Trans>
         </p>
       )}
-      {subagent && <p>Asked by one of the agent's own subagents.</p>}
+      {subagent && <p>{t("Asked by one of the agent's own subagents.")}</p>}
     </div>
   );
 }
@@ -590,9 +655,9 @@ export const approveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
 /** What a button says while its answer is on the way. */
-const pendingLabels = { allow: "Approving…", always: "Allowing…", deny: "Denying…" };
+const pendingLabels = { allow: msg("Approving…"), always: msg("Allowing…"), deny: msg("Denying…") };
 const pendingLabel = (choice: Choice, plan: boolean) =>
-  plan && choice === "deny" ? "Sending…" : pendingLabels[choice];
+  plan && choice === "deny" ? t("Sending…") : t(pendingLabels[choice]);
 
 interface CardProps {
   asked: Asked;
@@ -619,7 +684,7 @@ function Answers({
   onAnswer,
   onDismiss,
   disabledReason,
-  allow = plan ? "Approve plan" : "Approve",
+  allow = plan ? t("Approve plan") : t("Approve"),
 }: {
   plan: boolean;
   /** What the button that allows says. */
@@ -646,14 +711,14 @@ function Answers({
   if (state?.state === "gone")
     return (
       <button type="button" onClick={onDismiss} className={outlineButton}>
-        Dismiss
+        {t("Dismiss")}
       </button>
     );
   const busy = state?.state === "answering";
   const off = busy || disabledReason !== undefined;
   const label = (choice: Choice, idle: string) =>
     busy && state.choice === choice ? pendingLabel(choice, plan) : idle;
-  const deny = plan ? "Keep planning" : "Deny";
+  const deny = plan ? t("Keep planning") : t("Deny");
   if (denying)
     return (
       <form
@@ -665,9 +730,11 @@ function Answers({
       >
         <input
           ref={noteRef}
-          aria-label={plan ? "What should change" : "Note to the agent"}
+          aria-label={plan ? t("What should change") : t("Note to the agent")}
           placeholder={
-            plan ? "What should change? (optional)" : "Tell the agent why, or what to do instead"
+            plan
+              ? t("What should change? (optional)")
+              : t("Tell the agent why, or what to do instead")
           }
           value={note}
           disabled={busy}
@@ -680,7 +747,7 @@ function Answers({
           className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-body placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
         />
         <button type="button" disabled={busy} onClick={cancel} className={quietButton}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button type="submit" disabled={off} title={disabledReason} className={outlineButton}>
           {label("deny", deny)}
@@ -708,7 +775,7 @@ function Answers({
           onClick={() => onAnswer("always")}
           className={outlineButton}
         >
-          {label("always", "Always allow")}
+          {label("always", t("Always allow"))}
         </button>
       )}
       <button
@@ -727,8 +794,8 @@ function Answers({
 /** The card's status in words: waiting, its place in the queue, answering, or gone. */
 function statusText(state: AnswerState | undefined, count: number, plan = false) {
   if (state?.state === "answering") return pendingLabel(state.choice, plan);
-  if (state?.state === "gone") return "No longer waiting";
-  return count > 1 ? `Needs approval · 1 of ${count}` : "Needs approval";
+  if (state?.state === "gone") return t("No longer waiting");
+  return count > 1 ? t("Needs approval · 1 of {{count}}", { count }) : t("Needs approval");
 }
 
 /** What became of a request that's gone. */
@@ -736,7 +803,7 @@ function Problem({ state }: { state?: AnswerState }) {
   if (state?.state === "gone")
     return (
       <p className="text-body text-muted-foreground">
-        This request is no longer waiting. It ended before your answer reached it.
+        {t("This request is no longer waiting. It ended before your answer reached it.")}
       </p>
     );
   return null;
@@ -811,7 +878,7 @@ function ApprovalCard({
             id={rulesId}
             className="mr-auto min-w-0 flex-1 basis-60 text-meta leading-relaxed text-faint-foreground"
           >
-            Always allow adds{" "}
+            {t("Always allow adds")}{" "}
             {rules.map((rule, i) => (
               <Fragment key={i}>
                 {i > 0 && ", "}
@@ -853,7 +920,7 @@ function ComputerApprovalCard({
   const titleId = useId();
   const statusId = useId();
   const rulesId = useId();
-  const app = field(asked.approval.request.input, "app") || "this app";
+  const app = field(asked.approval.request.input, "app") || t("this app");
   return (
     <div
       ref={focusRef}
@@ -872,11 +939,14 @@ function ComputerApprovalCard({
         </span>
         <div className="min-w-0 flex-1 pt-px">
           <p id={titleId} className="text-body font-medium">
-            Allow Parallax to use <span className="break-words">{app}</span>?
+            <Trans values={{ app }}>
+              Allow Parallax to use <span className="break-words">{"{{app}}"}</span>?
+            </Trans>
           </p>
           <p id={rulesId} className="mt-0.5 text-body leading-relaxed text-muted-foreground">
-            While this thread works, Parallax can see the app's window and click, type, and scroll
-            in it. Your pointer and keyboard stay yours.
+            {t(
+              "While this thread works, Parallax can see the app's window and click, type, and scroll in it. Your pointer and keyboard stay yours.",
+            )}
           </p>
         </div>
         <span
@@ -892,7 +962,7 @@ function ComputerApprovalCard({
       <div className="flex flex-wrap items-center justify-end gap-2 px-4 pt-3 pb-3">
         <Answers
           plan={false}
-          allow="Allow"
+          allow={t("Allow")}
           state={state}
           rules={[app]}
           rulesId={rulesId}
@@ -931,7 +1001,7 @@ function PlanApprovalCard({
       ref={focusRef}
       role="group"
       tabIndex={-1}
-      aria-label="Plan approval"
+      aria-label={t("Plan approval")}
       aria-describedby={statusId}
       className="composer-card flex min-h-0 flex-col rounded-xl focus-visible:outline-none"
     >
@@ -946,7 +1016,7 @@ function PlanApprovalCard({
             {/* At the foot, by the buttons, where the fold can't hide it. */}
             <span id={statusId} className="mr-auto min-w-0 text-meta text-muted-foreground">
               {state?.state === "gone" ? (
-                "No longer waiting: it ended."
+                t("No longer waiting: it ended.")
               ) : (
                 <span className="tabular-nums">{statusText(state, count, true)}</span>
               )}
@@ -966,7 +1036,7 @@ function PlanApprovalCard({
           markdown(plan)
         ) : (
           <p className="text-body text-muted-foreground">
-            The plan didn't come with the request. The agent's messages above may have it.
+            {t("The plan didn't come with the request. The agent's messages above may have it.")}
           </p>
         )}
         <div className="mt-2 empty:hidden">
@@ -1097,13 +1167,21 @@ export function ApprovalQueue({
     if (head) {
       const tool = describe(head.approval.request.toolName, head.approval.request.input);
       const what = isPlan(head.approval.request)
-        ? "the plan"
+        ? t("the plan")
         : isComputer(head.approval.request)
-          ? `use ${tool.detail || "an app"}`
+          ? t("use {{app}}", { app: tool.detail || t("an app") })
           : [tool.label, tool.detail].filter(Boolean).join(": ");
-      const from = head.from ? ` from ${head.from.label}` : "";
-      const place = queue.length > 1 ? `, 1 of ${queue.length}` : "";
-      parts.push(`Approval needed${from}${place}: ${what}.`);
+      const from = head.from?.label;
+      const count = queue.length;
+      parts.push(
+        from
+          ? count > 1
+            ? t("Approval needed from {{from}}, 1 of {{count}}: {{what}}.", { from, count, what })
+            : t("Approval needed from {{from}}: {{what}}.", { from, what })
+          : count > 1
+            ? t("Approval needed, 1 of {{count}}: {{what}}.", { count, what })
+            : t("Approval needed: {{what}}.", { what }),
+      );
     }
     setSaid({ key, head, count: queue.length, text: parts.join(" "), times: said.times + 1 });
   } else if (said.count !== queue.length)
@@ -1111,7 +1189,7 @@ export function ApprovalQueue({
       ...said,
       count: queue.length,
       ...(queue.length > said.count && {
-        text: `${queue.length} requests waiting.`,
+        text: t("{{count}} requests waiting.", { count: queue.length }),
         times: said.times + 1,
       }),
     });
@@ -1135,7 +1213,7 @@ export function ApprovalQueue({
         {said.text && said.text + (said.times % 2 ? "\u200b" : "")}
       </p>
       {head && props && (
-        <section aria-label="Approval requests" className="mb-3 flex min-h-0 flex-col">
+        <section aria-label={t("Approval requests")} className="mb-3 flex min-h-0 flex-col">
           <Pinned key={key} onLeave={leave}>
             {head.from && (
               <p className="flex min-w-0 items-center gap-1.5 px-1 text-meta text-muted-foreground">
@@ -1147,7 +1225,7 @@ export function ApprovalQueue({
                     onClick={head.from.open}
                     className="shrink-0 font-medium text-foreground underline underline-offset-2"
                   >
-                    Open its chat
+                    {t("Open its chat")}
                   </button>
                 )}
               </p>
@@ -1187,7 +1265,12 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
         {questions.length > 0 && (
           <>
             {" "}
-            {questions.length === 1 ? questions[0]!.text : `${questions.length} questions`}
+            {questions.length === 1
+              ? questions[0]!.text
+              : t("{{count}} questions", {
+                  count: questions.length,
+                  defaultValue_one: "{{count}} question",
+                })}
             {answer && ` · ${answer}`}
           </>
         )}
@@ -1240,7 +1323,7 @@ export function ApprovalDetails({ approval }: { approval: Approval }) {
       <p className="text-muted-foreground">{outcomeOf(approval).who}</p>
       {resolved?.message && (
         <p className="break-words whitespace-pre-wrap">
-          <span className="text-faint-foreground">Your note: </span>
+          <span className="text-faint-foreground">{t("Your note:")} </span>
           {resolved.message}
         </p>
       )}

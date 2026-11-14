@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { stored } from "./stored";
@@ -128,8 +129,8 @@ export function PageFrame({
           <div
             hidden={bare}
             role="separator"
-            aria-label="Resize page"
-            title="Drag to resize the page. Double-click to fit it."
+            aria-label={t("Resize page")}
+            title={t("Drag to resize the page. Double-click to fit it.")}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
               e.stopPropagation();
@@ -170,7 +171,7 @@ export function PageFrame({
       )}
       {size && !bare && (
         <form
-          aria-label="Page size"
+          aria-label={t("Page size")}
           style={{ height: FIELDS }}
           className="flex shrink-0 items-center justify-center gap-1.5 text-meta text-muted-foreground"
           onSubmit={(e) => {
@@ -185,7 +186,7 @@ export function PageFrame({
             <label key={side} className="flex items-center gap-1.5">
               {i > 0 && <span>×</span>}
               <input
-                aria-label={`Page ${side}`}
+                aria-label={side === "width" ? t("Page width") : t("Page height")}
                 inputMode="numeric"
                 value={draft?.[side] ?? String(shown?.[side] ?? "")}
                 // The first keystroke starts a draft from the page's size, so the other field keeps it.
@@ -214,7 +215,7 @@ export function PageFrame({
               onClick={() => onFit(fit)}
               className="ml-1 rounded-sm px-1.5 py-0.5 text-foreground hover:bg-hover"
             >
-              Fit
+              {t("Fit")}
             </button>
           )}
         </form>
@@ -246,18 +247,18 @@ export function ViewMenu({
   };
   return (
     <>
-      <IconButton label="More" popoverTarget={id} aria-haspopup="menu">
+      <IconButton label={t("More")} popoverTarget={id} aria-haspopup="menu">
         <MoreVert />
       </IconButton>
-      <Menu ref={menu} id={id} label="More" align="end" className="w-68 p-1">
-        <p className={menuHeading}>View</p>
+      <Menu ref={menu} id={id} label={t("More")} align="end" className="w-68 p-1">
+        <p className={menuHeading}>{t("View")}</p>
         <MenuOption
           option={{
             value: "monitor",
-            label: "Desktop",
+            label: t("Desktop"),
             icon: <DesktopWindows aria-hidden />,
             hint: `${MONITOR.width} × ${MONITOR.height}`,
-            description: "The site as on a monitor, scaled to fit the panel",
+            description: t("The site as on a monitor, scaled to fit the panel"),
           }}
           checked={!fixed && fit === "monitor"}
           onClick={() => choose("monitor")}
@@ -265,9 +266,9 @@ export function ViewMenu({
         <MenuOption
           option={{
             value: "panel",
-            label: "Panel",
+            label: t("Panel"),
             icon: <RightPanelOpen aria-hidden />,
-            description: "The site at the panel's size, like a normal browser",
+            description: t("The site at the panel's size, like a normal browser"),
           }}
           checked={!fixed && fit === "panel"}
           onClick={() => choose("panel")}
@@ -276,10 +277,10 @@ export function ViewMenu({
           <MenuOption
             option={{
               value: "custom",
-              label: "Custom",
+              label: t("Custom"),
               icon: <Resize aria-hidden />,
               hint: `${size.width} × ${size.height}`,
-              description: "Drag the window's corner or type a size under it",
+              description: t("Drag the window's corner or type a size under it"),
             }}
             checked
             onClick={() => menu.current?.hidePopover()}

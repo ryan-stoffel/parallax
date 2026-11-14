@@ -1,6 +1,8 @@
 // The Usage tab's answers from every computer, put together as the desktop's usage page does:
 // Cost and Tokens sum each computer's `usage/daily`, and Limits shows each subscription once.
 // Pure, for the test; Usage.tsx asks the computers.
+import { t } from "i18next";
+
 import type { RpcError } from "../../desktop/src/preload/bridge";
 import {
   ErrorCodes,
@@ -23,7 +25,7 @@ export const backendNames: Record<Backend, string> = {
 /** A failed usage request, for people. A plxd without the method is too old. */
 export function usageError(error: RpcError): string {
   return error.code === ErrorCodes.MethodNotFound
-    ? "Update plxd on this computer to see its usage here."
+    ? t("Update plxd on this computer to see its usage here.")
     : describeError(error);
 }
 

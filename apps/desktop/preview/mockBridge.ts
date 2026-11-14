@@ -2270,6 +2270,7 @@ export const mockBridge: ParallaxBridge = {
   updatable: updateDemo !== null,
   firstRun: onboarding,
   locale: undefined,
+  setLanguage: () => {},
   update: demoUpdate,
   onUpdateState: (listener) => {
     listener(updateState);

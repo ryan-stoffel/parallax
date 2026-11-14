@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
@@ -147,10 +148,10 @@ export const offlineReason = (state?: ConnectionState) =>
   state?.status === "connected"
     ? undefined
     : state?.updating
-      ? "plxd is restarting for an update…"
+      ? t("plxd is restarting for an update…")
       : state?.status === "failed"
-        ? "Disconnected from plxd"
-        : "Connecting to plxd…";
+        ? t("Disconnected from plxd")
+        : t("Connecting to plxd…");
 
 /** A small dot in the state's color: green, pulsing amber, or red. */
 export function StatusDot({ state }: { state: ConnectionState | undefined }) {
@@ -164,10 +165,10 @@ export function StatusDot({ state }: { state: ConnectionState | undefined }) {
 
 /** The state in a word or two. */
 export function statusLabel(state: ConnectionState): string {
-  if (state.status === "connected") return "Connected";
-  if (state.updating) return "Updating…";
-  if (state.status === "connecting") return "Connecting…";
-  return state.retrying ? "Reconnecting…" : "Disconnected";
+  if (state.status === "connected") return t("Connected");
+  if (state.updating) return t("Updating…");
+  if (state.status === "connecting") return t("Connecting…");
+  return state.retrying ? t("Reconnecting…") : t("Disconnected");
 }
 
 /**
@@ -197,7 +198,7 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
             onClick={() => void window.parallax.retry(hostId)}
             className="rounded-sm px-1.5 text-foreground hover:bg-hover"
           >
-            Retry
+            {t("Retry")}
           </button>
         )}
       </div>

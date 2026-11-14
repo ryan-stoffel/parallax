@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   useEffect,
   useId,
@@ -182,11 +183,16 @@ export function CompareCode({
     <>
       <p className="mt-1.5 text-body text-muted-foreground">
         {access.step === "confirm"
-          ? `Press Enter in ${computer.name}'s terminal, or Allow in its Parallax, to finish.`
-          : `Allow it only if ${computer.name} shows this code, in its terminal or its Parallax. Another code, or none, means something else is answering.`}
+          ? t("Press Enter in {{name}}'s terminal, or Allow in its Parallax, to finish.", {
+              name: computer.name,
+            })
+          : t(
+              "Allow it only if {{name}} shows this code, in its terminal or its Parallax. Another code, or none, means something else is answering.",
+              { name: computer.name },
+            )}
       </p>
       <p
-        aria-label="Code"
+        aria-label={t("Code", { context: "pairing code" })}
         className="mt-3 rounded-md border border-border py-2 text-center font-mono text-xl tracking-[0.3em] tabular-nums"
       >
         {spacedCode(access.code)}
@@ -198,7 +204,7 @@ export function CompareCode({
       )}
       <div className="mt-4 flex items-center justify-end gap-2">
         <button type="button" className={`${quietButton} -ml-2.5 mr-auto`} onClick={onType}>
-          Type a code instead
+          {t("Type a code instead")}
         </button>
         <button
           type="button"
@@ -206,7 +212,7 @@ export function CompareCode({
           disabled={busy === "deny"}
           onClick={() => void answer(false)}
         >
-          {busy === "deny" ? "Denying…" : "Deny"}
+          {busy === "deny" ? t("Denying…") : t("Deny")}
         </button>
         <button
           type="button"
@@ -214,7 +220,7 @@ export function CompareCode({
           disabled={!!busy || access.step === "confirm"}
           onClick={() => void answer(true)}
         >
-          {busy === "allow" || access.step === "confirm" ? "Waiting…" : "Allow"}
+          {busy === "allow" || access.step === "confirm" ? t("Waiting…") : t("Allow")}
         </button>
       </div>
     </>
@@ -234,10 +240,10 @@ export function SetupCodeField({
   return (
     <>
       <p className="mt-1.5 text-body text-muted-foreground">
-        Type the 6-digit code showing on {name}, in its terminal or its Parallax.
+        {t("Type the 6-digit code showing on {{name}}, in its terminal or its Parallax.", { name })}
       </p>
       <input
-        aria-label="Code"
+        aria-label={t("Code", { context: "pairing code" })}
         autoFocus
         value={code}
         onChange={(e) => setCode(e.target.value.replace(/[^\d ]/g, "").slice(0, 7))}
@@ -254,15 +260,17 @@ export function SetupCodeField({
         </p>
       )}
       <p className="mt-2 text-meta text-faint-foreground">
-        No code there? Run the setup command on {name} again, or in Parallax there, choose Show
-        setup code in Settings › Connections.{" "}
+        {t(
+          "No code there? Run the setup command on {{name}} again, or in Parallax there, choose Show setup code in Settings › Connections.",
+          { name },
+        )}{" "}
         <button
           type="button"
           className="underline"
           disabled={busy}
           onClick={() => void window.parallax.askAgain(id)}
         >
-          Compare codes instead
+          {t("Compare codes instead")}
         </button>
       </p>
     </>
@@ -289,7 +297,7 @@ export function NewComputerDialog({
   if (!typing && (step === "compare" || step === "confirm"))
     return (
       <Modal
-        title={`Add ${computer.name}?`}
+        title={t("Add {{name}}?", { name: computer.name })}
         icon={icon}
         onClose={onClose}
         onSubmit={(e) => e.preventDefault()}
@@ -304,7 +312,7 @@ export function NewComputerDialog({
     );
   return (
     <Modal
-      title={`Add ${computer.name}`}
+      title={t("Add {{name}}", { name: computer.name })}
       icon={icon}
       onClose={onClose}
       onSubmit={(e) => void form.submit(e)}
@@ -312,10 +320,10 @@ export function NewComputerDialog({
       <SetupCodeField id={computer.id} name={computer.name} form={form} />
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className={quietButton} onClick={onClose}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button type="submit" className={primaryButton} disabled={!form.ready}>
-          {form.busy ? "Connecting…" : "Connect"}
+          {form.busy ? t("Connecting…") : t("Connect")}
         </button>
       </div>
     </Modal>
@@ -326,7 +334,7 @@ export function NewComputerDialog({
 function AddedDialog({ name, onClose }: { name: string; onClose: () => void }) {
   return (
     <Modal
-      title={`${name} is added`}
+      title={t("{{name}} is added", { name })}
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
@@ -334,11 +342,11 @@ function AddedDialog({ name, onClose }: { name: string; onClose: () => void }) {
       }}
     >
       <p className="mt-1.5 text-body text-muted-foreground">
-        Pick it under Runs on when you start a thread. Its threads show up in your sidebar.
+        {t("Pick it under Runs on when you start a thread. Its threads show up in your sidebar.")}
       </p>
       <div className="mt-4 flex justify-end">
         <button type="submit" className={primaryButton} autoFocus>
-          Done
+          {t("Done")}
         </button>
       </div>
     </Modal>
@@ -361,7 +369,7 @@ export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClo
   };
   return (
     <Modal
-      title={`Allow ${request.name}?`}
+      title={t("Allow {{name}}?", { name: request.name })}
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
@@ -369,11 +377,17 @@ export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClo
       }}
     >
       <p className="mt-1.5 text-body text-muted-foreground">
-        It's asking to use your computers{request.host && `, starting with ${request.host}`}. Allow
-        it only if {request.name} shows this code.
+        {request.host
+          ? t(
+              "It's asking to use your computers, starting with {{host}}. Allow it only if {{name}} shows this code.",
+              { host: request.host, name: request.name },
+            )
+          : t("It's asking to use your computers. Allow it only if {{name}} shows this code.", {
+              name: request.name,
+            })}
       </p>
       <p
-        aria-label="Code"
+        aria-label={t("Code", { context: "pairing code" })}
         className="mt-3 rounded-md border border-border py-2 text-center font-mono text-xl tracking-[0.3em] tabular-nums"
       >
         {spacedCode(request.code)}
@@ -390,10 +404,10 @@ export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClo
           disabled={!!busy}
           onClick={() => void answer(false)}
         >
-          {busy === "deny" ? "Denying…" : "Deny"}
+          {busy === "deny" ? t("Denying…") : t("Deny")}
         </button>
         <button type="submit" className={primaryButton} disabled={!!busy}>
-          {busy === "allow" ? "Allowing…" : "Allow"}
+          {busy === "allow" ? t("Allowing…") : t("Allow")}
         </button>
       </div>
     </Modal>

@@ -4,6 +4,7 @@
 // and offers Writing Tools and Siri, and Edit, where the thread allows it, takes it back to edit.
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import { Copy, Pencil, TextCursor, X } from "lucide-react-native";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -53,9 +54,9 @@ export function MessageMenu({ text, onEdit, children }: { text: string; onEdit?:
   const next = useRef<() => void>(undefined);
 
   const actions: Action[] = [
-    { label: "Copy", icon: Copy, run: () => void Clipboard.setStringAsync(text) },
-    { label: "Select text", icon: TextCursor, run: () => setSelecting(true), after: true },
-    ...(onEdit ? [{ label: "Edit", icon: Pencil, run: onEdit }] : []),
+    { label: t("Copy"), icon: Copy, run: () => void Clipboard.setStringAsync(text) },
+    { label: t("Select text"), icon: TextCursor, run: () => setSelecting(true), after: true },
+    ...(onEdit ? [{ label: t("Edit"), icon: Pencil, run: onEdit }] : []),
   ];
 
   const lift = () =>
@@ -100,7 +101,7 @@ export function MessageMenu({ text, onEdit, children }: { text: string; onEdit?:
         ref={ref}
         onLongPress={lift}
         delayLongPress={320}
-        accessibilityHint="Double-tap and hold for Copy, Select text, and Edit"
+        accessibilityHint={t("Double-tap and hold for Copy, Select text, and Edit")}
         style={{ maxWidth: "85%", opacity: frame ? 0 : 1 }}
       >
         {children}
@@ -125,7 +126,7 @@ export function MessageMenu({ text, onEdit, children }: { text: string; onEdit?:
                 scrim,
               ]}
             >
-              <Pressable style={{ flex: 1 }} onPress={close} accessibilityLabel="Close menu" />
+              <Pressable style={{ flex: 1 }} onPress={close} accessibilityLabel={t("Close menu")} />
             </Animated.View>
             <Animated.View
               pointerEvents="none"
@@ -188,8 +189,8 @@ function SelectText({ text, open, onClose }: { text: string; open: boolean; onCl
       onClose={onClose}
       head={
         <View style={styles.head}>
-          <T style={sheetTitle}>Select text</T>
-          <GlassButton label="Close" size={40} onPress={onClose}>
+          <T style={sheetTitle}>{t("Select text")}</T>
+          <GlassButton label={t("Close")} size={40} onPress={onClose}>
             <Icon icon={X} size={20} color={c.foreground} />
           </GlassButton>
         </View>
@@ -200,7 +201,7 @@ function SelectText({ text, open, onClose }: { text: string; open: boolean; onCl
         readOnly
         multiline
         scrollEnabled
-        accessibilityLabel="Message text"
+        accessibilityLabel={t("Message text")}
         selectionColor={c.accent}
         style={[styles.text, { color: c.foreground, maxHeight: height * 0.6, fontFamily: font.regular }]}
       />

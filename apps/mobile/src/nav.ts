@@ -1,6 +1,7 @@
 // The app's screens and what each opens with, for typed navigation, and the sidebar's controls.
 import { useNavigation, type NavigatorScreenParams } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import { createContext, useContext } from "react";
 
 import type { SettingsPage } from "./settingsLogic";
@@ -112,7 +113,9 @@ export function useShow() {
 /** "now", "5m", "3h", "2d": how long ago `iso` was, as the desktop's sidebar says it. */
 export function ago(iso: string, now = Date.now()) {
   const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  return minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
+  if (minutes < 1) return t("now");
+  if (minutes < 60) return t("{{minutes}}m", { minutes });
+  return minutes < 1440
+    ? t("{{hours}}h", { hours: Math.floor(minutes / 60) })
+    : t("{{days}}d", { days: Math.floor(minutes / 1440) });
 }

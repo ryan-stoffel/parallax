@@ -1,6 +1,8 @@
+import { t } from "i18next";
 import { ArrowDownUp, ListFilter } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { msg } from "../i18n";
 import { useShownConnection } from "./ConnectionStatus";
 import { icons } from "./icons";
 import { PrRow } from "./pr/parts";
@@ -25,11 +27,11 @@ import {
 } from "./ui";
 
 const sorts: { id: PrSort; label: string }[] = [
-  { id: "updated", label: "Recently updated" },
-  { id: "newest", label: "Newest" },
-  { id: "oldest", label: "Oldest" },
-  { id: "number", label: "Number" },
-  { id: "title", label: "Title" },
+  { id: "updated", label: msg("Recently updated") },
+  { id: "newest", label: msg("Newest") },
+  { id: "oldest", label: msg("Oldest") },
+  { id: "number", label: msg("Number") },
+  { id: "title", label: msg("Title") },
 ];
 
 const key = (e: PrEntry) => `${e.hostId} ${e.url}`;
@@ -159,15 +161,15 @@ export function PullRequestsPage({
       )}
       <div className={open ? "hidden" : "contents"}>
         <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-8 pt-6 pb-4">
-          <h1 className="text-heading font-semibold">Pull requests</h1>
+          <h1 className="text-heading font-semibold">{t("Pull requests")}</h1>
           {entries.length > 0 && (
             <>
               <label className={`ml-auto w-72 ${searchField}`}>
                 <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
                 <input
                   type="search"
-                  aria-label="Search pull requests"
-                  placeholder="Search pull requests, or label:bug"
+                  aria-label={t("Search pull requests")}
+                  placeholder={t("Search pull requests, or label:bug")}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Escape" && setQuery("")}
@@ -175,29 +177,31 @@ export function PullRequestsPage({
                 />
               </label>
               <Menu
-                label="Sort"
+                label={t("Sort")}
                 icon={<ArrowDownUp aria-hidden />}
                 items={sorts.map((s) => ({
                   id: s.id,
-                  label: s.label,
+                  label: t(s.label),
                   checked: sort === s.id,
                   onPick: () => setSort(s.id),
                 }))}
                 closeOnPick
               />
               <Menu
-                label={chosen.size ? `Filters (${chosen.size})` : "Filters"}
+                label={
+                  chosen.size ? t("Filters ({{count}})", { count: chosen.size }) : t("Filters")
+                }
                 icon={<ListFilter aria-hidden />}
                 items={facets.map((f) => ({
                   id: f.id,
-                  group: f.group,
-                  label: f.label,
+                  group: t(f.group),
+                  label: t(f.label),
                   checked: chosen.has(f.id),
                   onPick: () => toggle(f.id),
                 }))}
               />
               <IconButton
-                label="Refresh"
+                label={t("Refresh")}
                 aria-busy={loading}
                 disabled={loading}
                 onClick={() => void load(entries)}
@@ -210,20 +214,20 @@ export function PullRequestsPage({
         {entries.length === 0 ? (
           <EmptyState
             icon={<icons.pullRequest aria-hidden />}
-            title="No pull requests yet"
-            body="A pull request a thread opens or links shows up here."
+            title={t("No pull requests yet")}
+            body={t("A pull request a thread opens or links shows up here.")}
             className="flex-1 justify-center"
           />
         ) : rows.length === 0 ? (
           <EmptyState
             icon={<icons.search aria-hidden />}
-            title="Nothing matches"
-            body="Try another search, or clear the filters."
+            title={t("Nothing matches")}
+            body={t("Try another search, or clear the filters.")}
             className="flex-1 justify-center"
           />
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <ul ref={list} aria-label="Pull requests" className="mx-auto max-w-5xl px-6 pb-16">
+            <ul ref={list} aria-label={t("Pull requests")} className="mx-auto max-w-5xl px-6 pb-16">
               {rows.map(({ entry, read: r }) => (
                 <li key={key(entry)} data-pr={key(entry)}>
                   <PrRow
@@ -238,8 +242,10 @@ export function PullRequestsPage({
                         href={entry.url}
                         target="_blank"
                         rel="noreferrer"
-                        aria-label={`Open #${numberOf(entry.url)} on GitHub`}
-                        title="Open on GitHub"
+                        aria-label={t("Open #{{number}} on GitHub", {
+                          number: numberOf(entry.url),
+                        })}
+                        title={t("Open on GitHub")}
                         className="absolute top-2 right-2 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-selected hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
                       >
                         <icons.external aria-hidden />
@@ -291,17 +297,17 @@ function OpenPullRequest({
   return (
     <>
       <nav
-        aria-label="Pull request"
+        aria-label={t("Pull request")}
         className="mx-auto flex w-full max-w-3xl shrink-0 items-center justify-between gap-2 px-4 pt-2"
       >
         <Button size="sm" variant="quiet" onClick={onBack}>
           <icons.back aria-hidden />
-          Pull requests
+          {t("Pull requests")}
         </Button>
         <Button
           size="sm"
           variant="quiet"
-          title={`Open the thread ${entry.threadTitle}`}
+          title={t("Open the thread {{title}}", { title: entry.threadTitle })}
           onClick={onOpenThread}
           className="min-w-0"
         >

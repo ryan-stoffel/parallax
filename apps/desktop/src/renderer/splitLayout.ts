@@ -1,6 +1,7 @@
 // Where the window's panes tile (PLX-1082, PLX-1289): rectangles on a grid of two columns and two
 // rows, so a pane takes a whole side or half, or one corner. One vertical cut and one horizontal cut
 // set the grid's lines.
+import { msg } from "../i18n";
 
 /** The most panes a window holds, one to a cell. */
 export const maxTiles = 4;
@@ -62,15 +63,16 @@ export const zoneCells: Record<Zone, Cells> = {
   lowerRight,
 };
 
+/** Each zone's name, marked with `msg`: show it with `t`. */
 export const zoneNames: Record<Zone, string> = {
-  left: "Left",
-  right: "Right",
-  top: "Top",
-  bottom: "Bottom",
-  upperLeft: "Upper left",
-  upperRight: "Upper right",
-  lowerLeft: "Lower left",
-  lowerRight: "Lower right",
+  left: msg("Left"),
+  right: msg("Right"),
+  top: msg("Top"),
+  bottom: msg("Bottom"),
+  upperLeft: msg("Upper left"),
+  upperRight: msg("Upper right"),
+  lowerLeft: msg("Lower left"),
+  lowerRight: msg("Lower right"),
 };
 
 /** Where the grid's lines sit, as shares of the window. */

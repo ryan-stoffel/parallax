@@ -18,8 +18,10 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { t } from "i18next";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { msg } from "../i18n";
 import type { DeviceHost, Profile } from "../preload/bridge";
 import type { UsageHour } from "../protocol/generated/protocol";
 import { useConnectedNow } from "./ConnectionStatus";
@@ -36,21 +38,22 @@ import { hourCycle } from "./prefs";
 import { compact } from "./Usage";
 import { ConfirmRemove, quietButton, Section, settingRow } from "./settings/parts";
 import { IconButton } from "./ui";
+import { locale } from "./locale";
 
 /** How far back the Tokens chart looks, in days. */
 const TOKEN_DAYS = 90;
 /** The activity grid's weeks: a year, ending with this one. */
 const WEEKS = 53;
 
-const monthYear = new Intl.DateTimeFormat("en", { month: "long", year: "numeric" });
-const shortDay = new Intl.DateTimeFormat("en", {
+const monthYear = new Intl.DateTimeFormat(locale(), { month: "long", year: "numeric" });
+const shortDay = new Intl.DateTimeFormat(locale(), {
   weekday: "short",
   month: "short",
   day: "numeric",
 });
-const monthName = new Intl.DateTimeFormat("en", { month: "short" });
-const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
-const hourName = () => new Intl.DateTimeFormat("en", { hour: "numeric", ...hourCycle() });
+const monthName = new Intl.DateTimeFormat(locale(), { month: "short" });
+const monthDay = new Intl.DateTimeFormat(locale(), { month: "short", day: "numeric" });
+const hourName = () => new Intl.DateTimeFormat(locale(), { hour: "numeric", ...hourCycle() });
 
 const card = "rounded-xl border border-border bg-surface";
 const heading = "text-body font-medium text-muted-foreground";
@@ -63,7 +66,7 @@ const dangerOutline =
 export function SecuredByClerk() {
   return (
     <span className="flex items-center gap-1 text-meta text-faint-foreground">
-      Secured by
+      {t("Secured by")}
       <span className="flex items-center gap-0.5 font-semibold text-muted-foreground">
         <ClerkLogo className="size-3.5" />
         Clerk
@@ -75,27 +78,27 @@ export function SecuredByClerk() {
 const tabs = [
   {
     id: "profile",
-    name: "Profile",
+    name: msg("Profile"),
     Icon: CircleUser,
-    about: "Your Parallax account, and what your agents add up to.",
+    about: msg("Your Parallax account, and what your agents add up to."),
   },
   {
     id: "activity",
-    name: "Activity",
+    name: msg("Activity"),
     Icon: ActivityIcon,
-    about: "When and how much your agents ran, across every host.",
+    about: msg("When and how much your agents ran, across every host."),
   },
   {
     id: "security",
-    name: "Security",
+    name: msg("Security"),
     Icon: ShieldCheck,
-    about: "How you sign in, and where. Each opens Clerk's account page in your browser.",
+    about: msg("How you sign in, and where. Each opens Clerk's account page in your browser."),
   },
   {
     id: "connect",
     name: "Parallax Connect",
     Icon: Network,
-    about: "The computers you added with Parallax Connect. Turn them on or off in Settings.",
+    about: msg("The computers you added with Parallax Connect. Turn them on or off in Settings."),
   },
 ] as const;
 
@@ -118,7 +121,7 @@ export function AccountDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [tab, setTab] = useState<(typeof tabs)[number]["id"]>("profile");
-  const current = tabs.find((t) => t.id === tab)!;
+  const current = tabs.find((x) => x.id === tab)!;
   useEffect(() => dialog.current?.showModal(), []);
   const hosts = useHosts();
   const [now] = useState(Date.now);
@@ -155,18 +158,18 @@ export function AccountDialog({
       <div className="flex h-full">
         <nav className="flex w-52 shrink-0 flex-col gap-px border-r border-border bg-sidebar px-2 pt-4 pb-3">
           <h2 id={titleId} className="mb-3 px-2 text-heading font-semibold">
-            Account
+            {t("Account")}
           </h2>
-          {tabs.map((t) => (
+          {tabs.map((x) => (
             <button
-              key={t.id}
+              key={x.id}
               type="button"
-              aria-current={t.id === tab ? "page" : undefined}
-              onClick={() => setTab(t.id)}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body hover:bg-hover ${t.id === tab ? "bg-selected text-foreground" : "text-foreground/80"}`}
+              aria-current={x.id === tab ? "page" : undefined}
+              onClick={() => setTab(x.id)}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body hover:bg-hover ${x.id === tab ? "bg-selected text-foreground" : "text-foreground/80"}`}
             >
-              <t.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-              {t.name}
+              <x.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              {t(x.name)}
             </button>
           ))}
           <div className="mt-auto flex flex-col gap-2 px-2">
@@ -179,8 +182,8 @@ export function AccountDialog({
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="border-b border-border px-8 pt-5 pb-4">
-            <h3 className="text-reading font-semibold">{current.name}</h3>
-            <p className="mt-0.5 text-body text-muted-foreground">{current.about}</p>
+            <h3 className="text-reading font-semibold">{t(current.name)}</h3>
+            <p className="mt-0.5 text-body text-muted-foreground">{t(current.about)}</p>
           </header>
           <div className="@container min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
             {tab === "profile" ? (
@@ -213,7 +216,7 @@ export function AccountDialog({
         </div>
       </div>
       <span className="absolute top-3 right-3">
-        <IconButton label="Close" onClick={() => dialog.current?.close()}>
+        <IconButton label={t("Close")} onClick={() => dialog.current?.close()}>
           <X aria-hidden />
         </IconButton>
       </span>
@@ -267,15 +270,18 @@ function ProfileCard({
 
   const chips: { Icon: LucideIcon; text: string }[] = [];
   if (activity.since)
-    chips.push({ Icon: CalendarDays, text: `Building since ${monthYear.format(activity.since)}` });
+    chips.push({
+      Icon: CalendarDays,
+      text: t("Building since {{date}}", { date: monthYear.format(activity.since) }),
+    });
   if (repos > 0)
     chips.push({
       Icon: FolderGit2,
-      text: `${repos} ${repos === 1 ? "repository" : "repositories"}`,
+      text: t("{{count}} repositories", { count: repos, defaultValue_one: "{{count}} repository" }),
     });
 
   return (
-    <section ref={ref} aria-label="Profile" className={`mb-8 overflow-hidden ${card}`}>
+    <section ref={ref} aria-label={t("Profile")} className={`mb-8 overflow-hidden ${card}`}>
       <Banner />
       <div className="px-6 pb-6">
         <div className="relative -mt-12 flex items-end justify-between gap-4">
@@ -290,7 +296,11 @@ function ProfileCard({
           ) : (
             <button type="button" onClick={() => void share()} className={`mb-1 ${outlineButton}`}>
               {sharing === "copied" ? <Check /> : <Link />}
-              {sharing === "copied" ? "Copied" : sharing === "failed" ? "Couldn't copy" : "Share"}
+              {sharing === "copied"
+                ? t("Copied")
+                : sharing === "failed"
+                  ? t("Couldn't copy")
+                  : t("Share")}
             </button>
           )}
         </div>
@@ -316,29 +326,36 @@ function ProfileCard({
         )}
 
         <dl className="mt-6 grid grid-cols-2 gap-2.5 @xl:grid-cols-4">
-          <Stat Icon={Bot} tone="blue" label="Agents" value={activity.agents} />
+          <Stat Icon={Bot} tone="blue" label={t("Agents")} value={activity.agents} />
           <Stat
             Icon={GitPullRequest}
             tone="blue"
-            label="Pull requests"
+            label={t("Pull requests")}
             value={activity.pullRequests}
           />
           <Stat
             Icon={Trophy}
             tone="coral"
-            label="Longest streak"
+            label={t("Longest streak")}
             value={activity.longest}
-            unit="d"
+            unit={t("d", { context: "days" })}
           />
           <Stat
             Icon={Flame}
             tone={activity.current ? "coral" : "off"}
-            label="Current streak"
+            label={t("Current streak")}
             value={activity.current}
-            unit="d"
+            unit={t("d", { context: "days" })}
           />
         </dl>
-        {hosts > 1 && <p className="mt-3 text-meta text-faint-foreground">Across {hosts} hosts</p>}
+        {hosts > 1 && (
+          <p className="mt-3 text-meta text-faint-foreground">
+            {t("Across {{count}} hosts", {
+              count: hosts,
+              defaultValue_one: "Across {{count}} host",
+            })}
+          </p>
+        )}
       </div>
     </section>
   );
@@ -419,24 +436,30 @@ function Hours({ hours }: { hours: number[] }) {
   const at = (hour: number) => hourName().format(new Date(2000, 0, 1, hour));
   const Icon = rhythmIcon(busiest);
   return (
-    <section aria-label="When you build" className={`flex flex-col p-5 ${card}`}>
-      <h2 className={heading}>When you build</h2>
+    <section aria-label={t("When you build")} className={`flex flex-col p-5 ${card}`}>
+      <h2 className={heading}>{t("When you build")}</h2>
       <p className="mt-1 flex items-center gap-1.5 text-reading font-medium [&_svg]:size-4 [&_svg]:text-mark-coral">
         <Icon aria-hidden />
-        {rhythmOf(busiest)}
+        {t(rhythmOf(busiest))}
         <span className="text-body font-normal text-muted-foreground">
-          · busiest around {at(busiest)}
+          {t("· busiest around {{hour}}", { hour: at(busiest) })}
         </span>
       </p>
       <div
         role="img"
-        aria-label={`Agents started in each hour of the day, most around ${at(busiest)}`}
+        aria-label={t("Agents started in each hour of the day, most around {{hour}}", {
+          hour: at(busiest),
+        })}
         className="mt-4 flex min-h-20 flex-1 items-end gap-[3px]"
       >
         {hours.map((agents, hour) => (
           <div
             key={hour}
-            title={`${agents} ${agents === 1 ? "agent" : "agents"} at ${at(hour)}`}
+            title={t("{{count}} agents at {{hour}}", {
+              count: agents,
+              hour: at(hour),
+              defaultValue_one: "{{count}} agent at {{hour}}",
+            })}
             style={{ height: `${Math.max(6, (agents / max) * 100)}%` }}
             className={`flex-1 rounded-sm ${hour === busiest ? "bg-accent" : agents ? "bg-accent/45" : "bg-selected"}`}
           />
@@ -457,14 +480,16 @@ function Models({ activity }: { activity: Activity }) {
   if (!top.length) return null;
   const max = top[0]!.agents;
   return (
-    <section aria-label="Models" className={`p-5 ${card}`}>
-      <h2 className={heading}>Models</h2>
+    <section aria-label={t("Models")} className={`p-5 ${card}`}>
+      <h2 className={heading}>{t("Models")}</h2>
       <ul className="mt-3 flex flex-col gap-3">
         {top.map(({ backend, model, agents }) => {
           const Logo = backendLogos[backend];
           const name = model
             ? (models.find((m) => m.id === model)?.name ?? model)
-            : `${instanceName(backend) ?? kinds[backend]?.name ?? backend} default`;
+            : t("{{backend}} default", {
+                backend: instanceName(backend) ?? kinds[backend]?.name ?? backend,
+              });
           return (
             <li key={`${backend}/${model ?? ""}`} className="text-body">
               <div className="flex items-center gap-2">
@@ -539,30 +564,44 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
           className={shade ? "fill-accent" : "fill-selected"}
           fillOpacity={shade || undefined}
         >
-          <title>{`${agents} ${agents === 1 ? "agent" : "agents"} on ${shortDay.format(date)}`}</title>
+          <title>
+            {t("{{count}} agents on {{date}}", {
+              count: agents,
+              date: shortDay.format(date),
+              defaultValue_one: "{{count}} agent on {{date}}",
+            })}
+          </title>
         </rect>,
       );
     }
   }
 
   return (
-    <section aria-label="Activity" className={`mb-8 p-5 ${card}`}>
+    <section aria-label={t("Activity")} className={`mb-8 p-5 ${card}`}>
       <div className="mb-3 flex items-baseline justify-between gap-4">
-        <h2 className={heading}>Activity</h2>
+        <h2 className={heading}>{t("Activity")}</h2>
         <p className="text-body text-muted-foreground">
-          {year.toLocaleString("en")} {year === 1 ? "agent" : "agents"} in the past year
+          {t("{{total}} agents in the past year", {
+            count: year,
+            total: year.toLocaleString("en"),
+            defaultValue_one: "{{total}} agent in the past year",
+          })}
         </p>
       </div>
       <svg
         viewBox={`0 0 ${LEFT + WEEKS * CELL} ${TOP + 7 * CELL}`}
         className="w-full fill-faint-foreground text-micro"
         role="img"
-        aria-label="Agents started each day for the past year"
+        aria-label={t("Agents started each day for the past year")}
       >
         {months}
-        {(["M", "W", "F"] as const).map((d, i) => (
+        {[
+          msg("M", { context: "weekday initial" }),
+          msg("W", { context: "weekday initial" }),
+          msg("F", { context: "weekday initial" }),
+        ].map((d, i) => (
           <text key={d} x={0} y={TOP + (i * 2 + 1) * CELL + 9}>
-            {d}
+            {t(d)}
           </text>
         ))}
         {cells}
@@ -570,15 +609,19 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
       <div className="mt-3 flex items-center justify-between gap-4 text-meta text-muted-foreground">
         <span>
           {activity.busiest &&
-            `Busiest day: ${shortDay.format(dayOf(activity.busiest.day))}, ${activity.busiest.agents} ${activity.busiest.agents === 1 ? "agent" : "agents"}`}
+            t("Busiest day: {{date}}, {{count}} agents", {
+              date: shortDay.format(dayOf(activity.busiest.day)),
+              count: activity.busiest.agents,
+              defaultValue_one: "Busiest day: {{date}}, {{count}} agent",
+            })}
         </span>
         <span aria-hidden className="flex items-center gap-1 text-faint-foreground">
-          Less
+          {t("Less")}
           <span className="size-2.5 rounded-sm bg-selected" />
           {shades.map((s) => (
             <span key={s} style={{ opacity: s }} className="size-2.5 rounded-sm bg-accent" />
           ))}
-          More
+          {t("More")}
         </span>
       </div>
     </section>
@@ -641,23 +684,30 @@ function Tokens({
     .join(" ");
 
   return (
-    <section aria-label="Tokens" className={`mb-8 p-5 ${card}`}>
+    <section aria-label={t("Tokens")} className={`mb-8 p-5 ${card}`}>
       <div className="flex items-baseline justify-between gap-4">
-        <h2 className={heading}>Tokens</h2>
-        <p className="text-body text-muted-foreground">Past {TOKEN_DAYS} days</p>
+        <h2 className={heading}>{t("Tokens")}</h2>
+        <p className="text-body text-muted-foreground">
+          {t("Past {{count}} days", { count: TOKEN_DAYS, defaultValue_one: "Past {{count}} day" })}
+        </p>
       </div>
       {total > 0 ? (
         <>
           <p className="mt-1 text-display font-semibold tabular-nums">
             {compact.format(total)}
-            <span className="ml-1 text-reading font-normal text-muted-foreground">tokens</span>
+            <span className="ml-1 text-reading font-normal text-muted-foreground">
+              {t("tokens", { count: total, defaultValue_one: "token" })}
+            </span>
           </p>
           <svg
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
             className="mt-4 h-32 w-full"
             role="img"
-            aria-label={`${compact.format(total)} tokens in the past ${TOKEN_DAYS} days`}
+            aria-label={t("{{tokens}} tokens in the past {{days}} days", {
+              tokens: compact.format(total),
+              days: TOKEN_DAYS,
+            })}
           >
             <defs>
               <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
@@ -677,12 +727,15 @@ function Tokens({
           </svg>
           <div className="mt-2 flex justify-between text-meta text-faint-foreground">
             <span>{monthDay.format(days[0])}</span>
-            <span>Today</span>
+            <span>{t("Today")}</span>
           </div>
         </>
       ) : (
         <p className="mt-2 text-body text-muted-foreground">
-          No usage in the past {TOKEN_DAYS} days.
+          {t("No usage in the past {{count}} days.", {
+            count: TOKEN_DAYS,
+            defaultValue_one: "No usage in the past {{count}} day.",
+          })}
         </p>
       )}
     </section>
@@ -695,12 +748,12 @@ function Tokens({
  */
 function AccountRows({ profile }: { profile: Profile }) {
   return (
-    <Section title="Account settings">
+    <Section title={t("Account settings")}>
       <div className={settingRow}>
         <div className="min-w-0">
-          <span className="block text-body font-medium">Name</span>
+          <span className="block text-body font-medium">{t("Name")}</span>
           <span className="block truncate text-body text-muted-foreground">
-            {profile.name || "Shown on your profile and in the sidebar."}
+            {profile.name || t("Shown on your profile and in the sidebar.")}
           </span>
         </div>
         <button
@@ -708,25 +761,25 @@ function AccountRows({ profile }: { profile: Profile }) {
           onClick={() => void window.parallax.editProfile()}
           className={outlineButton}
         >
-          Edit
+          {t("Edit")}
         </button>
       </div>
       <div className={settingRow}>
         <div className="min-w-0">
-          <span className="block text-body font-medium">Email</span>
+          <span className="block text-body font-medium">{t("Email")}</span>
           <span className="block truncate text-body text-muted-foreground">{profile.email}</span>
         </div>
       </div>
       <div className={settingRow}>
-        <RowText title="Sign out">
-          Only on this computer. Your other devices stay signed in.
+        <RowText title={t("Sign out")}>
+          {t("Only on this computer. Your other devices stay signed in.")}
         </RowText>
         <button
           type="button"
           onClick={() => void window.parallax.signOut()}
           className={quietButton}
         >
-          Sign out
+          {t("Sign out")}
         </button>
       </div>
     </Section>
@@ -757,23 +810,25 @@ function SecurityRows() {
   const security = () => void window.parallax.editProfile("security");
   return (
     <>
-      <Section title="Sign-in">
+      <Section title={t("Sign-in")}>
         <div className={settingRow}>
-          <RowText title="Password">Set or change the password you sign in with by email.</RowText>
+          <RowText title={t("Password")}>
+            {t("Set or change the password you sign in with by email.")}
+          </RowText>
           <button type="button" onClick={security} className={outlineButton}>
-            Set password
+            {t("Set password")}
           </button>
         </div>
         <div className={settingRow}>
-          <RowText title="Passkeys">
-            Sign in with Touch ID, Windows Hello, or a security key.
+          <RowText title={t("Passkeys")}>
+            {t("Sign in with Touch ID, Windows Hello, or a security key.")}
           </RowText>
           <button type="button" onClick={security} className={outlineButton}>
-            Add a passkey
+            {t("Add a passkey")}
           </button>
         </div>
         <div className="flex gap-4 border-border px-4 py-3 not-last:border-b">
-          <span className="w-40 shrink-0 text-body font-medium">Active devices</span>
+          <span className="w-40 shrink-0 text-body font-medium">{t("Active devices")}</span>
           <div className="min-w-0 flex-1">
             <div className="flex gap-3">
               <DeviceIcon
@@ -782,9 +837,9 @@ function SecurityRows() {
               />
               <div className="min-w-0 text-body leading-6 text-muted-foreground">
                 <span className="flex items-center gap-2 text-body text-foreground">
-                  {deviceKinds[window.parallax.platform] ?? "Computer"}
+                  {t(deviceKinds[window.parallax.platform] ?? msg("Computer"))}
                   <span className="rounded-md border border-border bg-selected px-1.5 text-meta leading-5 text-muted-foreground">
-                    This device
+                    {t("This device")}
                   </span>
                 </span>
                 <span className="block truncate">{local.name}</span>
@@ -797,18 +852,18 @@ function SecurityRows() {
               onClick={security}
               className="mt-2 text-body text-accent hover:underline"
             >
-              Your other devices, on Clerk
+              {t("Your other devices, on Clerk")}
             </button>
           </div>
         </div>
       </Section>
-      <Section title="Danger zone">
+      <Section title={t("Danger zone")}>
         <div className={settingRow}>
-          <RowText title="Delete account">
-            Deletes your Parallax account and signs out every device.
+          <RowText title={t("Delete account")}>
+            {t("Deletes your Parallax account and signs out every device.")}
           </RowText>
           <button type="button" onClick={security} className={dangerOutline}>
-            Delete account
+            {t("Delete account")}
           </button>
         </div>
       </Section>
@@ -818,9 +873,9 @@ function SecurityRows() {
 
 /** What kind of computer this is, by Node's platform, as Active devices names it. */
 const deviceKinds: Record<string, string> = {
-  darwin: "Macintosh",
-  win32: "Windows PC",
-  linux: "Linux PC",
+  darwin: msg("Macintosh"),
+  win32: msg("Windows PC"),
+  linux: msg("Linux PC"),
 };
 
 /**
@@ -839,11 +894,11 @@ function ConnectRows() {
   if (!devices.length)
     return (
       <p className="text-body text-muted-foreground">
-        No computers yet. Add one from Settings › Connections.
+        {t("No computers yet. Add one from Settings › Connections.")}
       </p>
     );
   return (
-    <Section title="Computers">
+    <Section title={t("Computers")}>
       {devices.map((d) => (
         <div key={d.id} className={settingRow}>
           <div className="flex min-w-0 items-center gap-3">
@@ -852,8 +907,10 @@ function ConnectRows() {
             </span>
             <RowText title={d.name}>
               {confirming === d.id && d.id.startsWith("account:")
-                ? "It leaves your account, and none of your computers or devices reach it anymore."
-                : [d.hostName, d.os && osName(d.os), d.ip, !d.enabled && "Off here"]
+                ? t(
+                    "It leaves your account, and none of your computers or devices reach it anymore.",
+                  )
+                : [d.hostName, d.os && osName(d.os), d.ip, !d.enabled && t("Off here")]
                     .filter(Boolean)
                     .join(" · ")}
             </RowText>
@@ -865,7 +922,7 @@ function ConnectRows() {
             />
           ) : (
             <button type="button" onClick={() => setConfirming(d.id)} className={dangerOutline}>
-              Remove
+              {t("Remove")}
             </button>
           )}
         </div>

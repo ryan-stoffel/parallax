@@ -1,3 +1,5 @@
+// `t` here is @lezer/highlight's tags, so strings translate through `i18next.t`.
+import i18next from "i18next";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
@@ -89,9 +91,10 @@ function detectIndent(text: string): Indent {
       previous = width;
     } else if (line.trim()) previous = 0;
   }
-  if (tabs > spaced) return { unit: "\t", size: 4, name: "Tabs" };
+  if (tabs > spaced)
+    return { unit: "\t", size: 4, name: i18next.t("Tabs", { context: "indentation" }) };
   const size = step || 2;
-  return { unit: " ".repeat(size), size, name: `Spaces: ${size}` };
+  return { unit: " ".repeat(size), size, name: i18next.t("Spaces: {{size}}", { size }) };
 }
 
 /** Draws an indent guide through the leading whitespace of each line on screen. */
@@ -338,15 +341,15 @@ function findBar(view: EditorView): Panel {
     return element;
   };
   const start = getSearchQuery(view.state);
-  const find = field("Find");
+  const find = field(i18next.t("Find"));
   find.value = start.search;
   find.setAttribute("main-field", "true");
-  const replace = field("Replace");
+  const replace = field(i18next.t("Replace"));
   replace.value = start.replace;
   const pressed = (element: HTMLElement) => element.getAttribute("aria-pressed") === "true";
-  const matchCase = toggle("Aa", "Match case", start.caseSensitive);
-  const word = toggle("ab", "Whole word", start.wholeWord);
-  const regexp = toggle(".*", "Regular expression", start.regexp);
+  const matchCase = toggle("Aa", i18next.t("Match case"), start.caseSensitive);
+  const word = toggle("ab", i18next.t("Whole word"), start.wholeWord);
+  const regexp = toggle(".*", i18next.t("Regular expression"), start.regexp);
   const commit = () =>
     view.dispatch({
       effects: setSearchQuery.of(
@@ -363,7 +366,7 @@ function findBar(view: EditorView): Panel {
   const recount = () => {
     const query = getSearchQuery(view.state);
     if (!query.search || !query.valid) {
-      count.textContent = query.search ? "Invalid" : "";
+      count.textContent = query.search ? i18next.t("Invalid") : "";
       return;
     }
     const cursor = query.getCursor(view.state);
@@ -395,10 +398,12 @@ function findBar(view: EditorView): Panel {
   replacing.hidden = true;
   replacing.append(
     replace,
-    button("Replace", "Replace", () => replaceNext(view)),
-    button("All", "Replace all", () => replaceAll(view)),
+    button(i18next.t("Replace"), i18next.t("Replace"), () => replaceNext(view)),
+    button(i18next.t("All", { context: "replace all" }), i18next.t("Replace all"), () =>
+      replaceAll(view),
+    ),
   );
-  const showReplace = button("⇄", "Replace", () => {
+  const showReplace = button("⇄", i18next.t("Replace"), () => {
     replacing.hidden = !replacing.hidden;
     showReplace.setAttribute("aria-pressed", String(!replacing.hidden));
   });
@@ -409,10 +414,10 @@ function findBar(view: EditorView): Panel {
     matchCase,
     word,
     regexp,
-    button("↑", "Previous match", () => findPrevious(view)),
-    button("↓", "Next match", () => findNext(view)),
+    button("↑", i18next.t("Previous match"), () => findPrevious(view)),
+    button("↓", i18next.t("Next match"), () => findNext(view)),
     showReplace,
-    button("×", "Close", () => {
+    button("×", i18next.t("Close"), () => {
       closeSearchPanel(view);
       view.focus();
     }),

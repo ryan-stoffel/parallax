@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Check, ChevronDown, Code, FolderOpen, SquareTerminal } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -156,9 +157,9 @@ export function OpenMenu({
     void open("terminal", app.path);
   };
   const terminalWhy = !folder
-    ? "No folder to open yet"
+    ? t("No folder to open yet")
     : !terminal
-      ? "No installed terminal found"
+      ? t("No installed terminal found")
       : undefined;
   // On another computer, how to change where it's reached.
   const destinationItem = !local && (
@@ -176,7 +177,7 @@ export function OpenMenu({
         className={`${menuItem} disabled:opacity-50`}
       >
         <icons.ssh aria-hidden />
-        <span className="flex-1">SSH destination…</span>
+        <span className="flex-1">{t("SSH destination…")}</span>
       </button>
     </>
   );
@@ -188,29 +189,38 @@ export function OpenMenu({
             type="button"
             disabled={!folder}
             onClick={() => void open(current.target)}
-            aria-label={`Open in ${current.name}`}
+            aria-label={t("Open in {{app}}", { app: current.name })}
             title={
-              folder
-                ? `Open in ${current.name}${keys ? ` (${keys})` : ""}`
-                : "No folder to open yet"
+              !folder
+                ? t("No folder to open yet")
+                : keys
+                  ? t("Open in {{app}} ({{keys}})", { app: current.name, keys })
+                  : t("Open in {{app}}", { app: current.name })
             }
             className={`${menuItem} group/app min-w-0 flex-1 disabled:opacity-50`}
           >
             {muted(appIcon(current))}
-            <span className="truncate">Open in {current.name}</span>
+            <span className="truncate">{t("Open in {{app}}", { app: current.name })}</span>
           </button>
           <button
             type="button"
             popoverTarget={id}
             aria-haspopup="menu"
-            aria-label="Choose editor or file manager"
+            aria-label={t("Choose editor or file manager")}
             className={splitChevron}
           >
             <ChevronDown aria-hidden />
           </button>
         </div>
       )}
-      <Menu ref={menu} id={id} label="Open in" align="end" className="min-w-52 p-1" focus="button">
+      <Menu
+        ref={menu}
+        id={id}
+        label={t("Open in")}
+        align="end"
+        className="min-w-52 p-1"
+        focus="button"
+      >
         {editors.map((app) => (
           <button
             key={app.target}
@@ -238,13 +248,15 @@ export function OpenMenu({
           className={`${menuItem} group/app min-w-0 flex-1 disabled:opacity-50`}
         >
           {muted(terminalApp ? terminalIcon(terminalApp) : terminalIcon())}
-          <span className="truncate">Open in {terminal?.name ?? "terminal"}</span>
+          <span className="truncate">
+            {t("Open in {{app}}", { app: terminal?.name ?? t("terminal") })}
+          </span>
         </button>
         <button
           type="button"
           popoverTarget={terminalId}
           aria-haspopup="menu"
-          aria-label="Choose terminal"
+          aria-label={t("Choose terminal")}
           disabled={terminals.length === 0}
           className={splitChevron}
         >
@@ -254,7 +266,7 @@ export function OpenMenu({
       <Menu
         ref={terminalMenu}
         id={terminalId}
-        label="Terminals"
+        label={t("Terminals")}
         align="end"
         className="min-w-52 p-1"
         focus="button"
@@ -280,7 +292,7 @@ export function OpenMenu({
       {createPortal(
         <Dialog
           ref={destinationDialog}
-          aria-label="SSH destination"
+          aria-label={t("SSH destination")}
           onClose={() => {
             pending.current = undefined;
           }}
@@ -292,16 +304,18 @@ export function OpenMenu({
             }}
           >
             <div className="px-5 pt-4 pb-3">
-              <h2 className="text-reading font-semibold">SSH destination for {hostName}</h2>
+              <h2 className="text-reading font-semibold">
+                {t("SSH destination for {{computer}}", { computer: hostName })}
+              </h2>
               <p className="mt-0.5 text-body text-muted-foreground">
-                Where editors and terminals reach it, using your ssh config and keys. The computer
-                needs SSH turned on, called Remote Login on a Mac. Leave it empty to use the address
-                Parallax finds.
+                {t(
+                  "Where editors and terminals reach it, using your ssh config and keys. The computer needs SSH turned on, called Remote Login on a Mac. Leave it empty to use the address Parallax finds.",
+                )}
               </p>
             </div>
             <div className="px-5 pb-4">
               <input
-                aria-label="SSH destination"
+                aria-label={t("SSH destination")}
                 // The native attribute, so showModal focuses the field.
                 ref={(el) => el?.setAttribute("autofocus", "")}
                 placeholder="me@mac-mini"
@@ -322,10 +336,10 @@ export function OpenMenu({
             </div>
             <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
               <Button type="button" onClick={() => destinationDialog.current?.close()}>
-                Cancel
+                {t("Cancel")}
               </Button>
               <Button type="submit" variant="primary">
-                Save
+                {t("Save")}
               </Button>
             </div>
           </form>

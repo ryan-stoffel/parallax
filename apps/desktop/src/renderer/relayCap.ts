@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import type { RelayUsage } from "../protocol/generated/protocol";
 
 /** The share of its daily cap a computer has used when the apps start to warn (PLX-1357). */
@@ -21,14 +23,20 @@ export function relayCapNotice(
   if (usage.bytes > usage.limit)
     return {
       reached: true,
-      title: `${name} reached its daily Parallax Connect limit`,
-      body: `Parallax Connect won't reach it until the limit resets at ${resets}. It still works over the LAN.`,
+      title: t("{{name}} reached its daily Parallax Connect limit", { name }),
+      body: t(
+        "Parallax Connect won't reach it until the limit resets at {{time}}. It still works over the LAN.",
+        { time: resets },
+      ),
     };
   const percent = Math.floor((usage.bytes / usage.limit) * 100);
   const gib = usage.limit / 1024 ** 3;
   return {
     reached: false,
-    title: `${name} is near its daily Parallax Connect limit`,
-    body: `It has used ${percent}% of today's ${gib} GiB. The limit resets at ${resets}. It still works over the LAN, which doesn't count.`,
+    title: t("{{name}} is near its daily Parallax Connect limit", { name }),
+    body: t(
+      "It has used {{percent}}% of today's {{gib}} GiB. The limit resets at {{time}}. It still works over the LAN, which doesn't count.",
+      { percent, gib, time: resets },
+    ),
   };
 }

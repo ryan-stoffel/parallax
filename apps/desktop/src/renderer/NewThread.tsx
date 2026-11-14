@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Folder, MessagesSquare, Plus, SquareDashed } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
@@ -122,8 +123,10 @@ type Attempt = ThreadStart & {
   background: boolean;
 };
 
-const noAccounts =
-  "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.";
+const noAccounts = () =>
+  t(
+    "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.",
+  );
 
 // Each host's worker backend once read, so New Thread shows its choices on its first render.
 const workerBackends = new Map<string, string | undefined>();
@@ -145,7 +148,10 @@ type Balance =
 const balances = new Map<string, Balance>();
 let checks = 0;
 
-const noRoom = "No computer can take this thread. Pick one under the box.";
+// Stands in for the heading's repository button while its sentence is translated.
+const buttonMark = "\u0000";
+
+const noRoom = () => t("No computer can take this thread. Pick one under the box.");
 
 /**
  * The New Thread screen: a centered composer, and under it where the thread runs. When the host
@@ -259,7 +265,7 @@ export function NewThread({
   // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
   // older one would make a worktree anyway.
   const checkoutUnavailable =
-    connected && !("checkout" in connection.capabilities) ? "needs a newer plxd" : undefined;
+    connected && !("checkout" in connection.capabilities) ? t("needs a newer plxd") : undefined;
   const checkout = workspace === "checkout" && !checkoutUnavailable && !repoless(group);
   // Only a plxd with `repoRefs` lists refs or starts from one, and only a repository has them.
   const refsAvailable = !repoless(group) && connected && "repoRefs" in connection.capabilities;
@@ -306,7 +312,7 @@ export function NewThread({
       return describeError(error);
     const options = await accountOptions(hostId);
     if (typeof options === "string") return options;
-    if (options.length === 0) return noAccounts;
+    if (options.length === 0) return noAccounts();
     if (options.length === 1) return runOn(attempt, options[0]!);
     setPicked(0);
     setChoices(options);
@@ -334,7 +340,10 @@ export function NewThread({
     if (moving || asking) {
       // One held send at a time: a second, as after Cmd/Ctrl+Enter, goes back in the box.
       if (held)
-        return `Waiting for ${group.name} to be ready on ${hostName((moving ?? asking)!.hostId)}`;
+        return t("Waiting for {{repo}} to be ready on {{computer}}", {
+          repo: group.name,
+          computer: hostName((moving ?? asking)!.hostId),
+        });
       if (!background) setStarting({ prompt, images, threads, mentions });
       opening.current = !background;
       return new Promise((done) =>
@@ -345,7 +354,7 @@ export function NewThread({
     if (balanceOn && balance.state === "none") {
       setStarting(undefined);
       opening.current = false;
-      return noRoom;
+      return noRoom();
     }
     setChoices(undefined);
     const last = failed.current;
@@ -395,7 +404,12 @@ export function NewThread({
     const error = await runOn({ ...failed.current!, background: false }, option);
     setChoosing(false);
     if (error) {
-      notify({ key: "account", tone: "error", title: "Couldn't start the thread", body: error });
+      notify({
+        key: "account",
+        tone: "error",
+        title: t("Couldn't start the thread"),
+        body: error,
+      });
       opening.current = false;
     }
   };
@@ -431,8 +445,8 @@ export function NewThread({
         (cloning ? update : notify)({
           key,
           tone: "info",
-          title: `Cloning ${repo} onto ${hostName(id)}`,
-          body: line ? [phase, detail].filter(Boolean).join(" · ") : "Connecting…",
+          title: t("Cloning {{repo}} onto {{computer}}", { repo, computer: hostName(id) }),
+          body: line ? [phase, detail].filter(Boolean).join(" · ") : t("Connecting…"),
           progress: { percent },
         });
         cloning = true;
@@ -444,9 +458,9 @@ export function NewThread({
       notify({
         key,
         tone: "error",
-        title: `Couldn't set up ${repo} on ${hostName(id)}`,
+        title: t("Couldn't set up {{repo}} on {{computer}}", { repo, computer: hostName(id) }),
         body: result,
-        action: { label: "Try again", run: () => void pickHost(id, at) },
+        action: { label: t("Try again"), run: () => void pickHost(id, at) },
       });
     } else if (result && "url" in result) {
       dismiss(key);
@@ -454,12 +468,16 @@ export function NewThread({
     } else {
       // No entry when the computer had it, or another pick came first.
       if (result && cloning)
-        notify({ key, tone: "success", title: `${repo} is ready on ${hostName(id)}` });
+        notify({
+          key,
+          tone: "success",
+          title: t("{{repo}} is ready on {{computer}}", { repo, computer: hostName(id) }),
+        });
       else dismiss(key);
       setArriving(result?.id);
     }
   };
-  const hostName = (id: string) => hosts.find((h) => h.id === id)?.name ?? "that computer";
+  const hostName = (id: string) => hosts.find((h) => h.id === id)?.name ?? t("that computer");
   // The computer the thread runs on as far as the user can tell: the one picked, while it's set up.
   const shownHostId = moving?.hostId ?? asking?.hostId ?? hostId;
   // A held send goes once the move is over, from this render's props: the new computer's.
@@ -582,7 +600,7 @@ export function NewThread({
       const why = Object.fromEntries(
         candidates.flatMap((c) => {
           const verdict = assess(c);
-          return "why" in verdict ? [[c.id, whyText[verdict.why]]] : [];
+          return "why" in verdict ? [[c.id, t(whyText[verdict.why])]] : [];
         }),
       );
       const pick = pickComputer(candidates);
@@ -624,12 +642,12 @@ export function NewThread({
         problem:
           balance.state === "none"
             ? balance.leftOut
-              ? "Every computer is left out."
-              : "No computer can take this thread. Pick one."
+              ? t("Every computer is left out.")
+              : t("No computer can take this thread. Pick one.")
             : balance.state === "pinned"
               ? balance.pinned === "threads"
-                ? "Stays here, with threads from this computer attached."
-                : "Stays here, with files from this computer named."
+                ? t("Stays here, with threads from this computer attached.")
+                : t("Stays here, with files from this computer named.")
               : undefined,
         onChoose: () => {
           setPickedRef(undefined);
@@ -644,7 +662,7 @@ export function NewThread({
     if (!path) return;
     const repo = await addRepo(path);
     if (typeof repo === "string")
-      notify({ tone: "error", title: "Couldn't add the repository", body: repo });
+      notify({ tone: "error", title: t("Couldn't add the repository"), body: repo });
     else pickGroup(repo.id);
   };
 
@@ -657,6 +675,20 @@ export function NewThread({
   // it, it sits at a fixed height instead, and the page scrolls; with a column beside what's under
   // it, it's a page.
   const page = starting === undefined && !!aside;
+  // The heading's text before and after its repository button, split where the language puts it.
+  const shownHostName = hosts.find((h) => h.id === shownHostId)?.name;
+  const heading = (
+    group.id === noRepo
+      ? t("What should we do on {{computer}}?", { computer: buttonMark })
+      : group.project
+        ? t("What should we work on in {{project}}?", { project: buttonMark })
+        : shared
+          ? t("What should we build in {{repo}} on {{computer}}?", {
+              repo: buttonMark,
+              computer: shownHostName,
+            })
+          : t("What should we build in {{repo}}?", { repo: buttonMark })
+  ).split(buttonMark);
   return (
     <div
       className={
@@ -702,11 +734,7 @@ export function NewThread({
         {starting === undefined && !header && (
           <>
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
-              {group.id === noRepo
-                ? "What should we do on "
-                : group.project
-                  ? "What should we work on in "
-                  : "What should we build in "}
+              {heading[0]}
               <button
                 type="button"
                 popoverTarget={repoMenu}
@@ -714,10 +742,9 @@ export function NewThread({
                 title={group.id === noRepo ? undefined : group.name}
                 className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
               >
-                {group.id === noRepo ? hosts.find((h) => h.id === shownHostId)?.name : group.name}
+                {group.id === noRepo ? shownHostName : group.name}
               </button>
-              {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
-              ?
+              {heading[1]}
             </h1>
             {/* Without a repo, an empty line in its place, so the box doesn't move. */}
             {repoless(group) ? (
@@ -736,7 +763,7 @@ export function NewThread({
                   aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
                   className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                 >
-                  or work without a repo
+                  {t("or work without a repo")}
                   {noRepoKeys && (
                     <kbd
                       aria-hidden
@@ -752,7 +779,7 @@ export function NewThread({
             <Picker
               id={repoMenu}
               button={false}
-              label="Repository"
+              label={t("Repository")}
               value={group.id}
               onChange={(value) => {
                 if (value === addRepository) return void pickRepository();
@@ -788,7 +815,7 @@ export function NewThread({
                   ? [
                       {
                         value: addRepository,
-                        label: "Add repository…",
+                        label: t("Add repository…"),
                         icon: <Plus />,
                         divider: true,
                       },
@@ -817,7 +844,7 @@ export function NewThread({
           connected={connected}
           contextAndFast={connected && "contextAndFast" in connection.capabilities}
           disabledReason={disabledReason}
-          sendWaits={checking ? "The Load Balancer is checking your computers" : undefined}
+          sendWaits={checking ? t("The Load Balancer is checking your computers") : undefined}
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={
@@ -826,7 +853,7 @@ export function NewThread({
               : undefined
           }
           placeholder={
-            group.project ? "Ask anything, paste an image, use /skills or @threads" : undefined
+            group.project ? t("Ask anything, paste an image, use /skills or @threads") : undefined
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
@@ -908,10 +935,10 @@ export function NewThread({
                 >
                   <legend className="float-left mb-2.5 w-full">
                     <span className="block text-body font-medium">
-                      Choose an account to run this thread
+                      {t("Choose an account to run this thread")}
                     </span>
                     <span className="block text-body text-muted-foreground">
-                      New threads on this host use it from now on.
+                      {t("New threads on this host use it from now on.")}
                     </span>
                   </legend>
                   <div className="clear-left flex flex-wrap gap-1">
@@ -937,7 +964,7 @@ export function NewThread({
                     onClick={() => void continueWith(choices[picked]!)}
                     className="mt-3 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
                   >
-                    Continue
+                    {t("Continue")}
                   </button>
                 </fieldset>
               )}

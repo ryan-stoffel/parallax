@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useState } from "react";
 
 import type { AgentPermission } from "../../protocol/generated/protocol";
@@ -16,12 +17,20 @@ import {
   type BehaviorPrefs,
 } from "../prefs";
 import { RunTargetMenu } from "../RunTargetMenu";
-import { Picker } from "../ui";
+import { msg } from "../../i18n";
+import { Picker, type PickerOption } from "../ui";
 import { useHostSettings } from "./hostSettings";
 import { allHosts, field, HostPicker, hostsOf, PageTitle, Row, Section, Switch } from "./parts";
 
 /** The composer's own menus are borderless; on a settings row they get a field's outline. */
 const pickerBox = "rounded-lg border border-border bg-background";
+
+/** An option from a table marked with `msg`, in the shown language. */
+const shown = (o: PickerOption): PickerOption => ({
+  ...o,
+  label: t(o.label),
+  description: o.description && t(o.description),
+});
 
 /**
  * Settings > Threads: what a new thread starts with, how its title and a reply's text are written
@@ -32,22 +41,26 @@ const pickerBox = "rounded-lg border border-border bg-background";
 export function ThreadSettings() {
   return (
     <>
-      <PageTitle title="Threads">
-        What a new thread starts with, how text is written, and when threads pick up again.
+      <PageTitle title={t("Threads")}>
+        {t("What a new thread starts with, how text is written, and when threads pick up again.")}
       </PageTitle>
       <NewThreads />
       <TextGeneration />
       <Resuming />
-      <Section title="Import">
+      <Section title={t("Import")}>
         <Row
-          title="Import sessions"
-          description="Bring past sessions from the Claude, Codex, and Cursor desktop apps and Claude Code and Codex Remote Control into Archived as threads, on this computer or another connected one."
+          title={t("Import sessions")}
+          description={t(
+            "Bring past sessions from the Claude, Codex, and Cursor desktop apps and Claude Code and Codex Remote Control into Archived as threads, on this computer or another connected one.",
+          )}
         >
           <ImportButton what="sessions" />
         </Row>
         <Row
-          title="Import chats"
-          description="Bring chats from a ChatGPT or Claude data export (.zip) into Archived as threads."
+          title={t("Import chats")}
+          description={t(
+            "Bring chats from a ChatGPT or Claude data export (.zip) into Archived as threads.",
+          )}
         >
           <ImportButton what="chats" />
         </Row>
@@ -67,7 +80,8 @@ function NewThreads() {
   const prefs = newThreadPrefs.use();
   const blocked: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
-    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
+    if (!i.enabled)
+      blocked[i.id] = t("{{name}} is turned off in Settings > Providers.", { name: i.name });
   const choices = catalog.models.filter((m) => !blocked[m.provider]);
   const model =
     choices.find((m) => m.provider === prefs.model?.provider && m.id === prefs.model.id) ??
@@ -83,10 +97,12 @@ function NewThreads() {
   const hasFast = !!model?.fast;
 
   return (
-    <Section title="New threads">
+    <Section title={t("New threads")}>
       <Row
-        title="Computer"
-        description="The computer a new thread starts on, while it's connected. New Thread's menu can pick another."
+        title={t("Computer")}
+        description={t(
+          "The computer a new thread starts on, while it's connected. New Thread's menu can pick another.",
+        )}
       >
         <span className={pickerBox}>
           <RunTargetMenu
@@ -96,7 +112,7 @@ function NewThreads() {
           />
         </span>
       </Row>
-      <Row title="Model" description="The model a new thread starts on.">
+      <Row title={t("Model")} description={t("The model a new thread starts on.")}>
         {model ? (
           <span className={pickerBox}>
             <ModelMenu
@@ -109,14 +125,16 @@ function NewThreads() {
             />
           </span>
         ) : (
-          <span className="text-body text-muted-foreground">No models</span>
+          <span className="text-body text-muted-foreground">{t("No models")}</span>
         )}
       </Row>
       {/* A backend that maps no efforts (Cursor) has none to default. */}
       {model && instance?.efforts !== false && (
         <Row
-          title="Reasoning"
-          description="How hard it thinks, and its context window and fast mode where the model has them."
+          title={t("Reasoning")}
+          description={t(
+            "How hard it thinks, and its context window and fast mode where the model has them.",
+          )}
         >
           <span className={pickerBox}>
             <EffortMenu
@@ -133,13 +151,13 @@ function NewThreads() {
         </Row>
       )}
       {permissions.length > 1 && (
-        <Row title="Permissions" description="What a new thread may do without asking.">
+        <Row title={t("Permissions")} description={t("What a new thread may do without asking.")}>
           <Picker
             field
-            label="Permissions"
+            label={t("Permissions")}
             value={permission}
             onChange={(value) => setNewThreadPrefs({ permission: value as AgentPermission })}
-            options={permissions.map((p) => accessOptions[p])}
+            options={permissions.map((p) => shown(accessOptions[p]))}
             align="end"
             className="w-56"
             panelClassName="w-[25rem]"
@@ -147,11 +165,13 @@ function NewThreads() {
         </Row>
       )}
       <Row
-        title="Legacy Plan mode"
-        description="List Plan in the Access picker. A thread already in Plan keeps it either way."
+        title={t("Legacy Plan mode")}
+        description={t(
+          "List Plan in the Access picker. A thread already in Plan keeps it either way.",
+        )}
       >
         <Switch
-          label="Legacy Plan mode"
+          label={t("Legacy Plan mode")}
           checked={legacyPlan}
           onChange={(next) => accessPrefs.set({ legacyPlan: next })}
         />
@@ -162,16 +182,16 @@ function NewThreads() {
 
 /** Response streaming's choices, in the picker's order. */
 const streamingOptions: { value: BehaviorPrefs["responseStreaming"]; label: string }[] = [
-  { value: "live", label: "As it's written" },
-  { value: "paragraphs", label: "Show finished paragraphs" },
-  { value: "full", label: "Wait for the full response" },
+  { value: "live", label: msg("As it's written") },
+  { value: "paragraphs", label: msg("Show finished paragraphs") },
+  { value: "full", label: msg("Wait for the full response") },
 ];
 
 /** What each of Response streaming's choices does, under the row's title. */
 const streamingDescriptions: Record<BehaviorPrefs["responseStreaming"], string> = {
-  live: "A reply's text appears as the agent writes it.",
-  paragraphs: "Each paragraph, list, or code block of a reply appears once it's complete.",
-  full: "A reply's text appears once the reply is complete.",
+  live: msg("A reply's text appears as the agent writes it."),
+  paragraphs: msg("Each paragraph, list, or code block of a reply appears once it's complete."),
+  full: msg("A reply's text appears once the reply is complete."),
 };
 
 /**
@@ -187,7 +207,8 @@ function TextGeneration() {
   const streaming = behaviorPrefs.use().responseStreaming;
   const blocked: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
-    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
+    if (!i.enabled)
+      blocked[i.id] = t("{{name}} is turned off in Settings > Providers.", { name: i.name });
   const namers = catalog.instances.filter((i) => i.kind === "claude" || i.kind === "codex");
   const namerCatalog = {
     ...catalog,
@@ -200,10 +221,12 @@ function TextGeneration() {
   ) ?? { id: naming.id, name: naming.id, provider: naming.provider, contexts: [] };
 
   return (
-    <Section title="Text generation">
+    <Section title={t("Text generation")}>
       <Row
-        title="Naming model"
-        description="Names a new thread and its branch from its first message, after it starts."
+        title={t("Naming model")}
+        description={t(
+          "Names a new thread and its branch from its first message, after it starts.",
+        )}
       >
         <span className="flex gap-2">
           <span className={pickerBox}>
@@ -227,30 +250,31 @@ function TextGeneration() {
         data-setting="thread-title-instructions"
         className="border-border/40 px-4 py-3 not-last:border-b"
       >
-        <span className="block text-body font-medium">Thread title instructions</span>
+        <span className="block text-body font-medium">{t("Thread title instructions")}</span>
         <span className="mt-0.5 block text-meta text-muted-foreground">
-          Added to the prompt that names a new thread. A computer on an older plxd names threads
-          without them.
+          {t(
+            "Added to the prompt that names a new thread. A computer on an older plxd names threads without them.",
+          )}
         </span>
         <textarea
-          aria-label="Thread title instructions"
+          aria-label={t("Thread title instructions")}
           rows={4}
           maxLength={2048}
-          placeholder="Keep titles to a few words. Lead with the main subject."
+          placeholder={t("Keep titles to a few words. Lead with the main subject.")}
           value={prefs.namingInstructions}
           onChange={(e) => setNewThreadPrefs({ namingInstructions: e.target.value })}
           className={`${field} mt-2`}
         />
       </div>
-      <Row title="Response streaming" description={streamingDescriptions[streaming]}>
+      <Row title={t("Response streaming")} description={t(streamingDescriptions[streaming])}>
         <Picker
           field
-          label="Response streaming"
+          label={t("Response streaming")}
           value={streaming}
           onChange={(value) =>
             setBehaviorPrefs({ responseStreaming: value as BehaviorPrefs["responseStreaming"] })
           }
-          options={streamingOptions}
+          options={streamingOptions.map((o) => ({ ...o, label: t(o.label) }))}
           align="end"
           className="w-60"
           panelClassName="min-w-60"
@@ -271,25 +295,25 @@ function Resuming() {
   const { able, connected, error, shared, set } = useHostSettings(hostsOf(hosts, scope));
   const resume = shared("autoResume", (s) => s.autoResume);
   const carryOn = shared("autoResume", (s) => s.continueAfterRestart);
-  const differs = "Differs across computers, so a change here sets them all. ";
-  const failed = "Couldn't save the setting";
+  const differs = `${t("Differs across computers, so a change here sets them all.")} `;
+  const failed = (host: string) => t("Couldn't save the setting on {{host}}", { host });
 
   return (
     <Section
-      title="Resuming threads"
+      title={t("Resuming threads")}
       action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
     >
       <Row
-        title="Resume after a usage limit"
+        title={t("Resume after a usage limit")}
         description={
           error ??
           (connected && !able("autoResume").length
-            ? "This plxd can't resume threads after a usage limit."
-            : `${resume.mixed ? differs : ""}A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.`)
+            ? t("This plxd can't resume threads after a usage limit.")
+            : `${resume.mixed ? differs : ""}${t("A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.")}`)
         }
       >
         <Switch
-          label="Resume after a usage limit"
+          label={t("Resume after a usage limit")}
           checked={!resume.mixed && (resume.value ?? false)}
           disabled={!resume.loaded}
           onChange={(next) => void set("autoResume", { autoResume: next }, failed)}
@@ -297,11 +321,11 @@ function Resuming() {
       </Row>
       {carryOn.value !== undefined && (
         <Row
-          title="Continue threads after restarts"
-          description={`${carryOn.mixed ? differs : ""}A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume.`}
+          title={t("Continue threads after restarts")}
+          description={`${carryOn.mixed ? differs : ""}${t("A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume.")}`}
         >
           <Switch
-            label="Continue threads after restarts"
+            label={t("Continue threads after restarts")}
             checked={!carryOn.mixed && !!carryOn.value}
             onChange={(next) => void set("autoResume", { continueAfterRestart: next }, failed)}
           />

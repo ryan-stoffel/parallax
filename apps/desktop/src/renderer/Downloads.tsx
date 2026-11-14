@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useEffect, useId } from "react";
 
 import type { DownloadInfo } from "../preload/bridge";
@@ -36,12 +37,15 @@ export function downloadSummary(list: readonly DownloadInfo[]) {
 export function downloadStatus(d: DownloadInfo): string {
   if (d.state === "progressing")
     return d.paused
-      ? "Paused"
+      ? t("Paused")
       : d.total > 0
-        ? `${formatBytes(d.received)} of ${formatBytes(d.total)}`
+        ? t("{{received}} of {{total}}", {
+            received: formatBytes(d.received),
+            total: formatBytes(d.total),
+          })
         : formatBytes(d.received);
   if (d.state === "completed") return formatBytes(d.total || d.received);
-  return d.state === "cancelled" ? "Cancelled" : "Failed";
+  return d.state === "cancelled" ? t("Cancelled") : t("Failed");
 }
 
 /**
@@ -59,7 +63,7 @@ export function DownloadsButton() {
   return (
     <>
       <IconButton
-        label={running ? `Downloads, ${running} running` : "Downloads"}
+        label={running ? t("Downloads, {{count}} running", { count: running }) : t("Downloads")}
         popoverTarget={id}
         aria-haspopup="menu"
       >
@@ -90,16 +94,21 @@ export function DownloadsButton() {
           )}
         </span>
       </IconButton>
-      <Menu id={id} label="Downloads" align="end" className="max-h-96 w-80 overflow-y-auto p-1">
+      <Menu
+        id={id}
+        label={t("Downloads")}
+        align="end"
+        className="max-h-96 w-80 overflow-y-auto p-1"
+      >
         <div className="flex items-center justify-between pr-1">
-          <p className={menuHeading}>Downloads</p>
+          <p className={menuHeading}>{t("Downloads")}</p>
           <button
             type="button"
             role="menuitem"
             onClick={() => window.parallax.downloadAction(undefined, "clear")}
             className="rounded-md px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            Clear
+            {t("Clear", { context: "finished downloads" })}
           </button>
         </div>
         {list.map((d) => (
@@ -112,7 +121,7 @@ export function DownloadsButton() {
               type="button"
               role="menuitem"
               aria-disabled={d.state !== "completed"}
-              title={d.state === "completed" ? `Open ${d.name}` : d.url}
+              title={d.state === "completed" ? t("Open {{name}}", { name: d.name }) : d.url}
               onClick={() =>
                 d.state === "completed" && window.parallax.downloadAction(d.id, "open")
               }
@@ -136,7 +145,7 @@ export function DownloadsButton() {
             {d.state === "progressing" ? (
               <IconButton
                 role="menuitem"
-                label={`Cancel ${d.name}`}
+                label={t("Cancel {{name}}", { name: d.name })}
                 onClick={() => window.parallax.downloadAction(d.id, "cancel")}
               >
                 <Close />
@@ -146,7 +155,7 @@ export function DownloadsButton() {
               d.state === "completed" && (
                 <IconButton
                   role="menuitem"
-                  label={`Show ${d.name} in folder`}
+                  label={t("Show {{name}} in folder", { name: d.name })}
                   onClick={() => window.parallax.downloadAction(d.id, "show")}
                 >
                   <FolderOpen />

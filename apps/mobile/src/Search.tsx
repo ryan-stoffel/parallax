@@ -4,6 +4,7 @@
 // every word, each match highlighted. A result becomes the main view, which closes the sheet and
 // the sidebar. An orchestrator with no run asks for its first message and starts first.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import { History, MessagesSquare, Search as SearchIcon, X, type LucideIcon } from "lucide-react-native";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Keyboard, Pressable, SectionList, StyleSheet, Text, TextInput, View } from "react-native";
@@ -23,7 +24,7 @@ type Result = { kind: "thread"; entry: Entry } | { kind: "orchestrator"; entry: 
 
 /** What a thread matches on, and its line under the title. */
 const placeOf = (e: Entry, many: boolean) =>
-  [e.repo ?? "No repo", e.run?.branch, many && e.computer.machine.name].filter(Boolean).join(" · ");
+  [e.repo ?? t("No repo"), e.run?.branch, many && e.computer.machine.name].filter(Boolean).join(" · ");
 
 export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Search">) {
   const c = useColors();
@@ -52,15 +53,15 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
     words.length
       ? [
           {
-            title: "Orchestrators",
+            title: t("Orchestrators"),
             data: orchestratorsOf(computers)
               .filter((p) => matchesAll(`${p.orchestrator.name} ${p.computer.machine.name}`, words))
               .map((entry): Result => ({ kind: "orchestrator", entry })),
           },
-          { title: "Threads", data: asThreads(threads.filter((e) => !e.thread.archived && found(e))) },
-          { title: "Archived", data: asThreads(threads.filter((e) => e.thread.archived && found(e))) },
+          { title: t("Threads"), data: asThreads(threads.filter((e) => !e.thread.archived && found(e))) },
+          { title: t("Archived"), data: asThreads(threads.filter((e) => e.thread.archived && found(e))) },
         ]
-      : [{ title: "Recent", data: asThreads(threads.filter((e) => !e.thread.archived).slice(0, RECENT)) }]
+      : [{ title: t("Recent"), data: asThreads(threads.filter((e) => !e.thread.archived).slice(0, RECENT)) }]
   ).filter((s) => s.data.length);
 
   const open = (hostId: string, runId: string) => {
@@ -77,10 +78,10 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
           <Icon icon={SearchIcon} size={18} color={c.mutedForeground} />
           <TextInput
             ref={input}
-            accessibilityLabel="Search threads"
+            accessibilityLabel={t("Search threads")}
             value={query}
             onChangeText={setQuery}
-            placeholder="Search threads and orchestrators"
+            placeholder={t("Search threads and orchestrators")}
             placeholderTextColor={c.faintForeground}
             selectionColor={c.accent}
             autoCorrect={false}
@@ -90,7 +91,7 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
             style={[styles.input, { color: c.foreground }]}
           />
           {!!query && (
-            <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={10} onPress={() => setQuery("")}>
+            <Pressable accessibilityRole="button" accessibilityLabel={t("Clear search")} hitSlop={10} onPress={() => setQuery("")}>
               <View style={[styles.clear, { backgroundColor: c.faintForeground }]}>
                 <Icon icon={X} size={11} strokeWidth={3} color={c.background} />
               </View>
@@ -111,7 +112,7 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
         contentContainerStyle={{ paddingBottom: 16 }}
         renderSectionHeader={({ section }) => (
           <View style={styles.heading}>
-            {section.title === "Recent" && <Icon icon={History} size={13} color={c.mutedForeground} />}
+            {!words.length && <Icon icon={History} size={13} color={c.mutedForeground} />}
             <T muted medium style={{ fontSize: 13 }}>
               {section.title}
             </T>
@@ -121,7 +122,7 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
           if (item.kind === "orchestrator") {
             const { orchestrator, computer, children } = item.entry;
             const orchestratorRun = orchestrator.run;
-            const unstarted = !orchestratorRun && (starting === orchestrator.id ? "Starting…" : "Not started");
+            const unstarted = !orchestratorRun && (starting === orchestrator.id ? t("Starting…") : t("Not started"));
             return (
               <ResultRow
                 icon={<OrchestratorGlyph icon={orchestrator.icon} size={orchestrator.icon?.image ? 36 : 18} />}
@@ -163,11 +164,11 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
           words.length ? (
             <Empty
               icon={SearchIcon}
-              title={`No results for “${query.trim()}”`}
-              note="Search by a thread's title, repository, branch, or computer."
+              title={t("No results for “{{query}}”", { query: query.trim() })}
+              note={t("Search by a thread's title, repository, branch, or computer.")}
             />
           ) : (
-            <Empty icon={MessagesSquare} title="No threads yet" note="Threads you start show up here." />
+            <Empty icon={MessagesSquare} title={t("No threads yet")} note={t("Threads you start show up here.")} />
           )
         }
       />

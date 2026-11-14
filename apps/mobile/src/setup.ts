@@ -1,6 +1,8 @@
 // What the phone keeps about its computers (machines.json), and how a setup from an older version
 // moves to the account (0091). Pure, so it's tested without React Native.
 
+import { t } from "i18next";
+
 import type { RouteChoices } from "../../desktop/src/preload/routeList";
 import { asLists } from "./access";
 import type { Listed } from "./accountHosts";
@@ -101,11 +103,11 @@ export function computerStatus(row: {
   stopped: boolean;
   usesAny: boolean;
 }) {
-  if (row.ready) return "Ready";
-  if (!row.online) return "Offline";
-  if (row.code) return `Waiting for you to allow · ${row.code}`;
-  if (row.usesAny) return "Not connected yet";
-  return row.stopped ? "Not connected" : "Connects once allowed";
+  if (row.ready) return t("Ready");
+  if (!row.online) return t("Offline");
+  if (row.code) return t("Waiting for you to allow · {{code}}", { code: row.code });
+  if (row.usesAny) return t("Not connected yet");
+  return row.stopped ? t("Not connected") : t("Connects once allowed");
 }
 
 /** How asking ended: allowed, refused so it waits for the user, or no computer answered. */

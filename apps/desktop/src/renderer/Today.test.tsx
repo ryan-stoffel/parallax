@@ -168,7 +168,7 @@ test("auto-archive waits for quiet since the last prompt or run, skips usage lim
   await renderApp();
   await waitForArchives(1);
   expect(archived()).toEqual(["quiet"]);
-  expect(document.body.textContent).toContain("Archived 1 thread quiet for over 1 hours");
+  expect(document.body.textContent).toContain("Archived 1 thread quiet for over 1 hour");
 
   await act(async () => button("Undo")!.click());
   // Back from Settings, say, the list mounts again; what was undone stays.

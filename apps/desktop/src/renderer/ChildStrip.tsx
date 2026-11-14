@@ -1,4 +1,6 @@
+import { t } from "i18next";
 import { ArrowLeft } from "lucide-react";
+import { Trans } from "react-i18next";
 
 import type { ReactNode } from "react";
 
@@ -23,28 +25,30 @@ export function ChildStrip({
   const keys = useShortcutLabel("parentThread");
   return (
     <section
-      aria-label="Child thread"
+      aria-label={t("Child thread")}
       className="flex items-center gap-2.5 py-1 pr-1.5 pl-4 text-body"
     >
       {icon}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        A child thread of{" "}
-        <button
-          type="button"
-          onClick={onOpenName}
-          className="rounded-md text-foreground underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
-        >
-          {name}
-        </button>
+        <Trans values={{ name }}>
+          A child thread of{" "}
+          <button
+            type="button"
+            onClick={onOpenName}
+            className="rounded-md text-foreground underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
+          >
+            {"{{name}}"}
+          </button>
+        </Trans>
       </span>
       <button
         type="button"
         onClick={onBack}
-        title={keys ? `Open parent (${keys})` : "Open parent"}
+        title={keys ? t("Open parent ({{keys}})", { keys }) : t("Open parent")}
         className="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
       >
         <ArrowLeft aria-hidden className="size-3.5" />
-        Open parent
+        {t("Open parent")}
         {keys && <kbd className="font-sans text-caption text-faint-foreground">{keys}</kbd>}
       </button>
     </section>

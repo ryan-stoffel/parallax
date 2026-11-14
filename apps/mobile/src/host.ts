@@ -4,6 +4,7 @@
 // WebHost over.
 
 import * as SecureStore from "expo-secure-store";
+import { t } from "i18next";
 
 import { PinnedSocket, request } from "../modules/pinned-tls";
 import {
@@ -48,9 +49,9 @@ const url = (route: string, path: string) => `https://${withPort(route)}${path}`
 async function post(target: string, pin: string, body: object, headers = {}, timeout?: number) {
   const answer = await request(target, "POST", headers, body, pin, timeout);
   if (answer.status === 401)
-    throw new Error("That code is wrong, used, or expired. Show a new one.");
-  if (answer.status === 429) throw new Error("That computer's code was tried too often. Try again later.");
-  if (answer.status !== 200) throw new Error(`Parallax couldn't pair (${answer.status}).`);
+    throw new Error(t("That code is wrong, used, or expired. Show a new one."));
+  if (answer.status === 429) throw new Error(t("That computer's code was tried too often. Try again later."));
+  if (answer.status !== 200) throw new Error(t("Parallax couldn't pair ({{status}}).", { status: answer.status }));
   return JSON.parse(answer.body) as Record<string, unknown>;
 }
 
@@ -85,7 +86,7 @@ export async function spakePair(
   );
   // Only a host that knows the code can vouch for the certificate this phone saw.
   if (!same(confirmation(shared, "host", fp, tp), fromBase64url(String(finished["confirm"]))))
-    throw new Error("Another computer answered at that address. Pairing stopped.");
+    throw new Error(t("Another computer answered at that address. Pairing stopped."));
   return finished;
 }
 
@@ -104,8 +105,9 @@ export async function pair(route: string, code: string, label: string): Promise<
     undefined,
   ).catch(() => {
     throw new Error(
-      `Couldn't reach Parallax at ${withPort(route)}. ` +
-        "Check the address and that Remote access is on.",
+      t("Couldn't reach Parallax at {{address}}. Check the address and that Remote access is on.", {
+        address: withPort(route),
+      }),
     );
   });
   const fp = seen.fingerprint;
@@ -132,7 +134,7 @@ export async function pairedSocket(
   onRoute?: (route: string) => void,
 ): Promise<WebSocket | { error: string }> {
   const secret = fromBase64url(saved.key);
-  let error = `Couldn't reach ${saved.name}. Check that it's on and on this network.`;
+  let error = t("Couldn't reach {{name}}. Check that it's on and on this network.", { name: saved.name });
   for (const route of saved.routes) {
     const ticketUrl = url(route, "/api/auth/websocket-ticket");
     const headers = {
@@ -141,7 +143,7 @@ export async function pairedSocket(
     };
     const answer = await request(ticketUrl, "POST", headers, undefined, saved.fingerprint).catch(
       (e: { code?: string }) => {
-        if (e.code === "ERR_WRONG_HOST") error = `Another computer answered at ${withPort(route)}.`;
+        if (e.code === "ERR_WRONG_HOST") error = t("Another computer answered at {{address}}.", { address: withPort(route) });
       },
     );
     if (!answer) continue;
@@ -158,8 +160,8 @@ export async function pairedSocket(
     return {
       error:
         answer.status === 401
-          ? "Parallax refused this phone's proof. Check that its clock is right."
-          : `Parallax couldn't connect (${answer.status}).`,
+          ? t("Parallax refused this phone's proof. Check that its clock is right.")
+          : t("Parallax couldn't connect ({{status}}).", { status: answer.status }),
     };
   }
   return { error };

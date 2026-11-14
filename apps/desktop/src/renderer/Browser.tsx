@@ -4,6 +4,7 @@ import type {
   PageTitleUpdatedEvent,
   WebviewTag,
 } from "electron";
+import { t } from "i18next";
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -369,10 +370,10 @@ const backendNames: Partial<Record<string, string>> = {
 const driverOf = (backend?: string): Driver =>
   backend
     ? {
-        name: backendNames[backend] ?? instanceName(backend) ?? "The agent",
+        name: backendNames[backend] ?? instanceName(backend) ?? t("The agent"),
         Logo: backendLogo(backend),
       }
-    : { name: "The agent" };
+    : { name: t("The agent") };
 
 /** A browser tab as the side panel's top bar draws it. */
 export interface BrowserTabFace {
@@ -382,10 +383,10 @@ export interface BrowserTabFace {
 }
 
 /** One of the user's tabs as the panel draws it. */
-export const pageFace = (t: OwnTab): BrowserTabFace => ({
-  title: t.title || (t.url ? shortUrl(t.url) : "New Tab"),
-  ...(t.url && { url: t.url }),
-  ...(t.icon && { icon: t.icon }),
+export const pageFace = (tab: OwnTab): BrowserTabFace => ({
+  title: tab.title || (tab.url ? shortUrl(tab.url) : t("New Tab")),
+  ...(tab.url && { url: tab.url }),
+  ...(tab.icon && { icon: tab.icon }),
 });
 
 /**
@@ -404,7 +405,7 @@ export function useAgentFace(agent: AgentTabs | undefined, remoteHost: string | 
   }, [urls]);
   const name = driverOf(agent?.backend).name;
   return (tab: PreviewTab): BrowserTabFace => ({
-    title: tab.title || shortUrl(tab.url) || "Agent's tab",
+    title: tab.title || shortUrl(tab.url) || t("Agent's tab"),
     url: `${name}: ${tab.url}`,
     ...(icons[iconSite(tab.url)] && { icon: icons[iconSite(tab.url)] }),
   });
@@ -469,7 +470,10 @@ function Tab({
             ? {
                 kind: "search",
                 url: typedUrl,
-                title: `${address.trim()} — Search ${searchEngineName(engine)}`,
+                title: t("{{query}} — Search {{engine}}", {
+                  query: address.trim(),
+                  engine: searchEngineName(engine),
+                }),
               }
             : { kind: "go", url: typedUrl, title: shortUrl(typedUrl) },
           // Read, not subscribed to: typing renders the tab anyway, and every tab subscribing
@@ -551,7 +555,8 @@ function Tab({
     // An extension's own pages, such as its options, open as they are.
     const next = text.startsWith("chrome-extension://") ? text : browserUrl(text);
     if (!next) {
-      if (text.trim()) setError({ url: text, description: "Only http and https pages open here." });
+      if (text.trim())
+        setError({ url: text, description: t("Only http and https pages open here.") });
       return;
     }
     setError(undefined);
@@ -668,29 +673,29 @@ function Tab({
 
   const navBar = (
     <>
-      <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
+      <IconButton label={t("Back")} disabled={!history.back} onClick={() => view.current?.goBack()}>
         <ArrowBack />
       </IconButton>
       <IconButton
-        label="Forward"
+        label={t("Forward")}
         disabled={!history.forward}
         onClick={() => view.current?.goForward()}
       >
         <ArrowForward />
       </IconButton>
       {loading ? (
-        <IconButton label="Stop" onClick={() => view.current?.stop()}>
+        <IconButton label={t("Stop")} onClick={() => view.current?.stop()}>
           <Close />
         </IconButton>
       ) : (
-        <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
+        <IconButton label={t("Reload")} disabled={!src} onClick={() => view.current?.reload()}>
           <Refresh />
         </IconButton>
       )}
       {/* The home page, or a new tab without one (Settings › Browser › Home button). */}
       {homePage.show && (
         <IconButton
-          label="Home"
+          label={t("Home")}
           onClick={() => (homePage.url.trim() ? open(homePage.url) : ask({ kind: "newTab" }))}
         >
           <Home />
@@ -712,8 +717,8 @@ function Tab({
           // A new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
           // opening a page, whose page takes it.
           autoFocus={!page && !load}
-          aria-label="Address"
-          placeholder={`Search ${searchEngineName(engine)} or type a URL`}
+          aria-label={t("Address")}
+          placeholder={t("Search {{engine}} or type a URL", { engine: searchEngineName(engine) })}
           spellCheck={false}
           role="combobox"
           aria-expanded={suggestions.length > 0}
@@ -754,7 +759,7 @@ function Tab({
           <ul
             id={suggestionsId}
             role="listbox"
-            aria-label="Suggestions"
+            aria-label={t("Suggestions")}
             className="absolute inset-x-0 top-full z-50 mt-1 rounded-lg border border-border bg-surface p-1 shadow-composer"
           >
             {suggestions.map((s, i) => {
@@ -794,7 +799,7 @@ function Tab({
         {Math.abs(zoom - 1) > 0.001 && (
           <button
             type="button"
-            title="Reset zoom"
+            title={t("Reset zoom")}
             onClick={() => zoomTo(1)}
             className="shrink-0 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground tabular-nums hover:bg-hover hover:text-foreground"
           >
@@ -822,56 +827,60 @@ function Tab({
       <DownloadsButton />
       <Extensions tab={contentsId} onOpen={(url) => ask({ kind: "open", url })} />
       <ProfileButton onOpen={(url) => ask({ kind: "open", url })} />
-      <IconButton label="More" popoverTarget={menuId} aria-haspopup="menu">
+      <IconButton label={t("More")} popoverTarget={menuId} aria-haspopup="menu">
         <MoreVert />
       </IconButton>
-      <Menu ref={menu} id={menuId} label="More" align="end" className="w-72 p-1.5">
+      <Menu ref={menu} id={menuId} label={t("More")} align="end" className="w-72 p-1.5">
         <ToolbarMenuRow
           icon={<TabIcon aria-hidden />}
-          label="New tab"
+          label={t("New tab")}
           keys={shortcut("T")}
           onClick={pick(() => ask({ kind: "newTab" }))}
         />
         <hr className={toolbarMenuDivider} />
         <ToolbarMenuRow
           icon={<History aria-hidden />}
-          label="History"
+          label={t("History")}
           keys={window.parallax.platform === "darwin" ? shortcut("Y") : "Ctrl+H"}
           onClick={pick(() => ask({ kind: "history" }))}
         />
         <ToolbarMenuRow
           icon={bookmarked ? <StarFilled aria-hidden /> : <Star aria-hidden />}
-          label={bookmarked ? "Remove bookmark" : "Bookmark this tab"}
+          label={bookmarked ? t("Remove bookmark") : t("Bookmark this tab")}
           keys={shortcut("D")}
           disabled={!page}
           onClick={pick(() => local({ kind: "bookmark" }))}
         />
         <ToolbarMenuRow
           icon={<Bookmark aria-hidden />}
-          label="Show bookmarks bar"
+          label={t("Show bookmarks bar")}
           checked={showBookmarks}
           onClick={pick(() => bookmarksBar.set(!showBookmarks))}
         />
         <hr className={toolbarMenuDivider} />
         <ToolbarMenuRow
           icon={<Extension aria-hidden />}
-          label="Extensions"
+          label={t("Extensions")}
           onClick={settingsAt("Extensions")}
         />
         <ToolbarMenuRow
           icon={<DeleteHistory aria-hidden />}
-          label="Delete browsing data…"
+          label={t("Delete browsing data…")}
           onClick={settingsAt("Clear browsing data")}
         />
         <hr className={toolbarMenuDivider} />
-        <div role="group" aria-label="Zoom" className="flex h-9 items-center gap-3 pr-1 pl-2.5">
+        <div
+          role="group"
+          aria-label={t("Zoom")}
+          className="flex h-9 items-center gap-3 pr-1 pl-2.5"
+        >
           <ZoomIn aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          <span className="flex-1 text-body">Zoom</span>
+          <span className="flex-1 text-body">{t("Zoom")}</span>
           <span className="flex items-center rounded-lg bg-selected">
             {(
               [
-                ["Zoom out", -1, Remove],
-                ["Zoom in", 1, Add],
+                [t("Zoom out"), -1, Remove],
+                [t("Zoom in"), 1, Add],
               ] as const
             ).map(([label, direction, Icon], i) => (
               <span key={label} className="contents">
@@ -898,14 +907,14 @@ function Tab({
         <hr className={toolbarMenuDivider} />
         <ToolbarMenuRow
           icon={<Search aria-hidden />}
-          label="Find…"
+          label={t("Find…")}
           keys={shortcut("F")}
           disabled={!src}
           onClick={pick(openFind)}
         />
         <ToolbarMenuRow
           icon={<Print aria-hidden />}
-          label="Print…"
+          label={t("Print…")}
           keys={shortcut("P")}
           disabled={!src}
           onClick={pick(() => void view.current?.print().catch(() => {}))}
@@ -913,23 +922,27 @@ function Tab({
         {/* The page laid out as on a monitor, scaled to fit, rather than at the room it has. */}
         <ToolbarMenuRow
           icon={<DesktopWindows aria-hidden />}
-          label="Desktop site"
+          label={t("Desktop site")}
           checked={desktop}
           onClick={pick(() => refit(desktop ? "panel" : "monitor"))}
         />
         <ToolbarMenuRow
           icon={<Code aria-hidden />}
-          label="Developer tools"
+          label={t("Developer tools")}
           disabled={!src}
           onClick={pick(() => view.current?.openDevTools())}
         />
         <hr className={toolbarMenuDivider} />
         <ToolbarMenuRow
           icon={<Palette aria-hidden />}
-          label="Customize"
+          label={t("Customize")}
           onClick={settingsAt("Theme")}
         />
-        <ToolbarMenuRow icon={<Settings aria-hidden />} label="Settings" onClick={settingsAt()} />
+        <ToolbarMenuRow
+          icon={<Settings aria-hidden />}
+          label={t("Settings")}
+          onClick={settingsAt()}
+        />
       </Menu>
     </>
   );
@@ -964,23 +977,25 @@ function Tab({
       <BookmarksBar onOpen={(url, newTab) => (newTab ? ask({ kind: "open", url }) : open(url))} />
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-meta text-muted-foreground">
-          Pages load on this computer, so localhost isn't {remoteHost}. Forwarding its ports isn't
-          built yet.
+          {t(
+            "Pages load on this computer, so localhost isn't {{host}}. Forwarding its ports isn't built yet.",
+            { host: remoteHost },
+          )}
         </p>
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {finding && (
           <form
             role="search"
-            aria-label="Find in page"
+            aria-label={t("Find in page")}
             onSubmit={(e) => e.preventDefault()}
             className="absolute top-1 right-3 z-20 flex items-center gap-0.5 rounded-lg border border-border bg-surface py-1 pr-1 pl-2.5 text-body shadow-composer"
           >
             <input
               ref={findBar}
               autoFocus
-              aria-label="Find"
-              placeholder="Find in page"
+              aria-label={t("Find")}
+              placeholder={t("Find in page")}
               spellCheck={false}
               value={query}
               onChange={(e) => {
@@ -994,15 +1009,17 @@ function Tab({
               className="w-44 bg-transparent outline-none placeholder:text-faint-foreground"
             />
             <span className="w-14 text-right text-meta text-muted-foreground tabular-nums">
-              {query && matches ? `${matches.active} of ${matches.total}` : ""}
+              {query && matches
+                ? t("{{active}} of {{total}}", { active: matches.active, total: matches.total })
+                : ""}
             </span>
-            <IconButton label="Previous match" onClick={() => find(query, -1)}>
+            <IconButton label={t("Previous match")} onClick={() => find(query, -1)}>
               <ArrowUp />
             </IconButton>
-            <IconButton label="Next match" onClick={() => find(query, 1)}>
+            <IconButton label={t("Next match")} onClick={() => find(query, 1)}>
               <ArrowDown />
             </IconButton>
-            <IconButton label="Close find" onClick={closeFind}>
+            <IconButton label={t("Close find")} onClick={closeFind}>
               <Close />
             </IconButton>
           </form>
@@ -1021,7 +1038,7 @@ function Tab({
               {loading && (
                 <div
                   role="progressbar"
-                  aria-label="Loading"
+                  aria-label={t("Loading")}
                   className="absolute inset-x-0 top-0 z-10 h-0.5 animate-pulse bg-ring"
                 />
               )}
@@ -1049,7 +1066,7 @@ function Tab({
           <div className="solid absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background px-8 pb-16 text-center">
             <TriangleAlert aria-hidden className="mb-1 size-5 text-faint-foreground" />
             <p role="alert" className="text-body font-medium text-foreground">
-              Can't open {error.url}
+              {t("Can't open {{url}}", { url: error.url })}
             </p>
             <p className="text-body break-all text-muted-foreground">{error.description}</p>
           </div>
@@ -1089,7 +1106,7 @@ export function ThemePicker() {
   return (
     <div
       role="radiogroup"
-      aria-label="Theme"
+      aria-label={t("Theme")}
       className="flex flex-wrap gap-x-8 gap-y-4 px-4 pt-1 pb-4"
     >
       {/* Parallax and Helium side by side, Chrome's many on a row of their own. */}
@@ -1136,7 +1153,7 @@ export function ThemePicker() {
                   <span
                     className={`truncate text-meta ${on ? "text-foreground" : "text-muted-foreground"}`}
                   >
-                    {theme.name}
+                    {t(theme.name)}
                   </span>
                 </button>
               );

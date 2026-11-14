@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ChevronRight,
   CircleCheck,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
+import { msg } from "../i18n";
 import type { DeviceHost } from "../preload/bridge";
 import type { ImportableSession, RemoteControlOrigin } from "../protocol/generated/protocol";
 import { NewComputerDialog } from "./AccountPrompts";
@@ -32,9 +34,9 @@ import { IconButton } from "./ui";
 
 /** The kind of computer each platform Claude Code reports is, as Node names them. */
 const computerOf: Record<string, string> = {
-  darwin: "a Mac",
-  win32: "a Windows computer",
-  linux: "a Linux computer",
+  darwin: msg("a Mac"),
+  win32: msg("a Windows computer"),
+  linux: msg("a Linux computer"),
 };
 
 /** How long a computer has to connect and answer once it's picked. */
@@ -167,15 +169,17 @@ export function MoveRemoteControl({
 
   /** Reads where the session runs, then looks for it on the connected computers, then the account's. */
   const find = async () => {
-    show({ kind: "finding", what: "Reading the session on claude.ai" });
+    show({ kind: "finding", what: t("Reading the session on claude.ai") });
     const answer = await window.parallax.request(hostId, "thread/remoteControlOrigin", { runId });
     if ("error" in answer) return fail(describeError(answer.error));
     if (!answer.result.origin?.sessionId)
       return fail(
-        "claude.ai doesn't say which Claude Code session this is, so its computer can't be found.",
+        t(
+          "claude.ai doesn't say which Claude Code session this is, so its computer can't be found.",
+        ),
       );
     origin.current = answer.result.origin;
-    show({ kind: "finding", what: "Looking for it on your computers" });
+    show({ kind: "finding", what: t("Looking for it on your computers") });
     const { hosts, states } = now.current;
     for (const [i, host] of hosts.entries()) {
       const state = states[i];
@@ -189,7 +193,7 @@ export function MoveRemoteControl({
 
   /** Signs in in the browser, then lists the account's computers, before the profile catches up. */
   const signIn = async () => {
-    show({ kind: "finding", what: "Signing in to Parallax in your browser" });
+    show({ kind: "finding", what: t("Signing in to Parallax in your browser") });
     const failed = await window.parallax.signIn(false);
     if (failed) return show({ kind: "signIn", error: failed });
     listComputers();
@@ -209,32 +213,48 @@ export function MoveRemoteControl({
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    fail(`${device.name} didn't connect within two minutes. Check that it's on and try again.`);
+    fail(
+      t("{{computer}} didn't connect within two minutes. Check that it's on and try again.", {
+        computer: device.name,
+      }),
+    );
   };
 
   const where = origin.current?.cwd?.split(/[\\/]/).filter(Boolean).pop();
   const computer = computerOf[origin.current?.platform ?? ""];
   const heading: Record<Step["kind"], [string, string]> = {
-    choose: ["Claude Remote Control thread", `${title} runs on another computer.`],
-    finding: ["Finding its computer", "Where this session runs."],
+    choose: [
+      t("Claude Remote Control thread"),
+      t("{{title}} runs on another computer.", { title }),
+    ],
+    finding: [t("Finding its computer"), t("Where this session runs.")],
     signIn: [
-      "Sign in to reach its computer",
-      "Parallax Connect finds your computers through your Parallax account.",
+      t("Sign in to reach its computer"),
+      t("Parallax Connect finds your computers through your Parallax account."),
     ],
     pick: [
-      "Which computer runs it?",
-      `claude.ai doesn't name it${computer ? `, but it's ${computer}` : ""}. Your computers:`,
+      t("Which computer runs it?"),
+      computer
+        ? t("claude.ai doesn't name it, but it's {{computer}}. Your computers:", {
+            computer: t(computer),
+          })
+        : t("claude.ai doesn't name it. Your computers:"),
     ],
     connecting: [
-      step.kind === "connecting" ? `Connecting to ${step.device.name}` : "",
-      "Then Parallax looks for this session there.",
+      step.kind === "connecting"
+        ? t("Connecting to {{computer}}", { computer: step.device.name })
+        : "",
+      t("Then Parallax looks for this session there."),
     ],
     moving: [
-      step.kind === "moving" ? `Moving to ${step.where}` : "",
-      "It continues there as a Parallax thread.",
+      step.kind === "moving" ? t("Moving to {{computer}}", { computer: step.where }) : "",
+      t("It continues there as a Parallax thread."),
     ],
-    done: [step.kind === "done" ? `Moved to ${step.where}` : "", "It's a Parallax thread now."],
-    failed: ["Couldn't move it", "Try again picks up where it stopped."],
+    done: [
+      step.kind === "done" ? t("Moved to {{computer}}", { computer: step.where }) : "",
+      t("It's a Parallax thread now."),
+    ],
+    failed: [t("Couldn't move it"), t("Try again picks up where it stopped.")],
   };
   const [heading1, line] = heading[step.kind];
 
@@ -257,7 +277,7 @@ export function MoveRemoteControl({
             </h2>
             <p className="mt-0.5 truncate text-body text-muted-foreground">{line}</p>
           </div>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label={t("Close")} onClick={close}>
             <X aria-hidden />
           </IconButton>
         </header>
@@ -266,34 +286,38 @@ export function MoveRemoteControl({
           <div className="flex flex-col gap-2 px-6 pb-6">
             <Choice
               icon={<Network aria-hidden />}
-              title="Move it to Parallax Connect"
-              badge="Recommended"
+              title={t("Move it to Parallax Connect")}
+              badge={t("Recommended")}
               onClick={() => void find()}
               points={[
-                [<Image key="i" aria-hidden />, "Images, Stop, and permission prompts work"],
-                [<SquareTerminal key="t" aria-hidden />, "Its terminal, files, and Git are here"],
+                [<Image key="i" aria-hidden />, t("Images, Stop, and permission prompts work")],
+                [
+                  <SquareTerminal key="t" aria-hidden />,
+                  t("Its terminal, files, and Git are here"),
+                ],
               ]}
             >
-              Parallax finds its computer on your Parallax account, then continues the session there
-              as a normal thread, in the same folder.
+              {t(
+                "Parallax finds its computer on your Parallax account, then continues the session there as a normal thread, in the same folder.",
+              )}
             </Choice>
             <Choice
               icon={<Cloud aria-hidden />}
-              title="Keep it on Remote Control"
+              title={t("Keep it on Remote Control")}
               onClick={() => {
                 onKeep();
                 close();
               }}
               points={[
-                [<ImageOff key="i" aria-hidden />, "Text and text files only, no images"],
-                [<Octagon key="o" aria-hidden />, "Stop and permission prompts stay in Claude"],
+                [<ImageOff key="i" aria-hidden />, t("Text and text files only, no images")],
+                [<Octagon key="o" aria-hidden />, t("Stop and permission prompts stay in Claude")],
                 [
                   <ShieldQuestion key="s" aria-hidden />,
-                  "Messages sent from Claude between turns don't show",
+                  t("Messages sent from Claude between turns don't show"),
                 ],
               ]}
             >
-              Messages go to the session through claude.ai, and its replies stream back.
+              {t("Messages go to the session through claude.ai, and its replies stream back.")}
             </Choice>
           </div>
         )}
@@ -303,8 +327,8 @@ export function MoveRemoteControl({
             {step.kind === "finding"
               ? step.what
               : step.kind === "connecting"
-                ? `Waiting for ${step.device.name} to answer`
-                : "Importing the session and archiving this thread"}
+                ? t("Waiting for {{computer}} to answer", { computer: step.device.name })
+                : t("Importing the session and archiving this thread")}
           </Working>
         )}
 
@@ -321,7 +345,7 @@ export function MoveRemoteControl({
             )}
             <Footer>
               <button type="button" className={quietButton} onClick={close}>
-                Close
+                {t("Close")}
               </button>
               <button
                 type="button"
@@ -329,7 +353,7 @@ export function MoveRemoteControl({
                 onClick={() => void signIn()}
               >
                 <KeyRound aria-hidden />
-                Sign in
+                {t("Sign in")}
               </button>
             </Footer>
           </>
@@ -340,12 +364,14 @@ export function MoveRemoteControl({
             {step.missing && (
               <p className="mx-6 mb-3 flex items-start gap-2 text-body text-muted-foreground [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0">
                 <CircleX aria-hidden className="text-danger" />
-                Claude Code on {step.missing} has no transcript of this session.
+                {t("Claude Code on {{computer}} has no transcript of this session.", {
+                  computer: step.missing,
+                })}
               </p>
             )}
             {computers.length ? (
               <ul
-                aria-label="Your computers"
+                aria-label={t("Your computers")}
                 className="mx-6 mb-5 min-h-0 overflow-y-auto rounded-xl border border-border bg-surface p-1"
               >
                 {computers.map((device) => (
@@ -359,7 +385,9 @@ export function MoveRemoteControl({
               </ul>
             ) : (
               <p className="mx-6 mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
-                No other computers on your Parallax account yet. Add the one that runs this session.
+                {t(
+                  "No other computers on your Parallax account yet. Add the one that runs this session.",
+                )}
               </p>
             )}
             <Footer
@@ -370,7 +398,7 @@ export function MoveRemoteControl({
                   className={`${quietButton} -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
                 >
                   <RefreshCw aria-hidden />
-                  Refresh
+                  {t("Refresh")}
                 </button>
               }
             >
@@ -381,7 +409,7 @@ export function MoveRemoteControl({
                 onClick={() => setAdding(true)}
               >
                 <Plus aria-hidden />
-                Add a computer
+                {t("Add a computer")}
               </button>
             </Footer>
           </>
@@ -391,9 +419,15 @@ export function MoveRemoteControl({
           <>
             <div className="px-6 pb-5">
               <p className="rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
-                It continues on {step.where}
-                {where ? ` in ${where}` : ""}, where messages run Claude Code directly. The Remote
-                Control thread is archived here.
+                {where
+                  ? t(
+                      "It continues on {{computer}} in {{folder}}, where messages run Claude Code directly. The Remote Control thread is archived here.",
+                      { computer: step.where, folder: where },
+                    )
+                  : t(
+                      "It continues on {{computer}}, where messages run Claude Code directly. The Remote Control thread is archived here.",
+                      { computer: step.where },
+                    )}
               </p>
             </div>
             <Footer>
@@ -405,7 +439,7 @@ export function MoveRemoteControl({
                   close();
                 }}
               >
-                Open thread
+                {t("Open thread")}
               </button>
             </Footer>
           </>
@@ -422,10 +456,10 @@ export function MoveRemoteControl({
             </p>
             <Footer>
               <button type="button" className={quietButton} onClick={close}>
-                Close
+                {t("Close")}
               </button>
               <button type="button" className={primaryButton} onClick={() => void find()}>
-                Try again
+                {t("Try again")}
               </button>
             </Footer>
           </>
@@ -546,8 +580,8 @@ function ComputerRow({
   const state = useShownConnection(device.id);
   const connected = state?.status === "connected";
   const status = connected
-    ? "Connected"
-    : (accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…"));
+    ? t("Connected")
+    : (accessLabel(device) ?? (state ? statusLabel(state) : t("Connecting…")));
   return (
     <li className="flex items-center gap-3 rounded-lg px-2.5 py-2">
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background">
@@ -559,11 +593,11 @@ function ComputerRow({
       </span>
       {device.access?.step === "needsCode" ? (
         <button type="button" className={primaryButton} onClick={onEnterCode}>
-          Enter code
+          {t("Enter code")}
         </button>
       ) : (
         <button type="button" disabled={!!device.access} className={primaryButton} onClick={onMove}>
-          Move here
+          {t("Move here")}
         </button>
       )}
     </li>

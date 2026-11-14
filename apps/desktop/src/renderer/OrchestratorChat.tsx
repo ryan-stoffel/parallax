@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { GitBranch } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -105,7 +106,7 @@ export function OrchestratorChat({
                 notify({
                   key: `base-branch/${orchestrator.id}`,
                   tone: "error",
-                  title: "Couldn't change the base branch",
+                  title: t("Couldn't change the base branch"),
                   body: error,
                 }),
             )
@@ -140,7 +141,9 @@ export function OrchestratorChat({
       if (typeof accounts === "string") return accounts;
       const first = accounts[0];
       if (!first)
-        return "No account can run the orchestrator yet. Sign in to Claude Code, or add an API key, then try again.";
+        return t(
+          "No account can run the orchestrator yet. Sign in to Claude Code, or add an API key, then try again.",
+        );
       error = await startOrchestrator(orchestrator.id, id, text, images, {
         ...options,
         account: first.account,
@@ -192,15 +195,15 @@ export function OrchestratorChat({
     if ("error" in sent)
       notify({
         tone: "error",
-        title: "Couldn't send a message",
-        body: `"${text}" wasn't sent: ${describeError(sent.error)}`,
+        title: t("Couldn't send a message"),
+        body: t('"{{text}}" wasn\'t sent: {{error}}', { text, error: describeError(sent.error) }),
       });
     return undefined;
   };
 
   let disabledReason = offlineReason(connection);
   if (connected && !("orchestrator" in connection.capabilities))
-    disabledReason = "This host's plxd can't run an orchestrator yet";
+    disabledReason = t("This host's plxd can't run an orchestrator yet");
 
   return (
     <>
@@ -222,8 +225,9 @@ export function OrchestratorChat({
             <ProjectIcon icon={orchestrator.icon} className="size-8" />
             <h2 className="mt-5 text-heading font-medium tracking-tight">{orchestrator.name}</h2>
             <p className="mt-2 max-w-sm text-reading text-muted-foreground">
-              Describe a feature or a bug and the orchestrator starts an agent on it. Send several
-              back to back to run them together.
+              {t(
+                "Describe a feature or a bug and the orchestrator starts an agent on it. Send several back to back to run them together.",
+              )}
             </p>
           </div>
         </div>
@@ -235,7 +239,7 @@ export function OrchestratorChat({
           answers={answers}
           onAnswer={(a, choice, message, filled) => void answer(a, choice, message, filled)}
           onDismiss={dismiss}
-          disabledReason={connected ? undefined : "Connecting to plxd…"}
+          disabledReason={connected ? undefined : t("Connecting to plxd…")}
         />
         {/* In the same place while it starts, so a failed start puts the message back. */}
         <Composer

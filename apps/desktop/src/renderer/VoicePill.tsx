@@ -1,14 +1,17 @@
+import { t } from "i18next";
 import { Check, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+
+import { msg } from "../i18n";
 import { WorkingMark } from "./AttentionMark";
 import { animate, duration, easing } from "./motion";
 import type { VoicePhase } from "./voiceSession";
 
-const statuses: Record<VoicePhase, string> = {
-  idle: "",
-  loading: "Preparing voice input",
-  recording: "Listening",
-  finishing: "Transcribing",
+/** What each phase says to a screen reader, in English for `t`; idle says nothing. */
+const statuses: Record<Exclude<VoicePhase, "idle">, string> = {
+  loading: msg("Preparing voice input"),
+  recording: msg("Listening"),
+  finishing: msg("Transcribing"),
 };
 
 // The bars: 25 of them, 3px wide with a 2px gap, so 123px across, and a new level each 45ms.
@@ -154,14 +157,14 @@ export function VoicePill({
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center">
       <div
         ref={pill}
-        aria-label="Voice input"
+        aria-label={t("Voice input")}
         className="composer-pill pointer-events-auto flex h-11 items-center justify-center overflow-hidden rounded-[22px] border border-border bg-surface text-foreground shadow-composer"
       >
         <div ref={contents} className="flex items-center gap-2.5 px-1.5">
           <button
             type="button"
-            aria-label="Insert transcription"
-            title="Insert transcription"
+            aria-label={t("Insert transcription")}
+            title={t("Insert transcription")}
             disabled={phase !== "recording"}
             onClick={confirm}
             className="send-sky grid size-8 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
@@ -181,8 +184,8 @@ export function VoicePill({
           )}
           <button
             type="button"
-            aria-label="Cancel voice input"
-            title="Discard recording (Escape)"
+            aria-label={t("Cancel voice input")}
+            title={t("Discard recording (Escape)")}
             onClick={cancel}
             className="grid size-8 shrink-0 place-items-center rounded-full bg-danger text-danger-foreground transition-opacity hover:opacity-85"
           >
@@ -190,7 +193,7 @@ export function VoicePill({
           </button>
         </div>
         <span role="status" className="sr-only">
-          {statuses[phase]}
+          {phase === "idle" ? "" : t(statuses[phase])}
         </span>
       </div>
     </div>

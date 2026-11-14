@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { ErrorCodes, MAX_FRAME_BYTES, type ParallaxRequests } from "../protocol/generated/protocol";
 import type { RpcError, RpcResponse } from "../preload/bridge";
 
@@ -57,18 +59,23 @@ export class RpcClient {
     timeoutMs: number,
     onResponse: (response: RpcResponse<ParallaxRequests[M]["result"]>) => void,
   ): void {
-    if (this.closed) return onResponse(failure(ErrorCodes.InternalError, "not connected"));
+    if (this.closed) return onResponse(failure(ErrorCodes.InternalError, t("not connected")));
     const id = this.nextId++;
     const line = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
     if (Buffer.byteLength(line) - 1 > this.maxFrameBytes) {
       return onResponse(
-        failure(ErrorCodes.InvalidRequest, "the request is larger than maxFrameBytes"),
+        failure(ErrorCodes.InvalidRequest, t("the request is larger than maxFrameBytes")),
       );
     }
     const timer = setTimeout(() => {
       this.pending.delete(id);
       this.notify("$/cancelRequest", { id });
-      onResponse(failure(ErrorCodes.RequestCancelled, `${method} timed out after ${timeoutMs} ms`));
+      onResponse(
+        failure(
+          ErrorCodes.RequestCancelled,
+          t("{{method}} timed out after {{ms}} ms", { method, ms: timeoutMs }),
+        ),
+      );
     }, timeoutMs);
     this.pending.set(id, { onResponse: onResponse as Pending["onResponse"], timer });
     this.write(line);
@@ -103,8 +110,9 @@ export class RpcClient {
     this.buffered.push(part);
     this.bufferedBytes += part.length;
     if (this.bufferedBytes > MAX_FRAME_BYTES) {
-      this.close("plxd sent a frame larger than maxFrameBytes");
-      this.handlers.onFatal("plxd sent a frame larger than maxFrameBytes");
+      const why = t("plxd sent a frame larger than maxFrameBytes");
+      this.close(why);
+      this.handlers.onFatal(why);
     }
   }
 

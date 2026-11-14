@@ -1,5 +1,7 @@
 // What an orchestrator's inbox shows on the phone (0043), in what order, and what opening it marks
 // seen. Pure, so it's tested without React Native.
+import { t } from "i18next";
+
 import type { InboxItem, Question } from "../../desktop/src/protocol/generated/protocol";
 import { questionOf } from "../../desktop/src/renderer/Inbox";
 import { dayLabel } from "../../desktop/src/renderer/locale";
@@ -29,7 +31,7 @@ export function inboxSections(
 ): InboxSection[] {
   const newest = [...items].reverse();
   const waiting = newest.filter((i) => waitsOnUser(i, questions));
-  const sections: InboxSection[] = waiting.length ? [{ title: "Needs you", items: waiting }] : [];
+  const sections: InboxSection[] = waiting.length ? [{ title: t("Needs you"), items: waiting }] : [];
   let day: InboxSection | undefined;
   for (const item of newest) {
     if (waitsOnUser(item, questions)) continue;

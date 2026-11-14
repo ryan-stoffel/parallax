@@ -1,6 +1,7 @@
 // An agent's own subagents (PLX-382, 0041), such as Claude Code's Agent tool: read-only children
 // of their thread, with no run, composer, or Parallax tools. Their call's row in the transcript
 // opens one, as their chips in the top bar do, and the calls a turn made together show as one card.
+import { t } from "i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { createContext, useContext } from "react";
 
@@ -121,7 +122,10 @@ function SubagentRow({ sub }: { sub: Subagent }) {
   return (
     <button
       type="button"
-      aria-label={`Open subagent: ${title}, ${subagentLabels[state]}`}
+      aria-label={t("Open subagent: {{title}}, {{state}}", {
+        title,
+        state: t(subagentLabels[state]),
+      })}
       onClick={() => context.open(sub.callId)}
       className="group flex w-full min-w-0 items-center gap-3 rounded-xl py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
@@ -129,7 +133,9 @@ function SubagentRow({ sub }: { sub: Subagent }) {
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="truncate text-body text-foreground">{title}</span>
-          <span className="shrink-0 text-meta text-faint-foreground">{subagentLabels[state]}</span>
+          <span className="shrink-0 text-meta text-faint-foreground">
+            {t(subagentLabels[state])}
+          </span>
         </span>
         {said && <span className="truncate text-meta text-muted-foreground">{said}</span>}
       </span>
@@ -181,12 +187,17 @@ export function SubagentCard({
           ))}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-body font-medium text-foreground">{subs.length} subagents</span>
+          <span className="text-body font-medium text-foreground">
+            {t("{{count}} subagents", {
+              count: subs.length,
+              defaultValue_one: "{{count}} subagent",
+            })}
+          </span>
           <span className="truncate text-meta text-faint-foreground">
             {counts.map(({ state, n }, i) => (
               <span key={state} className={state === "running" ? "text-working" : undefined}>
                 {i > 0 && ", "}
-                {n} {subagentLabels[state].toLowerCase()}
+                {stateCount(state, n)}
               </span>
             ))}
           </span>
@@ -215,6 +226,20 @@ export function SubagentCard({
       )}
     </TraceCollapsible>
   );
+}
+
+/** How many of a card's subagents stand at `state`, as "2 working". */
+function stateCount(state: SubagentState, count: number) {
+  switch (state) {
+    case "running":
+      return t("{{count}} working", { count });
+    case "completed":
+      return t("{{count}} done", { count });
+    case "failed":
+      return t("{{count}} failed", { count });
+    case "stopped":
+      return t("{{count}} stopped", { count });
+  }
 }
 
 /** How long the card's subagents have gone, ticking each second. */

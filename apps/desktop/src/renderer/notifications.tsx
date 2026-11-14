@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowUpRight,
   CircleAlert,
@@ -185,7 +186,7 @@ export function Notifications() {
       ref={show}
       popover="manual"
       role="region"
-      aria-label="Notifications"
+      aria-label={t("Notifications")}
       className="inset-auto top-16 right-4 m-0 flex w-80 flex-col gap-2 overflow-visible border-0 bg-transparent p-0"
     >
       {list.map((n) => (
@@ -274,7 +275,7 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
       )}
       <button
         type="button"
-        aria-label="Close"
+        aria-label={t("Close")}
         onClick={onClose}
         className="absolute top-2 right-2 grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
       >

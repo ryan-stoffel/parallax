@@ -1,8 +1,10 @@
 // The Projects page (0090, 0093): every host's Projects as cards, the row card the sidebar draws,
 // with a search, a filter, a sort, and New project.
+import { t } from "i18next";
 import { MessagesSquare } from "lucide-react";
 import { useId, useRef, useState, type CSSProperties, type Ref, type RefObject } from "react";
 
+import { msg } from "../i18n";
 import type { ChosenIcon, Repo } from "../protocol/generated/protocol";
 import type { FavoriteAction } from "./Favorites";
 import { icons } from "./icons";
@@ -31,24 +33,24 @@ import {
 } from "./ui";
 
 const sorts: { value: ProjectSort; label: string }[] = [
-  { value: "activity", label: "Recent activity" },
-  { value: "name", label: "Name" },
-  { value: "created", label: "Created" },
-  { value: "threads", label: "Most threads" },
+  { value: "activity", label: msg("Recent activity") },
+  { value: "name", label: msg("Name") },
+  { value: "created", label: msg("Created") },
+  { value: "threads", label: msg("Most threads") },
 ];
 
 const filters: { value: ProjectFilter; name: string }[] = [
-  { value: "all", name: "All" },
-  { value: "pinned", name: "Pinned" },
-  { value: "files", name: "With files" },
-  { value: "instructions", name: "With instructions" },
+  { value: "all", name: msg("All") },
+  { value: "pinned", name: msg("Pinned") },
+  { value: "files", name: msg("With files") },
+  { value: "instructions", name: msg("With instructions") },
 ];
 
 /** What a filter that keeps nothing says, with no search typed. */
 const filteredOut: Record<Exclude<ProjectFilter, "all">, string> = {
-  pinned: "No pinned projects. Pin one from its card.",
-  files: "No projects with files.",
-  instructions: "No projects with instructions.",
+  pinned: msg("No pinned projects. Pin one from its card."),
+  files: msg("No projects with files."),
+  instructions: msg("No projects with instructions."),
 };
 
 const projectSort = stored<ProjectSort>("parallax.projectSort", "activity", (raw, fallback) =>
@@ -131,11 +133,11 @@ export function ProjectsPage({
     <>
       <header className="mx-auto w-full max-w-5xl px-8 pt-6 pb-4">
         <div className="flex items-center gap-3">
-          <h1 className="mr-auto text-heading font-semibold">Projects</h1>
+          <h1 className="mr-auto text-heading font-semibold">{t("Projects")}</h1>
           {onNewProject && (
             <Button variant="primary" onClick={onNewProject}>
               <icons.add aria-hidden />
-              New project
+              {t("New project")}
             </Button>
           )}
         </div>
@@ -145,29 +147,34 @@ export function ProjectsPage({
               <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
               <input
                 type="search"
-                aria-label="Search projects"
-                placeholder="Search projects"
+                aria-label={t("Search projects")}
+                placeholder={t("Search projects")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Escape" && setQuery("")}
                 className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
               />
             </label>
-            <Segmented label="Show" options={filters} value={filter} onChange={setFilter} />
+            <Segmented
+              label={t("Show")}
+              options={filters.map((f) => ({ ...f, name: t(f.name) }))}
+              value={filter}
+              onChange={setFilter}
+            />
             <button
               type="button"
               popoverTarget={sortMenu}
               aria-haspopup="menu"
-              title="Sort by"
+              title={t("Sort by")}
               className={buttonClass("outline")}
             >
               <icons.sort aria-hidden />
-              {sorts.find((s) => s.value === sort)?.label}
+              {t(sorts.find((s) => s.value === sort)?.label ?? "")}
               <icons.expand aria-hidden className="text-faint-foreground" />
             </button>
             <Menu
               id={sortMenu}
-              label="Sort by"
+              label={t("Sort by")}
               align="end"
               focus='[role="menuitemradio"]'
               className="w-44 p-1"
@@ -183,7 +190,7 @@ export function ProjectsPage({
                   onClick={() => projectSort.set(s.value)}
                   className={menuItem}
                 >
-                  <span className="flex-1">{s.label}</span>
+                  <span className="flex-1">{t(s.label)}</span>
                   {s.value === sort && <icons.done aria-hidden className="text-accent" />}
                 </button>
               ))}
@@ -197,15 +204,21 @@ export function ProjectsPage({
             <EmptyState
               className="mt-12"
               icon={<icons.projects aria-hidden />}
-              title="No projects yet"
-              body="A Project keeps threads together with the instructions and files they share."
+              title={t("No projects yet")}
+              body={t(
+                "A Project keeps threads together with the instructions and files they share.",
+              )}
             />
           ) : shown.length === 0 ? (
             <EmptyState
               className="mt-8"
               icon={<icons.search aria-hidden />}
-              title="No matching projects"
-              body={typed || filter === "all" ? `Nothing matches “${typed}”.` : filteredOut[filter]}
+              title={t("No matching projects")}
+              body={
+                typed || filter === "all"
+                  ? t("Nothing matches “{{query}}”.", { query: typed })
+                  : t(filteredOut[filter])
+              }
               action={
                 <Button
                   variant="outline"
@@ -214,13 +227,13 @@ export function ProjectsPage({
                     setFilter("all");
                   }}
                 >
-                  Show all projects
+                  {t("Show all projects")}
                 </Button>
               }
             />
           ) : (
             <ul
-              aria-label="Projects"
+              aria-label={t("Projects")}
               className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-2"
             >
               {shown.map((e) => (
@@ -241,8 +254,6 @@ export function ProjectsPage({
     </>
   );
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
  * A Project's card (0093), the row card a thread's is: its name, then its icon and "Project". It
@@ -280,7 +291,7 @@ export function ProjectCard({
       kind="project"
       dense={dense}
       framed={framed}
-      place={<RowPlace repo={repo} label="Project" />}
+      place={<RowPlace repo={repo} label={t("Project")} />}
       status={framed && age(entry.activeAt)}
       title={entry.name}
       selected={selected}
@@ -290,18 +301,21 @@ export function ProjectCard({
           <span className="flex w-full items-center gap-3 text-meta text-faint-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
             <span className="flex items-center gap-1">
               <icons.thread aria-hidden />
-              {plural(entry.threads, "thread")}
+              {t("{{count}} threads", {
+                count: entry.threads,
+                defaultValue_one: "{{count}} thread",
+              })}
             </span>
             {entry.files > 0 && (
               <span className="flex items-center gap-1">
                 <icons.files aria-hidden />
-                {plural(entry.files, "file")}
+                {t("{{count}} files", { count: entry.files, defaultValue_one: "{{count}} file" })}
               </span>
             )}
             {entry.instructions && (
               <span className="flex items-center gap-1">
                 <icons.instructions aria-hidden />
-                Instructions
+                {t("Instructions")}
               </span>
             )}
           </span>
@@ -312,8 +326,8 @@ export function ProjectCard({
           {!pinned && (
             <button
               type="button"
-              aria-label={`Pin ${entry.name}`}
-              title="Pin"
+              aria-label={t("Pin {{name}}", { name: entry.name })}
+              title={t("Pin")}
               onClick={onTogglePin}
               className={rowTool}
             >
@@ -334,8 +348,8 @@ export function ProjectCard({
         pinned && (
           <button
             type="button"
-            aria-label={`Unpin ${entry.name}`}
-            title="Unpin"
+            aria-label={t("Unpin {{name}}", { name: entry.name })}
+            title={t("Unpin")}
             onClick={onTogglePin}
             className={rowTool}
           >
@@ -373,7 +387,7 @@ export function ProjectMenu({
       <button
         ref={trigger}
         type="button"
-        aria-label={`${entry.name} actions`}
+        aria-label={t("{{name}} actions", { name: entry.name })}
         popoverTarget={menu}
         aria-haspopup="menu"
         // Read as it opens, since what plxd allows can change while the page is open.
@@ -382,7 +396,12 @@ export function ProjectMenu({
       >
         <icons.more className="size-4" />
       </button>
-      <Menu id={menu} label={`${entry.name} actions`} align="end" className="w-52 p-1">
+      <Menu
+        id={menu}
+        label={t("{{name}} actions", { name: entry.name })}
+        align="end"
+        className="w-52 p-1"
+      >
         <button
           type="button"
           role="menuitem"
@@ -392,7 +411,7 @@ export function ProjectMenu({
           className={menuItem}
         >
           {pinned ? <icons.unpin aria-hidden /> : <icons.pin aria-hidden />}
-          {pinned ? "Unpin" : "Pin"}
+          {pinned ? t("Unpin") : t("Pin")}
         </button>
         {actions.map((a) => (
           <button
@@ -461,11 +480,11 @@ export function NewChatProject({
       >
         <div className="flex items-center justify-between px-5 pt-4">
           <h2 id={titleId} className="text-reading font-semibold">
-            Create Project
+            {t("Create Project")}
           </h2>
           <button
             type="button"
-            aria-label="Close"
+            aria-label={t("Close")}
             onClick={(e) => e.currentTarget.closest("dialog")?.close()}
             className="-mr-1.5 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
           >
@@ -473,22 +492,22 @@ export function NewChatProject({
           </button>
         </div>
         <p className="px-5 pt-1 text-body text-muted-foreground">
-          Its threads share the instructions and files you give it.
+          {t("Its threads share the instructions and files you give it.")}
         </p>
         <div className="flex flex-col items-center gap-3 px-5 pt-6 pb-5">
           <button
             type="button"
             popoverTarget={picker}
             aria-haspopup="dialog"
-            aria-label="Choose icon"
-            title="Choose icon"
+            aria-label={t("Choose icon")}
+            title={t("Choose icon")}
             className="rounded-xl hover:opacity-80"
           >
             <ProjectTile entry={{ ...(icon && { icon }) }} size="lg" />
           </button>
           <input
-            aria-label="Name"
-            placeholder="Name your project"
+            aria-label={t("Name")}
+            placeholder={t("Name your project")}
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -509,7 +528,7 @@ export function NewChatProject({
             disabled={!name.trim() || creating}
             className="ml-auto rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            {creating ? "Creating…" : "Create"}
+            {creating ? t("Creating…") : t("Create")}
           </button>
         </div>
       </form>

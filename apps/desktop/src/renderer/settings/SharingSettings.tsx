@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useState } from "react";
 
 import { SetupCodeDialog } from "../ConnectWizard";
@@ -29,8 +30,8 @@ export function SharingSettings() {
 
   return (
     <>
-      <PageTitle title="Sharing & access">
-        How your other devices reach this computer, and which ones can.
+      <PageTitle title={t("Sharing & access")}>
+        {t("How your other devices reach this computer, and which ones can.")}
       </PageTitle>
       <ThisComputerHeading host={here} connect={connect} />
       <ThisComputerNotices />

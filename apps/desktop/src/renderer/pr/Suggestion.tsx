@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import type { ReactNode } from "react";
 
 import { DiffLineView } from "../ChangesDiff";
@@ -29,20 +30,20 @@ export function SuggestionButtons({
   const reason =
     actions.blocked ??
     (thread.outdated
-      ? "Outdated: the code changed since this was suggested"
+      ? t("Outdated: the code changed since this was suggested")
       : thread.side === "left"
-        ? "It's on a removed line"
+        ? t("It's on a removed line")
         : undefined);
   if (reason) return <span className="px-1 text-meta text-faint-foreground">{reason}</span>;
   const inBatch = actions.batch.has(commentId);
   return (
     <>
       <Button size="sm" onClick={() => actions.onToggleBatch(commentId)}>
-        {inBatch ? "Remove from batch" : "Add to batch"}
+        {inBatch ? t("Remove from batch") : t("Add to batch")}
       </Button>
       <Button size="sm" variant="outline" onClick={() => actions.onCommit(commentId)}>
         <icons.commit aria-hidden />
-        Commit suggestion
+        {t("Commit suggestion")}
       </Button>
     </>
   );
@@ -66,12 +67,12 @@ export function Suggestion({
 }) {
   return (
     <figure
-      aria-label="Suggested change"
+      aria-label={t("Suggested change")}
       className="-ml-7 overflow-hidden rounded-lg border border-border"
     >
       <figcaption className="flex h-7 items-center gap-1.5 border-b border-border px-2 text-meta text-muted-foreground">
         <icons.suggest aria-hidden className="size-3.5" />
-        {after.length ? "Suggested change" : "Suggests deleting"}
+        {after.length ? t("Suggested change") : t("Suggests deleting")}
       </figcaption>
       <div className="font-mono text-meta leading-5">
         {suggestionLines(before, after, start).map((line, i) => (

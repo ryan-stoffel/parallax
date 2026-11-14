@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 import { app } from "electron";
 import { autoUpdater, type UpdateInfo } from "electron-updater";
+import i18next, { t } from "i18next";
 
 import type { UpdateState } from "../preload/bridge";
 
@@ -82,15 +83,15 @@ const noRelease = ["ERR_UPDATER_NO_PUBLISHED_VERSIONS", "ERR_UPDATER_LATEST_VERS
 function updateError(error: Error & { code?: string; statusCode?: number }): string {
   // electron-updater wraps the request's error in its own, so the message is checked first.
   const { message, code = "", statusCode } = error;
-  if (offline.test(message)) return "Can't reach GitHub to check for updates.";
+  if (offline.test(message)) return t("Can't reach GitHub to check for updates.");
   if (statusCode === 403 || statusCode === 429 || rateLimited.test(message))
-    return "GitHub is limiting update checks. Parallax will try again.";
+    return t("GitHub is limiting update checks. Parallax will try again.");
   if (code === "ERR_UPDATER_INVALID_SIGNATURE" || /code signature/i.test(message))
-    return "The update's signature doesn't match this app's, so it can't be installed.";
-  if (noUpdateFile.includes(code)) return "The newest release has no update for this computer.";
-  if (noRelease.includes(code)) return "There's no release on this channel yet.";
+    return t("The update's signature doesn't match this app's, so it can't be installed.");
+  if (noUpdateFile.includes(code)) return t("The newest release has no update for this computer.");
+  if (noRelease.includes(code)) return t("There's no release on this channel yet.");
   const line = message.split("\n")[0] ?? "";
-  return `Update failed: ${line.length > 120 ? `${line.slice(0, 119)}…` : line}`;
+  return t("Update failed: {{why}}", { why: line.length > 120 ? `${line.slice(0, 119)}…` : line });
 }
 
 /**
@@ -108,10 +109,8 @@ function updateError(error: Error & { code?: string; statusCode?: number }): str
  */
 export function startUpdater(publish: (state: UpdateState) => void) {
   // Updates replace the AppImage file; an unpacked Linux build has nothing to replace.
-  const unsupported =
-    process.platform === "linux" && !process.env["APPIMAGE"]
-      ? "Updates work only in the AppImage."
-      : undefined;
+  const unsupported = process.platform === "linux" && !process.env["APPIMAGE"];
+  const unsupportedNote = () => t("Updates work only in the AppImage.");
   // The newest release found, the download's percent while it runs, and the version downloaded
   // and ready to install.
   let available: UpdateState["available"];
@@ -126,7 +125,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
   const feed = async (): Promise<string | undefined> => {
     if (!dev) return undefined;
     const current = await ghToken();
-    if (!current) return "Dev updates need the GitHub CLI signed in: run gh auth login.";
+    if (!current) return t("Dev updates need the GitHub CLI signed in: run gh auth login.");
     if (current !== token) {
       token = current;
       autoUpdater.setFeedURL({
@@ -155,7 +154,9 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     publish({
       ...(available && { available }),
       ...(progress !== undefined && { progress }),
-      ...(downloaded !== undefined && { ready: `Parallax ${downloaded} to install` }),
+      ...(downloaded !== undefined && {
+        ready: t("Parallax {{version}} to install", { version: downloaded }),
+      }),
       ...(note !== undefined && { note }),
     });
 
@@ -192,7 +193,9 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     if ("domain" in error) downloaded = undefined;
     show(updateError(error));
   });
-  if (unsupported) publish({ note: unsupported, unsupported: true });
+  // On each language i18next takes, the first when main starts it: `t` is empty before that.
+  if (unsupported)
+    i18next.on("languageChanged", () => publish({ note: unsupportedNote(), unsupported: true }));
   void app.whenReady().then(check);
   setInterval(check, 30 * 60_000);
 
@@ -209,11 +212,11 @@ export function startUpdater(publish: (state: UpdateState) => void) {
      * now. Resolves to one line.
      */
     async update(): Promise<string> {
-      if (unsupported) return unsupported;
+      if (unsupported) return unsupportedNote();
       if (downloaded) {
         // After the answer reaches the window.
         setTimeout(() => autoUpdater.quitAndInstall(), 100);
-        return `Restarting to install Parallax ${downloaded}…`;
+        return t("Restarting to install Parallax {{version}}…", { version: downloaded });
       }
       if (available) {
         if (progress === undefined) {
@@ -225,15 +228,16 @@ export function startUpdater(publish: (state: UpdateState) => void) {
             show(updateError(error));
           });
         }
-        return `Downloading Parallax ${available.version}…`;
+        return t("Downloading Parallax {{version}}…", { version: available.version });
       }
       checkedAt = Date.now();
       try {
         const missing = await feed();
         if (missing) return missing;
         const result = await autoUpdater.checkForUpdates();
+        // Stays English: Settings > About compares it.
         if (!result?.isUpdateAvailable) return "Up to date";
-        return `Parallax ${result.updateInfo.version} is available`;
+        return t("Parallax {{version}} is available", { version: result.updateInfo.version });
       } catch (error) {
         return updateError(error as Error);
       }

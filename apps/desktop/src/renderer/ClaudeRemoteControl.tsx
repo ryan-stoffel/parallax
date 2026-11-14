@@ -1,3 +1,5 @@
+import { t } from "i18next";
+
 import { detailsCard } from "./DetailsCard";
 import { Cloud, GitBranch, Network } from "lucide-react";
 
@@ -32,9 +34,15 @@ function StateDot({ session }: { session?: RemoteControlSession }) {
 /** Open in Claude: the session at `claude.ai/code`, in the browser. */
 function OpenInClaude({ url, className }: { url: string; className: string }) {
   return (
-    <a href={url} target="_blank" rel="noreferrer" title="Open in Claude" className={className}>
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      title={t("Open in Claude")}
+      className={className}
+    >
       <ClaudeLogo aria-hidden />
-      Open in Claude
+      {t("Open in Claude")}
     </a>
   );
 }
@@ -55,7 +63,7 @@ export function RemoteControlTab({
   if (compact)
     return (
       <span
-        title={look ? `${NAME}: ${look.label}` : NAME}
+        title={look ? `${NAME}: ${t(look.label)}` : NAME}
         className="flex h-7 items-center gap-1.5 px-1.5 text-muted-foreground [&_svg]:size-3.5"
       >
         <Cloud aria-hidden />
@@ -72,9 +80,9 @@ export function RemoteControlTab({
       {look && (
         <>
           <StateDot session={session} />
-          <span className="shrink-0">{look.label}</span>
+          <span className="shrink-0">{t(look.label)}</span>
           {look.detail && (
-            <span className="min-w-0 truncate text-muted-foreground">{look.detail}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{t(look.detail)}</span>
           )}
         </>
       )}
@@ -114,11 +122,11 @@ export function RemoteControlSection({
         <span className="ml-1 truncate">{NAME}</span>
       </div>
       {look && (
-        <div className={row} title={look.detail}>
+        <div className={row} title={look.detail && t(look.detail)}>
           <span className="grid size-4 shrink-0 place-items-center">
             <StateDot session={session} />
           </span>
-          <span className="truncate">{look.label}</span>
+          <span className="truncate">{t(look.label)}</span>
         </div>
       )}
       {session?.repository && (
@@ -137,7 +145,7 @@ export function RemoteControlSection({
       {onMove && (
         <button type="button" onClick={onMove} className={`${menuItem} [&_svg]:!size-4`}>
           <Network aria-hidden />
-          Move to Parallax Connect
+          {t("Move to Parallax Connect")}
         </button>
       )}
     </section>

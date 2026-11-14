@@ -1,6 +1,7 @@
 // An agent's questions for the user (PLX-245): a tab that leads the composer's top bar and opens
 // the questions above it, or the same panel in place where a view has no bar. Question text is
 // untrusted, so it renders only as text.
+import { t } from "i18next";
 import {
   ArrowRight,
   ArrowUp,
@@ -156,7 +157,7 @@ function QuestionFields({
                   <span className="break-words">{option.label}</span>
                   {option.recommended && (
                     <span className="ml-2 rounded bg-accent/10 px-1.5 py-px text-meta text-accent">
-                      Recommended
+                      {t("Recommended")}
                     </span>
                   )}
                   {option.description && (
@@ -178,8 +179,8 @@ function QuestionFields({
           <input
             type={secret ? "password" : "text"}
             autoComplete="off"
-            aria-label={options.length > 0 ? "Your own answer" : question.text}
-            placeholder={options.length > 0 ? "Something else" : "Your answer"}
+            aria-label={options.length > 0 ? t("Your own answer") : question.text}
+            placeholder={options.length > 0 ? t("Something else") : t("Your answer")}
             value={choice.typed}
             onChange={(e) => onChoose(typedIn(choice, question, e.target.value))}
             className="h-full min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus:outline-none disabled:opacity-50"
@@ -291,7 +292,7 @@ function QuestionPanel({
       ref={focusRef}
       role="group"
       tabIndex={-1}
-      aria-label="Question from the agent"
+      aria-label={t("Question from the agent")}
       onKeyDown={onKey}
       className="composer-card flex max-h-[min(60vh,32rem)] min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface px-4 py-3 focus-visible:outline-none"
     >
@@ -315,7 +316,7 @@ function QuestionPanel({
                 onClick={asked.from.open}
                 className="shrink-0 font-medium text-foreground underline underline-offset-2"
               >
-                Open its chat
+                {t("Open its chat")}
               </button>
             )}
           </p>
@@ -324,9 +325,11 @@ function QuestionPanel({
           <p className="flex items-center gap-1.5 text-meta text-faint-foreground">
             {question.header && <span className="truncate">{question.header}</span>}
             {question.header && question.multiple && <span aria-hidden>·</span>}
-            {question.multiple && <span className="shrink-0">Choose any</span>}
+            {question.multiple && <span className="shrink-0">{t("Choose any")}</span>}
             {count > 1 && (
-              <span className="ml-auto shrink-0 tabular-nums">{count - 1} more waiting</span>
+              <span className="ml-auto shrink-0 tabular-nums">
+                {t("{{count}} more waiting", { count: count - 1 })}
+              </span>
             )}
           </p>
         )}
@@ -340,18 +343,22 @@ function QuestionPanel({
         {gone ? (
           <div className="flex items-center justify-end gap-2">
             <p className="mr-auto min-w-0 text-meta text-muted-foreground">
-              This question is no longer waiting.
+              {t("This question is no longer waiting.")}
             </p>
             <button type="button" onClick={onDismiss} className={outlineButton}>
-              Dismiss
+              {t("Dismiss")}
             </button>
           </div>
         ) : (
           <div className="flex items-center justify-end gap-2">
             {questions.length > 1 && (
-              <div role="group" aria-label="Questions" className="mr-auto flex items-center gap-1">
+              <div
+                role="group"
+                aria-label={t("Questions")}
+                className="mr-auto flex items-center gap-1"
+              >
                 <IconButton
-                  label="Previous question"
+                  label={t("Previous question")}
                   size="sm"
                   disabled={step === 0}
                   onClick={() => setStep(step - 1)}
@@ -359,10 +366,10 @@ function QuestionPanel({
                   <ChevronLeft aria-hidden className="size-4" />
                 </IconButton>
                 <span className="text-meta text-muted-foreground tabular-nums">
-                  {step + 1} of {questions.length}
+                  {t("{{step}} of {{total}}", { step: step + 1, total: questions.length })}
                 </span>
                 <IconButton
-                  label="Next question"
+                  label={t("Next question")}
                   size="sm"
                   disabled={step === questions.length - 1}
                   onClick={() => setStep(step + 1)}
@@ -378,7 +385,7 @@ function QuestionPanel({
               onClick={() => onAnswer("deny", SKIPPED)}
               className={quietButton}
             >
-              Skip
+              {t("Skip")}
             </button>
             <button
               type="submit"
@@ -386,7 +393,7 @@ function QuestionPanel({
               title={disabledReason}
               className={`${approveButton} inline-flex items-center gap-1`}
             >
-              {busy ? "Sending…" : open === undefined ? "Send" : "Next"}
+              {busy ? t("Sending…") : open === undefined ? t("Send") : t("Next")}
               {!busy &&
                 (open === undefined ? (
                   <ArrowUp aria-hidden className="size-3.5" />
@@ -432,21 +439,21 @@ function QuestionTab(props: AskProps & { form: Form }) {
   }, [open]);
   const question = form.questions[form.step]!;
   return (
-    <section aria-label="Question" className="plan-strip">
+    <section aria-label={t("Question")} className="plan-strip">
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
-        title={open ? "Hide the question" : "Show the question"}
+        title={open ? t("Hide the question") : t("Show the question")}
         className="flex w-full min-w-0 items-center gap-2.5 py-0.5 pr-3.5 pl-4 text-left text-body hover:bg-hover"
       >
         <MessageCircleQuestion aria-hidden className="size-4 shrink-0" />
         <span className={`min-w-0 flex-1 truncate ${open ? "text-muted-foreground" : ""}`}>
-          {open ? "Waiting for your answer" : question.text}
+          {open ? t("Waiting for your answer") : question.text}
         </span>
         {!open && form.questions.length > 1 && (
           <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
-            {form.step + 1} of {form.questions.length}
+            {t("{{step}} of {{total}}", { step: form.step + 1, total: form.questions.length })}
           </span>
         )}
         <ChevronUp

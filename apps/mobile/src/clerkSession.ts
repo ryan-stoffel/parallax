@@ -1,4 +1,5 @@
 // What refreshing the account's session does when Clerk refuses, apart from Account.tsx for the test.
+import { msg } from "../../desktop/src/i18n";
 
 /** A failed call to Clerk. `revoked` when Clerk refused the refresh token itself. */
 export class ClerkError extends Error {
@@ -26,8 +27,8 @@ export async function refreshOrSignOut<T>(
   }
 }
 
-/** What the sign-in screen says after a session from another Clerk instance is dropped. */
-export const MOVED = "Parallax accounts moved. Sign in again, then set up each computer again.";
+/** What the sign-in screen says after a session from another Clerk instance is dropped. Shown with `t`. */
+export const MOVED = msg("Parallax accounts moved. Sign in again, then set up each computer again.");
 
 /** The development instance's Frontend API, which issued every session saved before the phone kept one. */
 const DEVELOPMENT_API = "https://adjusted-mastodon-8705.clerk.accounts.dev";

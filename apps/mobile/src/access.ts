@@ -7,6 +7,7 @@
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
+import { t } from "i18next";
 
 import type { KeyStanding } from "../../desktop/src/preload/bridge";
 import { base64url, fromBase64url } from "./pairing";
@@ -75,7 +76,7 @@ export function newRequest(
 ): { book: HostBook; value: Uint8Array } {
   const requests = withinHour(book.requests, now);
   if (requests.length >= MAX_PER_HOUR)
-    throw new Limited("This phone asked that computer 5 times this hour. Try again later.");
+    throw new Limited(t("This phone asked that computer 5 times this hour. Try again later."));
   const value = random(VALUE_BYTES);
   const kept = { request, commitment, value: base64url(value), until: now + REQUEST_LIFETIME_MS };
   return { book: { ...book, kept, requests: [...requests, now] }, value };
@@ -88,7 +89,7 @@ export const forgetRequest = ({ kept, ...book }: HostBook): HostBook => book;
 export function setupRun(book: HostBook, now: number): HostBook {
   const runs = withinHour(book.setupRuns, now);
   if (runs.length >= MAX_PER_HOUR)
-    throw new Limited("That computer's code was tried 5 times this hour. Try again later.");
+    throw new Limited(t("That computer's code was tried 5 times this hour. Try again later."));
   return { ...book, setupRuns: [...runs, now] };
 }
 

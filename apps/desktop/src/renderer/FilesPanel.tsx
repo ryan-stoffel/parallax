@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ChevronRight,
   ListCollapse,
@@ -338,7 +339,7 @@ export function FilesPanel({
     e.preventDefault();
   };
 
-  if (unavailable) return <Empty title="Files aren't available" hint={unavailable} />;
+  if (unavailable) return <Empty title={t("Files aren't available")} hint={unavailable} />;
   const top = listings[""];
   const empty = top && "entries" in top && top.entries.length === 0 && !draft;
 
@@ -352,7 +353,13 @@ export function FilesPanel({
           <ChevronRight aria-hidden className="invisible size-3.5 shrink-0" />
           <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           <input
-            aria-label={"path" in d ? `Rename ${initial}` : isFolder ? "Folder name" : "File name"}
+            aria-label={
+              "path" in d
+                ? t("Rename {{name}}", { name: initial })
+                : isFolder
+                  ? t("Folder name")
+                  : t("File name")
+            }
             aria-invalid={draftError ? true : undefined}
             defaultValue={initial}
             autoFocus
@@ -478,8 +485,8 @@ export function FilesPanel({
                       <button
                         data-actions
                         type="button"
-                        aria-label={`Actions for ${entry.name}`}
-                        title="Actions"
+                        aria-label={t("Actions for {{name}}", { name: entry.name })}
+                        title={t("Actions")}
                         onClick={(e) => {
                           setTarget({ path, isFolder });
                           menu.current?.showPopover({ source: e.currentTarget });
@@ -498,7 +505,7 @@ export function FilesPanel({
         })}
         {listing.truncated && (
           <li style={indent} className="py-1 pr-2 text-body text-faint-foreground">
-            More files not shown.
+            {t("More files not shown.")}
           </li>
         )}
       </ul>
@@ -531,7 +538,7 @@ export function FilesPanel({
   };
   const explorer = (
     <section
-      aria-label="Explorer"
+      aria-label={t("Explorer")}
       style={beside ? { width: shownTreeWidth } : undefined}
       className={`flex min-h-0 flex-col ${beside ? "relative shrink-0 border-r border-border/60" : "min-w-0 flex-1"}`}
     >
@@ -547,14 +554,14 @@ export function FilesPanel({
               <>
                 <IconButton
                   size="sm"
-                  label="New file"
+                  label={t("New file")}
                   onClick={() => startDraft({ folder: "", isFolder: false })}
                 >
                   <FilePlus aria-hidden />
                 </IconButton>
                 <IconButton
                   size="sm"
-                  label="New folder"
+                  label={t("New folder")}
                   onClick={() => startDraft({ folder: "", isFolder: true })}
                 >
                   <FolderPlus aria-hidden />
@@ -563,7 +570,7 @@ export function FilesPanel({
             )}
             <IconButton
               size="sm"
-              label="Collapse folders"
+              label={t("Collapse folders")}
               disabled={expanded.size === 0}
               onClick={() => setExpanded(() => new Set())}
             >
@@ -573,12 +580,12 @@ export function FilesPanel({
         }
       >
         {empty ? (
-          <Empty title="No files" hint="This thread's folder is empty." />
+          <Empty title={t("No files")} hint={t("This thread's folder is empty.")} />
         ) : (
           <div
             ref={treeRef}
             role="tree"
-            aria-label="Files"
+            aria-label={t("Files")}
             onKeyDown={onTreeKey}
             className="min-h-0 flex-1 overflow-y-auto px-2 pt-1.5 pb-3"
           >
@@ -589,7 +596,7 @@ export function FilesPanel({
       {beside && (
         <div
           role="separator"
-          aria-label="Resize files"
+          aria-label={t("Resize files")}
           aria-orientation="vertical"
           aria-valuenow={shownTreeWidth}
           aria-valuemin={TREE_MIN_WIDTH}
@@ -627,7 +634,7 @@ export function FilesPanel({
           <NoFile
             treeButton={
               !treeBeside && (
-                <IconButton size="sm" label="Show files" onClick={() => setTreeBeside(true)}>
+                <IconButton size="sm" label={t("Show files")} onClick={() => setTreeBeside(true)}>
                   <PanelLeft aria-hidden />
                 </IconButton>
               )
@@ -637,21 +644,25 @@ export function FilesPanel({
       )}
       <ConfirmDialog
         ref={closeDialog}
-        title={<>Close “{closingFile && nameOf(closingFile.path)}” without saving?</>}
+        title={t("Close “{{name}}” without saving?", {
+          name: closingFile ? nameOf(closingFile.path) : "",
+        })}
         titleClass="break-all"
-        action="Close without saving"
+        action={t("Close without saving")}
         onConfirm={() => {
           store.settleClose(true);
           closeDialog.current?.close();
         }}
       >
-        Your edits to this file aren't on disk, and closing drops them.
+        {t("Your edits to this file aren't on disk, and closing drops them.")}
       </ConfirmDialog>
       {editable && (
         <>
           <Menu
             ref={menu}
-            label={target ? `Actions for ${nameOf(target.path)}` : "File actions"}
+            label={
+              target ? t("Actions for {{name}}", { name: nameOf(target.path) }) : t("File actions")
+            }
             align="end"
             className="min-w-36 p-1"
             onClose={() => setTarget(undefined)}
@@ -665,7 +676,7 @@ export function FilesPanel({
                   onClick={choose(() => startDraft({ folder: targetFolder, isFolder: false }))}
                 >
                   <FilePlus aria-hidden />
-                  New file
+                  {t("New file")}
                 </button>
                 <button
                   type="button"
@@ -674,7 +685,7 @@ export function FilesPanel({
                   onClick={choose(() => startDraft({ folder: targetFolder, isFolder: true }))}
                 >
                   <FolderPlus aria-hidden />
-                  New folder
+                  {t("New folder")}
                 </button>
                 <div className="my-1 h-px bg-border" />
                 <button
@@ -683,7 +694,7 @@ export function FilesPanel({
                   className={menuItem}
                   onClick={choose(() => startDraft({ path: target.path }))}
                 >
-                  Rename
+                  {t("Rename")}
                   <span className="ml-auto text-meta text-faint-foreground">F2</span>
                 </button>
                 <button
@@ -692,24 +703,23 @@ export function FilesPanel({
                   className={`${menuItem} text-danger`}
                   onClick={choose(() => askDelete(target))}
                 >
-                  Delete…
+                  {t("Delete…")}
                 </button>
               </>
             )}
           </Menu>
           <ConfirmDialog
             ref={deleteDialog}
-            title={<>Delete “{toDelete && nameOf(toDelete.path)}”?</>}
+            title={t("Delete “{{name}}”?", { name: toDelete ? nameOf(toDelete.path) : "" })}
             titleClass="break-all"
-            action="Delete"
-            busy={deleting ? "Deleting…" : undefined}
+            action={t("Delete")}
+            busy={deleting ? t("Deleting…") : undefined}
             error={deleteError}
             onConfirm={() => void confirmDelete()}
           >
             {toDelete?.isFolder
-              ? "This folder and everything in it are deleted from disk."
-              : "This is deleted from disk."}{" "}
-            This can't be undone.
+              ? t("This folder and everything in it are deleted from disk. This can't be undone.")
+              : t("This is deleted from disk. This can't be undone.")}
           </ConfirmDialog>
         </>
       )}
@@ -796,8 +806,8 @@ function FileSearch({
           <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <input
             type="search"
-            aria-label="Search files"
-            placeholder="Search files"
+            aria-label={t("Search files")}
+            placeholder={t("Search files")}
             value={query}
             disabled={!enabled}
             onFocus={() => void load()}
@@ -813,7 +823,7 @@ function FileSearch({
           {query && (
             <button
               type="button"
-              aria-label="Clear search"
+              aria-label={t("Clear search")}
               onClick={clear}
               className="text-faint-foreground hover:text-foreground"
             >
@@ -828,7 +838,7 @@ function FileSearch({
       ) : (
         <div
           role="group"
-          aria-label="Search results"
+          aria-label={t("Search results")}
           className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
         >
           {paths && "error" in paths && (
@@ -841,7 +851,7 @@ function FileSearch({
               {current.error}
             </p>
           )}
-          {found.length > 0 && <h3 className={heading}>Files</h3>}
+          {found.length > 0 && <h3 className={heading}>{t("Files")}</h3>}
           {found.map(({ item: path }) => (
             <button
               key={path}
@@ -857,7 +867,7 @@ function FileSearch({
               </span>
             </button>
           ))}
-          {byFile.size > 0 && <h3 className={heading}>In files</h3>}
+          {byFile.size > 0 && <h3 className={heading}>{t("In files")}</h3>}
           {[...byFile].map(([path, inFile]) => (
             <div key={path}>
               <div title={path} className="flex h-6.5 items-center gap-1.5 px-2 text-body">
@@ -886,7 +896,7 @@ function FileSearch({
             </div>
           ))}
           {Array.isArray(paths) && found.length === 0 && byFile.size === 0 && (
-            <p className="px-2 py-2 text-body text-muted-foreground">No results.</p>
+            <p className="px-2 py-2 text-body text-muted-foreground">{t("No results.")}</p>
           )}
         </div>
       )}
@@ -915,9 +925,9 @@ function NoFile({ treeButton }: { treeButton: React.ReactNode }) {
       <dl className="grid grid-cols-[auto_auto] gap-x-6 gap-y-2.5 text-body">
         {(
           [
-            ["Go to file", goToFile],
-            ["Search contents", contents],
-            ["Command menu", menu],
+            [t("Go to file"), goToFile],
+            [t("Search contents"), contents],
+            [t("Command menu"), menu],
           ] as const
         ).map(([name, keys]) => (
           <div key={name} className="contents">

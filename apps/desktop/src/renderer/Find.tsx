@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { appShortcut, IconButton } from "./ui";
@@ -185,14 +186,14 @@ export function useFind({
   const bar = open && (
     <div
       role="search"
-      aria-label="Find in thread"
+      aria-label={t("Find in thread")}
       className="absolute top-2 right-4 z-20 flex items-center gap-1 rounded-lg border border-border bg-surface p-1 pl-2.5 text-body shadow-composer"
     >
       <input
         ref={input}
         type="text"
-        aria-label="Find in thread"
-        placeholder="Find"
+        aria-label={t("Find in thread")}
+        placeholder={t("Find")}
         spellCheck={false}
         autoComplete="off"
         value={query}
@@ -211,15 +212,15 @@ export function useFind({
         aria-live="polite"
         className="min-w-14 px-1 text-right text-meta text-muted-foreground tabular-nums"
       >
-        {query && (hits.length ? `${at + 1}/${hits.length}` : "No results")}
+        {query && (hits.length ? `${at + 1}/${hits.length}` : t("No results"))}
       </span>
-      <IconButton label="Previous match" disabled={!hits.length} onClick={() => step(-1)}>
+      <IconButton label={t("Previous match")} disabled={!hits.length} onClick={() => step(-1)}>
         <ChevronUp />
       </IconButton>
-      <IconButton label="Next match" disabled={!hits.length} onClick={() => step(1)}>
+      <IconButton label={t("Next match")} disabled={!hits.length} onClick={() => step(1)}>
         <ChevronDown />
       </IconButton>
-      <IconButton label="Close find" onClick={close}>
+      <IconButton label={t("Close find")} onClick={close}>
         <X />
       </IconButton>
     </div>

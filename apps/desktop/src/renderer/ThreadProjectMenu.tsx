@@ -1,6 +1,7 @@
 // Thread details' Project row (0090): the Project a thread is in, and a menu to add it to one, move
 // it to another, or take it out. The sidebar row's Add to Project opens the same menu. It lists every
 // computer's Projects, since same-named Projects count as one (0097).
+import { t } from "i18next";
 import { ChevronDown, MessagesSquare, X } from "lucide-react";
 import { type RefObject, useId, useRef } from "react";
 
@@ -38,12 +39,14 @@ export function ThreadProjectMenu({
       ) : (
         <MessagesSquare aria-hidden className="text-muted-foreground" />
       )}
-      <span className="min-w-0 flex-1 truncate">{current ? current.name : "Add to a Project"}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {current ? current.name : t("Add to a Project")}
+      </span>
     </>
   );
   if (startedIn)
     return (
-      <div title="Started in this Project, so it stays here" className={menuItem}>
+      <div title={t("Started in this Project, so it stays here")} className={menuItem}>
         {label}
       </div>
     );
@@ -53,7 +56,9 @@ export function ThreadProjectMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={current ? `Project: ${current.name}` : "Add to a Project"}
+        aria-label={
+          current ? t("Project: {{name}}", { name: current.name }) : t("Add to a Project")
+        }
         className={menuItem}
       >
         {label}
@@ -90,13 +95,13 @@ export function ProjectPicker({
       ? await addToProject(view, [thread], project)
       : await view.setProject([thread.id]);
     if (failed)
-      notify({ tone: "error", title: "Couldn't change the thread's Project", body: failed });
+      notify({ tone: "error", title: t("Couldn't change the thread's Project"), body: failed });
   };
   return (
     <Menu
       ref={menu}
       id={id}
-      label="Projects"
+      label={t("Projects")}
       align="end"
       // Its Projects are checkboxes, and it must not open on Remove from Project.
       focus='[role^="menuitem"]'
@@ -121,7 +126,7 @@ export function ProjectPicker({
           <hr className={toolbarMenuDivider} />
           <ToolbarMenuRow
             icon={<X aria-hidden />}
-            label="Remove from Project"
+            label={t("Remove from Project")}
             onClick={() => void move()}
           />
         </>

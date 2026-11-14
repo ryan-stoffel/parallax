@@ -1,4 +1,5 @@
 // A composer's dictation: the desktop's VoiceSession over iOS speech recognition (speech.ts).
+import { t } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import { AppState, Linking } from "react-native";
 
@@ -8,11 +9,11 @@ import { SpeechDenied, speechDependencies } from "./speech";
 
 function voiceFailed(error: unknown) {
   if (error instanceof SpeechDenied)
-    return showAlert("Dictation is off for Parallax", "Allow the microphone and speech recognition in Settings to dictate.", [
-      { text: "Not now", style: "cancel" },
-      { text: "Open Settings", onPress: () => void Linking.openSettings() },
+    return showAlert(t("Dictation is off for Parallax"), t("Allow the microphone and speech recognition in Settings to dictate."), [
+      { text: t("Not now"), style: "cancel" },
+      { text: t("Open Settings"), onPress: () => void Linking.openSettings() },
     ]);
-  showAlert("Dictation failed", error instanceof Error ? error.message : "Try again.");
+  showAlert(t("Dictation failed"), error instanceof Error ? error.message : t("Try again."));
 }
 
 /**

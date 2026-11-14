@@ -1,5 +1,6 @@
 // The Pull requests page's search, filters, and sort, pure so the mobile app's pull request sheet
 // matches and orders them the same way.
+import { msg } from "../i18n";
 import type { PullRequest } from "../protocol/generated/protocol";
 import { numberOf } from "./github";
 import { locale } from "./locale";
@@ -18,13 +19,13 @@ export type PrSort = "updated" | "newest" | "oldest" | "number" | "title";
 
 /** What a Filters choice matches: a state (draft is an open one), or what its checks say. */
 export const facets = [
-  { group: "State", id: "open", label: "Open" },
-  { group: "State", id: "draft", label: "Draft" },
-  { group: "State", id: "merged", label: "Merged" },
-  { group: "State", id: "closed", label: "Closed" },
-  { group: "Checks", id: "passed", label: "Passing" },
-  { group: "Checks", id: "failed", label: "Failing" },
-  { group: "Checks", id: "pending", label: "Pending" },
+  { group: msg("State"), id: "open", label: msg("Open", { context: "pull request state" }) },
+  { group: msg("State"), id: "draft", label: msg("Draft", { context: "pull request state" }) },
+  { group: msg("State"), id: "merged", label: msg("Merged", { context: "pull request state" }) },
+  { group: msg("State"), id: "closed", label: msg("Closed", { context: "pull request state" }) },
+  { group: msg("Checks"), id: "passed", label: msg("Passing") },
+  { group: msg("Checks"), id: "failed", label: msg("Failing") },
+  { group: msg("Checks"), id: "pending", label: msg("Pending") },
 ] as const;
 
 const stateOf = (pr: PullRequest) => (pr.state === "open" && pr.draft ? "draft" : pr.state);

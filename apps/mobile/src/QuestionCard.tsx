@@ -4,6 +4,7 @@
 // options scroll under a max height. The typed answer and the buttons stay below them, so neither
 // the keyboard nor a long question can push them away.
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import { Check, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
@@ -73,7 +74,7 @@ function OptionRow({
           <T style={{ fontSize: 14, lineHeight: 20, flexShrink: 1 }}>{option.label}</T>
           {option.recommended && (
             <View style={[styles.recommended, { backgroundColor: c.hover }]}>
-              <T style={{ fontSize: 12, lineHeight: 16, color: c.accent }}>Recommended</T>
+              <T style={{ fontSize: 12, lineHeight: 16, color: c.accent }}>{t("Recommended")}</T>
             </View>
           )}
         </View>
@@ -150,10 +151,10 @@ export function QuestionCard({
     if (!("error" in reply)) return onAnswered();
     // Nothing waits on an answer anymore, so the card has nothing left to do.
     if (reply.error.data?.kind === "approvalNotFound") {
-      showAlert("This question is no longer waiting");
+      showAlert(t("This question is no longer waiting"));
       return onAnswered();
     }
-    showAlert("Your answer didn't reach the agent", reply.error.message);
+    showAlert(t("Your answer didn't reach the agent"), reply.error.message);
   }
 
   function pick(option: QuestionOption) {
@@ -178,11 +179,11 @@ export function QuestionCard({
       {(!!question.header || question.multiple || count > 1) && (
         <View style={styles.meta}>
           <T faint numberOfLines={1} style={{ fontSize: 12, flex: 1 }}>
-            {[question.header, question.multiple && "Choose any"].filter(Boolean).join(" · ")}
+            {[question.header, question.multiple && t("Choose any")].filter(Boolean).join(" · ")}
           </T>
           {count > 1 && (
             <T faint style={{ fontSize: 12, fontVariant: ["tabular-nums"] }}>
-              {count - 1} more waiting
+              {t("{{count}} more waiting", { count: count - 1 })}
             </T>
           )}
         </View>
@@ -211,12 +212,12 @@ export function QuestionCard({
       {question.custom && (
         <TextInput
           key={`typed:${question.id}`}
-          accessibilityLabel={hasOptions ? "Your own answer" : question.text}
+          accessibilityLabel={hasOptions ? t("Your own answer") : question.text}
           secureTextEntry={question.secret}
           autoCapitalize={question.secret ? "none" : undefined}
           autoCorrect={!question.secret}
           editable={!busy}
-          placeholder={hasOptions ? "Something else" : "Your answer"}
+          placeholder={hasOptions ? t("Something else") : t("Your answer")}
           placeholderTextColor={c.faintForeground}
           returnKeyType={open === undefined ? "send" : "next"}
           value={choice.typed}
@@ -228,26 +229,26 @@ export function QuestionCard({
       <View style={styles.foot}>
         {questions.length > 1 && (
           <View style={styles.steps}>
-            <Step icon={ChevronLeft} label="Previous question" disabled={step === 0} onPress={() => setStep(step - 1)} />
+            <Step icon={ChevronLeft} label={t("Previous question")} disabled={step === 0} onPress={() => setStep(step - 1)} />
             <T muted style={{ fontSize: 12, fontVariant: ["tabular-nums"] }}>
-              {step + 1} of {questions.length}
+              {t("{{index}} of {{total}}", { index: step + 1, total: questions.length })}
             </T>
             <Step
               icon={ChevronRight}
-              label="Next question"
+              label={t("Next question")}
               disabled={step === questions.length - 1}
               onPress={() => setStep(step + 1)}
             />
           </View>
         )}
         <Button
-          label="Skip"
+          label={t("Skip")}
           style={{ flex: 1 }}
           disabled={busy}
           onPress={() => void answer({ decision: "deny", message: SKIPPED })}
         />
         <Button
-          label={busy ? "Sending…" : open === undefined ? "Send" : "Next"}
+          label={busy ? t("Sending…") : open === undefined ? t("Send") : t("Next")}
           primary
           style={{ flex: 1 }}
           disabled={busy || !ready}

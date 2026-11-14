@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { Bot, Cpu } from "lucide-react";
 import { useEffect, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
@@ -101,15 +102,15 @@ function notifySignIns(hostId: string, before: ProvidersListResult, after: Provi
       notify({
         key,
         tone: "success",
-        title: `Signed in to ${instance.name}`,
+        title: t("Signed in to {{name}}", { name: instance.name }),
         ...(account && { body: account }),
       });
     else
       notify({
         key,
         tone: "error",
-        title: `${instance.name} is signed out`,
-        body: "Its threads can't run until you sign in again in Settings > Providers.",
+        title: t("{{name}} is signed out", { name: instance.name }),
+        body: t("Its threads can't run until you sign in again in Settings > Providers."),
       });
   }
 }

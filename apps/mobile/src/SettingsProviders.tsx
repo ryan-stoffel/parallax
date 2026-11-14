@@ -4,6 +4,7 @@
 // on that computer (`providers/*`). Sign-ins and installs that run in a terminal stay on the
 // desktop; Cursor's, which approves in a browser, works here.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { t } from "i18next";
 import { Plus, RefreshCw, Trash2 } from "lucide-react-native";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Linking, Switch, View } from "react-native";
@@ -63,7 +64,7 @@ async function load(id: string, refresh = false) {
 async function save(id: string, instance: ProviderInstance) {
   const answer = await window.parallax.request(id, "providers/save", { instance });
   if ("error" in answer) {
-    fail(`Couldn't save ${instance.name}`, answer.error);
+    fail(t("Couldn't save {{name}}", { name: instance.name }), answer.error);
     return false;
   }
   put(id, answer.result);
@@ -73,7 +74,7 @@ async function save(id: string, instance: ProviderInstance) {
 /** "Checked just now", "Checked 12m ago". */
 function checkedLabel(checkedAt: string): string {
   const since = ago(checkedAt);
-  return since === "now" ? "Checked just now" : `Checked ${since} ago`;
+  return since === t("now") ? t("Checked just now") : t("Checked {{time}} ago", { time: since });
 }
 
 /** Asks for each of a card's secrets that has no value, such as its API key, in turn. */
@@ -83,11 +84,11 @@ async function askSecrets(preset: Preset): Promise<Record<string, string> | unde
     if (!v.secret || v.value) continue;
     const value = await new Promise<string | undefined>((done) =>
       showPrompt(
-        preset.name,
-        `${v.name}: kept in the host's keychain, and never shown again.`,
+        t(preset.name),
+        t("{{name}}: kept in the host's keychain, and never shown again.", { name: v.name }),
         [
-          { text: "Cancel", style: "cancel", onPress: () => done(undefined) },
-          { text: "Add", onPress: (text?: string) => done(text ?? "") },
+          { text: t("Cancel"), style: "cancel", onPress: () => done(undefined) },
+          { text: t("Add"), onPress: (text?: string) => done(text ?? "") },
         ],
         "secure-text",
       ),
@@ -112,7 +113,7 @@ export function ProvidersPage({ m }: { m: Computer }) {
     if (supported && m.connectedNow) void load(id).then(setError);
   }, [id, supported, m.connectedNow]);
 
-  if (!supported) return <Section><Note>Update plxd on this computer to manage its providers here.</Note></Section>;
+  if (!supported) return <Section><Note>{t("Update plxd on this computer to manage its providers here.")}</Note></Section>;
   const list = listed?.providers;
   const on = list?.filter((p) => p.instance.enabled) ?? [];
 
@@ -130,12 +131,12 @@ export function ProvidersPage({ m }: { m: Computer }) {
 
   return (
     <>
-      <Section title="Providers" footer="One provider stays on, for new threads.">
+      <Section title={t("Providers")} footer={t("One provider stays on, for new threads.")}>
         {error && <Note alert last={false}>{error}</Note>}
         {!list ? (
-          !error && <Note last={false}>Checking…</Note>
+          !error && <Note last={false}>{t("Checking…")}</Note>
         ) : !list.length ? (
-          <Note last={false}>{`No providers on ${m.machine.name} yet. Add an agent or a model service for threads to run on.`}</Note>
+          <Note last={false}>{t("No providers on {{computer}} yet. Add an agent or a model service for threads to run on.", { computer: m.machine.name })}</Note>
         ) : (
           list.map((info) => {
             const { instance } = info;
@@ -145,12 +146,12 @@ export function ProvidersPage({ m }: { m: Computer }) {
                 key={instance.id}
                 leading={<ProviderLogo kind={instance.kind} size={20} color={instance.enabled ? undefined : c.faintForeground} />}
                 title={instance.name}
-                detail={instance.enabled ? instanceStatus(info) : "Off"}
+                detail={instance.enabled ? instanceStatus(info) : t("Off")}
                 chevron
                 onPress={() => nav.navigate("Provider", { id, instance: instance.id })}
                 right={
                   <Switch
-                    accessibilityLabel={`Use ${instance.name}`}
+                    accessibilityLabel={t("Use {{name}}", { name: instance.name })}
                     value={instance.enabled}
                     disabled={last}
                     onValueChange={(enabled) => void save(id, { ...instance, enabled })}
@@ -162,16 +163,16 @@ export function ProvidersPage({ m }: { m: Computer }) {
         )}
         <Row
           icon={RefreshCw}
-          title={checking ? "Checking…" : "Refresh"}
+          title={checking ? t("Checking…") : t("Refresh")}
           detail={listed && !checking ? checkedLabel(listed.checkedAt) : undefined}
           onPress={checking ? undefined : () => void refresh()}
         />
-        <Row icon={Plus} iconColor={c.accent} title="Add provider" last onPress={list ? () => setAdding(true) : undefined} />
+        <Row icon={Plus} iconColor={c.accent} title={t("Add provider")} last onPress={list ? () => setAdding(true) : undefined} />
       </Section>
       <Choices
-        title="Add provider"
+        title={t("Add provider")}
         open={adding}
-        options={presets.map((p) => ({ value: p.name, label: p.name, description: p.blurb }))}
+        options={presets.map((p) => ({ value: p.name, label: t(p.name), description: t(p.blurb) }))}
         onChoose={(name) => void add(presets.find((p) => p.name === name)!)}
         onClose={() => setAdding(false)}
       />
@@ -181,7 +182,7 @@ export function ProvidersPage({ m }: { m: Computer }) {
 
 /** One instance's account line: its state, with the email the list leaves out. */
 function accountLine(info: ProviderInfo): string {
-  if (info.signedIn === true && info.account?.includes("@")) return `Authenticated as ${info.account}`;
+  if (info.signedIn === true && info.account?.includes("@")) return t("Authenticated as {{account}}", { account: info.account });
   if (!info.installed && info.note) return capitalized(info.note);
   return instanceStatus(info);
 }
@@ -209,17 +210,17 @@ function useCursorSignIn(id: string, info: ProviderInfo) {
   useEffect(() => {
     if (!waiting || !info.signInError) return;
     setWaiting(false);
-    fail(`Couldn't sign in to ${instance.name}`, info.signInError);
+    fail(t("Couldn't sign in to {{name}}", { name: instance.name }), info.signInError);
   }, [waiting, info.signInError, instance.name]);
   const signIn = async () => {
     const answer = await window.parallax.request(id, "cursor/signIn", { instance: instance.id });
-    if ("error" in answer) return fail(`Couldn't sign in to ${instance.name}`, answer.error);
+    if ("error" in answer) return fail(t("Couldn't sign in to {{name}}", { name: instance.name }), answer.error);
     void Linking.openURL(answer.result.url);
     setWaiting(true);
   };
   const signOut = async () => {
     const answer = await window.parallax.request(id, "cursor/signOut", { instance: instance.id });
-    if ("error" in answer) fail(`Couldn't sign out of ${instance.name}`, answer.error);
+    if ("error" in answer) fail(t("Couldn't sign out of {{name}}", { name: instance.name }), answer.error);
     else void load(id, true);
   };
   return { waiting, cancel: () => setWaiting(false), signIn, signOut };
@@ -230,12 +231,12 @@ export function ProviderScreen({ route, navigation }: NativeStackScreenProps<Set
   const { id, instance: instanceId } = route.params;
   const m = useComputer(id);
   const info = useList(id)?.providers.find((p) => p.instance.id === instanceId);
-  useEffect(() => navigation.setOptions({ title: info?.instance.name ?? "Provider" }), [info?.instance.name]);
+  useEffect(() => navigation.setOptions({ title: info?.instance.name ?? t("Provider") }), [info?.instance.name]);
   if (!m || !info)
     return (
       <Page>
         <Section>
-          <Note>{m?.shownConnected === false ? "Not connected" : "This provider isn't on the computer anymore."}</Note>
+          <Note>{m?.shownConnected === false ? t("Not connected") : t("This provider isn't on the computer anymore.")}</Note>
         </Section>
       </Page>
     );
@@ -247,10 +248,11 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
   const id = m.machine.id;
   const { instance } = info;
   const kind = kindInfoOf(instance.kind);
+  const kindName = t(kind.name);
   const homeVar = HOME_VARS[instance.kind];
   const choices = versions[instance.kind];
   const version = versionOf(instance);
-  const program = instance.program ?? kind.program ?? "the program";
+  const program = instance.program ?? kind.program ?? t("the program");
   const [picking, setPicking] = useState(false);
   const change = (patch: Partial<ProviderInstance>) => void save(id, { ...instance, ...patch });
   const cursor = useCursorSignIn(id, info);
@@ -267,52 +269,52 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
 
   const installCursor = async () => {
     const answer = await window.parallax.request(id, "cursor/install", {});
-    if ("error" in answer) fail(`Couldn't install ${instance.name}`, answer.error);
+    if ("error" in answer) fail(t("Couldn't install {{name}}", { name: instance.name }), answer.error);
     else void load(id, true);
   };
   const setEnv = (env: ProviderEnvVar[]) => change({ env });
   const editVar = (v: ProviderEnvVar) =>
     showPrompt(
       v.name,
-      v.secret ? "Secret, kept in the host's keychain. A new value replaces it." : undefined,
+      v.secret ? t("Secret, kept in the host's keychain. A new value replaces it.") : undefined,
       [
-        { text: "Remove", style: "destructive", onPress: () => setEnv(instance.env.filter((e) => e.name !== v.name)) },
-        { text: "Cancel", style: "cancel" },
+        { text: t("Remove"), style: "destructive", onPress: () => setEnv(instance.env.filter((e) => e.name !== v.name)) },
+        { text: t("Cancel"), style: "cancel" },
         // An emptied secret keeps the stored one.
-        { text: "Save", onPress: (value?: string) => (!v.secret || value) && setEnv(withVar(instance.env, v.name, value ?? "", v.secret)) },
+        { text: t("Save"), onPress: (value?: string) => (!v.secret || value) && setEnv(withVar(instance.env, v.name, value ?? "", v.secret)) },
       ],
       v.secret ? "secure-text" : "plain-text",
       v.secret ? "" : (v.value ?? ""),
     );
   const addVar = () =>
-    showPrompt("Add variable", "Letters, digits, and _, not starting with a digit.", (name) => {
+    showPrompt(t("Add variable"), t("Letters, digits, and _, not starting with a digit."), (name) => {
       const trimmed = name.trim();
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) return fail("Couldn't add the variable", "Letters, digits, and _, not starting with a digit.");
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) return fail(t("Couldn't add the variable"), t("Letters, digits, and _, not starting with a digit."));
       const secret = secretName(trimmed);
       showPrompt(
         trimmed,
-        secret ? "Secret: kept in the host's keychain, and never shown again." : undefined,
+        secret ? t("Secret: kept in the host's keychain, and never shown again.") : undefined,
         (value) => setEnv(withVar(instance.env, trimmed, value, secret)),
         secret ? "secure-text" : "plain-text",
       );
     });
   const addModel = () =>
-    showPrompt("Add custom model", "Model id, such as gpt-oss:120b", (raw) => {
+    showPrompt(t("Add custom model"), t("Model id, such as gpt-oss:120b"), (raw) => {
       const modelId = raw.trim();
-      if (!modelId || /\s/.test(modelId)) return fail("Couldn't add the model", "A model id has no spaces.");
-      showPrompt("Display name", undefined, (name) =>
+      if (!modelId || /\s/.test(modelId)) return fail(t("Couldn't add the model"), t("A model id has no spaces."));
+      showPrompt(t("Display name"), undefined, (name) =>
         change({ models: [...instance.models.filter((x) => x.id !== modelId), { id: modelId, name: name.trim() || modelId }] }),
       );
     });
   const remove = () =>
-    showAlert(`Remove ${instance.name}?`, "Its settings and secrets leave this host; its threads keep their transcripts.", [
-      { text: "Cancel", style: "cancel" },
+    showAlert(t("Remove {{name}}?", { name: instance.name }), t("Its settings and secrets leave this host; its threads keep their transcripts."), [
+      { text: t("Cancel"), style: "cancel" },
       {
-        text: "Remove",
+        text: t("Remove"),
         style: "destructive",
         onPress: async () => {
           const answer = await window.parallax.request(id, "providers/remove", { id: instance.id });
-          if ("error" in answer) return fail(`Couldn't remove ${instance.name}`, answer.error);
+          if ("error" in answer) return fail(t("Couldn't remove {{name}}", { name: instance.name }), answer.error);
           put(id, answer.result);
           onRemoved();
         },
@@ -326,11 +328,11 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
         <ProviderLogo kind={instance.kind} size={40} />
         <T style={{ fontSize: 20, fontWeight: "600" }}>{instance.name}</T>
         {/* What it is, unless its name says so, and its version. */}
-        <T muted>{[kind.name !== instance.name && kind.name, info.version].filter(Boolean).join(" · ") || m.machine.name}</T>
+        <T muted>{[kind.name !== instance.name && kindName, info.version].filter(Boolean).join(" · ") || m.machine.name}</T>
       </View>
       {!instance.enabled && (
         <Section>
-          <Note>{`Off on this host: new threads and model menus leave out ${instance.name}'s models.`}</Note>
+          <Note>{t("Off on this host: new threads and model menus leave out {{name}}'s models.", { name: instance.name })}</Note>
         </Section>
       )}
 
@@ -338,69 +340,69 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
         footer={
           (!info.installed && instance.kind !== "cursor") ||
           (info.installed && info.signedIn !== true && !!info.login && !cursorAccount)
-            ? `Installing and signing in to ${kind.name} run in a terminal: do it in Parallax on ${m.machine.name}.`
+            ? t("Installing and signing in to {{name}} run in a terminal: do it in Parallax on {{computer}}.", { name: kindName, computer: m.machine.name })
             : undefined
         }
       >
         <Field
-          title="Display name"
-          detail="How threads and model menus name it."
+          title={t("Display name")}
+          detail={t("How threads and model menus name it.")}
           required
           value={instance.name}
           onSave={(name) => change({ name: name.trim().slice(0, 64) })}
         />
         <Row
-          title="Account"
-          detail={info.installing ? `Installing ${kind.name}…` : accountLine(info)}
+          title={t("Account")}
+          detail={info.installing ? t("Installing {{name}}…", { name: kindName }) : accountLine(info)}
           last={!cursor.waiting && !(instance.kind === "cursor" && !info.installed)}
           right={
             cursorAccount && info.installed && !cursor.waiting ? (
               <T style={{ color: c.accent }} onPress={() => void (info.signedIn === true ? cursor.signOut() : cursor.signIn())}>
-                {info.signedIn === true ? "Sign out" : "Sign in"}
+                {info.signedIn === true ? t("Sign out") : t("Sign in")}
               </T>
             ) : undefined
           }
         />
         {instance.kind === "cursor" && !info.installed && (
           <Row
-            title={info.installing ? "Installing…" : "Install"}
-            detail="Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer."
+            title={info.installing ? t("Installing…") : t("Install")}
+            detail={t("Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer.")}
             last={!cursor.waiting}
             onPress={info.installing ? undefined : () => void installCursor()}
           />
         )}
         {cursor.waiting && (
           <Row
-            title="Sign-in"
-            detail="Approve the sign-in in your browser. This keeps waiting until you do."
+            title={t("Sign-in")}
+            detail={t("Approve the sign-in in your browser. This keeps waiting until you do.")}
             last
-            right={<T style={{ color: c.accent }} onPress={cursor.cancel}>Cancel</T>}
+            right={<T style={{ color: c.accent }} onPress={cursor.cancel}>{t("Cancel")}</T>}
           />
         )}
       </Section>
 
-      <Section title="Runtime">
+      <Section title={t("Runtime")}>
         {instance.kind === "cursor" ? (
-          <Row title="Cursor SDK" detail={info.note ?? "Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer."} last />
+          <Row title="Cursor SDK" detail={info.note ?? t("Runs through the Cursor SDK on this host. Needs Node.js 22.13 or newer.")} last />
         ) : ollamaCloud ? (
-          <Row title="Ollama Cloud" detail="Runs Ollama Cloud's models on this host with the key in OLLAMA_API_KEY." last />
+          <Row title="Ollama Cloud" detail={t("Runs Ollama Cloud's models on this host with the key in OLLAMA_API_KEY.")} last />
         ) : (
           <>
             {choices && version && (
               <Row
-                title="Version"
-                detail={`Which ${kind.name} this instance runs.`}
+                title={t("Version")}
+                detail={t("Which {{name}} this instance runs.", { name: kindName })}
                 right={<T muted>{version.label}</T>}
                 chevron
                 onPress={() => setPicking(true)}
               />
             )}
             <Field
-              title="Binary path"
+              title={t("Binary path")}
               detail={
                 info.path
-                  ? `Path to the ${kind.name} binary this instance runs. Found at ${info.path}.`
-                  : `Path to the ${kind.name} binary this instance runs. Not found on the host.`
+                  ? t("Path to the {{name}} binary this instance runs. Found at {{path}}.", { name: kindName, path: info.path })
+                  : t("Path to the {{name}} binary this instance runs. Not found on the host.", { name: kindName })
               }
               placeholder={kind.program ?? (instance.kind === "ollamaCloud" ? "claude" : undefined)}
               required={instance.kind === "acp"}
@@ -410,20 +412,20 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
             />
             {homeVar && (
               <Field
-                title={`${homeVar} path`}
-                detail={`Custom ${kind.name} home and config directory, for a second account.`}
-                placeholder="Default"
+                title={t("{{variable}} path", { variable: homeVar })}
+                detail={t("Custom {{name}} home and config directory, for a second account.", { name: kindName })}
+                placeholder={t("Default")}
                 mono
                 value={instance.home ?? ""}
                 onSave={(home) => change({ home: home.trim() || undefined })}
               />
             )}
             <Field
-              title={kind.wholeArgs ? "Arguments" : "Launch arguments"}
+              title={kind.wholeArgs ? t("Arguments") : t("Launch arguments")}
               detail={
                 kind.wholeArgs
-                  ? `Every argument passed to ${program}, separated by spaces.`
-                  : `Additional arguments passed to ${program} on session start, separated by spaces.`
+                  ? t("Every argument passed to {{program}}, separated by spaces.", { program })
+                  : t("Additional arguments passed to {{program}} on session start, separated by spaces.", { program })
               }
               mono
               value={instance.args.join(" ")}
@@ -434,7 +436,7 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
             {instance.kind === "claude" && (
               <Row
                 title="Claude Agent SDK"
-                detail={info.note ?? "Runs Claude Code through the Agent SDK on this host. Needs Node.js 22.16 or newer."}
+                detail={info.note ?? t("Runs Claude Code through the Agent SDK on this host. Needs Node.js 22.16 or newer.")}
                 last
               />
             )}
@@ -442,47 +444,47 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
         )}
       </Section>
 
-      <Section title="Environment" footer="API keys, base URLs, and other settings this instance's runs get.">
+      <Section title={t("Environment")} footer={t("API keys, base URLs, and other settings this instance's runs get.")}>
         {instance.env.map((v) => (
           <Row
             key={v.name}
             title={v.name}
-            detail={v.secret ? "Secret, kept in the host's keychain" : v.value || "Empty"}
+            detail={v.secret ? t("Secret, kept in the host's keychain") : v.value || t("Empty")}
             chevron
             onPress={() => editVar(v)}
           />
         ))}
-        <Row icon={Plus} iconColor={c.accent} title="Add variable" last onPress={addVar} />
+        <Row icon={Plus} iconColor={c.accent} title={t("Add variable")} last onPress={addVar} />
       </Section>
 
-      <Section title="Models" footer="Custom models are saved on the host. Tap one to remove it.">
-        {!models.length && <Note last={false}>{`plxd found no models for ${instance.name}. Add one below.`}</Note>}
+      <Section title={t("Models")} footer={t("Custom models are saved on the host. Tap one to remove it.")}>
+        {!models.length && <Note last={false}>{t("plxd found no models for {{name}}. Add one below.", { name: instance.name })}</Note>}
         {models.map((x) => (
           <Row
             key={x.id}
             title={x.name}
-            detail={x.custom ? `${x.id} · Custom` : x.id}
+            detail={x.custom ? t("{{id}} · Custom", { id: x.id }) : x.id}
             onPress={
               x.custom
                 ? () =>
-                    showAlert(`Remove ${x.name}?`, undefined, [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Remove", style: "destructive", onPress: () => change({ models: instance.models.filter((y) => y.id !== x.id) }) },
+                    showAlert(t("Remove {{name}}?", { name: x.name }), undefined, [
+                      { text: t("Cancel"), style: "cancel" },
+                      { text: t("Remove"), style: "destructive", onPress: () => change({ models: instance.models.filter((y) => y.id !== x.id) }) },
                     ])
                 : undefined
             }
           />
         ))}
-        <Row icon={Plus} iconColor={c.accent} title="Add custom model" last onPress={addModel} />
+        <Row icon={Plus} iconColor={c.accent} title={t("Add custom model")} last onPress={addModel} />
       </Section>
 
       <Section>
-        <Row icon={Trash2} title={`Remove ${instance.name}`} destructive last onPress={remove} />
+        <Row icon={Trash2} title={t("Remove {{name}}", { name: instance.name })} destructive last onPress={remove} />
       </Section>
 
       {choices && version && (
         <Choices
-          title="Version"
+          title={t("Version")}
           open={picking}
           value={version.label}
           options={choices.map((v) => ({ value: v.label, label: v.label }))}

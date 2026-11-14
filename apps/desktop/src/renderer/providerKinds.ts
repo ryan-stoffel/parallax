@@ -1,6 +1,7 @@
 // The kinds of provider instance and what a new one starts as, without their logos: pure, so the
 // mobile app shares them. providers.ts adds the logos and re-exports the rest.
 
+import { msg } from "../i18n";
 import type {
   ProviderEnvVar,
   ProviderInstance,
@@ -28,8 +29,8 @@ export const kindInfo = {
   // Hermes Agent's Ollama Cloud provider runs it, out of sight (0070).
   ollamaCloud: { name: "Ollama Cloud" },
   openRouter: { name: "OpenRouter", program: "claude" },
-  localModel: { name: "Local model", program: "claude" },
-  acp: { name: "ACP agent", wholeArgs: true },
+  localModel: { name: msg("Local model"), program: "claude" },
+  acp: { name: msg("ACP agent"), wholeArgs: true },
 } satisfies Record<string, KindInfo>;
 
 /** `kind`'s entry, or the generic ACP one for a kind this app doesn't know. */
@@ -62,34 +63,34 @@ const anthropicApi = (url: string, token: Omit<ProviderEnvVar, "name">): Provide
  * endpoint, set in their variables, except Ollama Cloud, which runs on its API key (0070).
  */
 export const presets: Preset[] = [
-  { kind: "claude", name: "Claude Code", blurb: "Anthropic's agent" },
-  { kind: "codex", name: "Codex", blurb: "OpenAI's agent" },
+  { kind: "claude", name: "Claude Code", blurb: msg("Anthropic's agent") },
+  { kind: "codex", name: "Codex", blurb: msg("OpenAI's agent") },
   { kind: "cursor", name: "Cursor", blurb: "Cursor Agent" },
   {
     kind: "pi",
     name: "Pi",
-    blurb: "A minimal agent",
+    blurb: msg("A minimal agent"),
     args: ["-y", "pi-acp@0.0.34"],
     env: [{ name: "PI_ACP_PI_COMMAND", value: "pi", secret: false }],
   },
-  { kind: "opencode", name: "OpenCode", blurb: "Any model" },
+  { kind: "opencode", name: "OpenCode", blurb: msg("Any model") },
   {
     kind: "ollamaCloud",
     name: "Ollama Cloud",
-    blurb: "Cloud models with an API key",
+    blurb: msg("Cloud models with an API key"),
     env: [{ name: "OLLAMA_API_KEY", secret: true }],
   },
   { kind: "hermes", name: "Hermes Agent", blurb: "Nous Portal" },
   {
     kind: "openRouter",
     name: "OpenRouter",
-    blurb: "Claude Code on any model",
+    blurb: msg("Claude Code on any model"),
     env: anthropicApi("https://openrouter.ai/api", { secret: true }),
   },
   {
     kind: "localModel",
     name: "Local model",
-    blurb: "Claude Code on your own server",
+    blurb: msg("Claude Code on your own server"),
     env: anthropicApi("http://127.0.0.1:8080", { value: "local", secret: false }),
   },
 ];

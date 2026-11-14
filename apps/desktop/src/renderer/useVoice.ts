@@ -1,13 +1,14 @@
+import { t } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import { notify } from "./notifications";
 import { VoiceSession, type VoicePhase } from "./voiceSession";
 
 function voiceError(error: unknown) {
   if (error instanceof DOMException && error.name === "NotAllowedError")
-    return "Allow microphone access in System Settings, then try again.";
+    return t("Allow microphone access in System Settings, then try again.");
   if (error instanceof DOMException && error.name === "NotFoundError")
-    return "Connect a microphone, then try again.";
-  return error instanceof Error ? error.message : "Voice input could not start. Try again.";
+    return t("Connect a microphone, then try again.");
+  return error instanceof Error ? error.message : t("Voice input could not start. Try again.");
 }
 
 /** Own capture and the app-local hold gesture for this composer only. */
@@ -40,7 +41,7 @@ export function useVoice(options: {
           if (text) current.current.inserted(text);
         },
         (error) => {
-          notify({ tone: "error", title: "Voice input failed", body: voiceError(error) });
+          notify({ tone: "error", title: t("Voice input failed"), body: voiceError(error) });
         },
       ),
   );
@@ -120,8 +121,10 @@ export function useVoice(options: {
           notify({
             key: "voice-hotkey",
             tone: "error",
-            title: "Hold Fn is unavailable",
-            body: "Use the microphone button to dictate. Restart the app to retry the Fn shortcut.",
+            title: t("Hold Fn is unavailable"),
+            body: t(
+              "Use the microphone button to dictate. Restart the app to retry the Fn shortcut.",
+            ),
           });
       })
       .catch(() => {

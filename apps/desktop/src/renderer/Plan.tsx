@@ -2,7 +2,7 @@
 // composer with its card while the run goes, and Claude Code's proposed plan. The checklist comes
 // from plxd, as for TodoWrite, or from Claude Code's task tools (PLX-248). Its pure helpers are in
 // plans.ts.
-import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
+import { t } from "i18next";
 import {
   Ban,
   ChevronDown,
@@ -22,14 +22,16 @@ import {
   type ToggleEvent,
 } from "react";
 
+import { msg } from "../i18n";
 import type { AgentTodoItem, AgentToolStatus } from "../protocol/generated/protocol";
 import { planChanges, type PlanRow, type PlanUpdate } from "./plans";
+import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import { popoverBeside } from "./ui";
 
 /** A step's state. A status newer than this app counts as to do. */
 const stateOf = (status: string) =>
   status === "completed" ? "done" : status === "inProgress" ? "now" : "todo";
-const stateLabels = { done: "Done", now: "In progress", todo: "To do" };
+const stateLabels = { done: msg("Done"), now: msg("In progress"), todo: msg("To do") };
 const stateColors = {
   done: "text-faint-foreground",
   now: "text-foreground",
@@ -90,10 +92,10 @@ export const PlanCard = memo(function PlanCard({ items }: { items: readonly Agen
       <div className="flex items-center gap-2 text-body">
         <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
         <span id={id} className="flex-1 font-medium">
-          Plan
+          {t("Plan")}
         </span>
         <span className="text-meta text-muted-foreground tabular-nums">
-          {done} of {items.length} done
+          {t("{{done}} of {{total}} done", { done, total: items.length })}
         </span>
       </div>
       <ProgressBar done={done} total={items.length} className="mt-2.5 h-[3px]" />
@@ -116,7 +118,7 @@ function Step({ step, draw }: { step: AgentTodoItem; draw: boolean }) {
       <span
         className={`min-w-0 text-body leading-5 transition-colors duration-300 motion-reduce:transition-none ${stateColors[state]}`}
       >
-        <span className="sr-only">{stateLabels[state]}: </span>
+        <span className="sr-only">{t("{{state}}:", { state: t(stateLabels[state]) })} </span>
         {step.text}
       </span>
     </li>
@@ -165,7 +167,7 @@ function Check({ draw }: { draw: boolean }) {
 export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
   const made = item.kind === "plan";
   const changes = made
-    ? `${doneCount(item.items)} of ${item.items.length} done`
+    ? t("{{done}} of {{total}} done", { done: doneCount(item.items), total: item.items.length })
     : item.previous
       ? planChanges(item.previous, item.items)
       : "";
@@ -175,7 +177,11 @@ export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
         <ListChecks />
       </TraceIcon>
       <TraceTitle className="shrink-0">
-        {made ? "Made a plan" : item.items.length === 0 ? "Cleared the plan" : "Updated the plan"}
+        {made
+          ? t("Made a plan")
+          : item.items.length === 0
+            ? t("Cleared the plan")
+            : t("Updated the plan")}
       </TraceTitle>
       {changes && (
         <span className="truncate text-faint-foreground" title={changes}>
@@ -218,12 +224,12 @@ export function PlanStrip({
   const now = items.find((s) => s.status === "inProgress");
   const next = now ?? items.find((s) => s.status !== "completed");
   return (
-    <section ref={section} aria-label="Plan" className="plan-strip">
+    <section ref={section} aria-label={t("Plan")} className="plan-strip">
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
-        title={open ? "Hide the plan" : "Show the plan"}
+        title={open ? t("Hide the plan") : t("Show the plan")}
         className={`flex min-w-0 items-center gap-2.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-0.5 pr-3.5 pl-4"}`}
       >
         <span className="grid size-4 shrink-0 place-items-center">
@@ -232,16 +238,18 @@ export function PlanStrip({
         <span className={compact ? "sr-only" : "min-w-0 flex-1 truncate"}>
           {next ? (
             <>
-              <span className="sr-only">{now ? "In progress: " : "Next: "}</span>
+              <span className="sr-only">{now ? t("In progress:") : t("Next:")} </span>
               {now ? (active ?? now.text) : next.text}
             </>
           ) : (
-            "All steps done"
+            t("All steps done")
           )}
         </span>
         <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
-          {done} of {items.length}
-          <span className="sr-only"> done</span>
+          <span aria-hidden>{t("{{done}} of {{total}}", { done, total: items.length })}</span>
+          <span className="sr-only">
+            {t("{{done}} of {{total}} done", { done, total: items.length })}
+          </span>
         </span>
         <ProgressBar done={done} total={items.length} className="h-[3px] w-12 shrink-0" />
         {!compact && (
@@ -301,9 +309,9 @@ export function ProposedPlan({
 }) {
   const verdict =
     status === "denied"
-      ? { label: "Not approved", icon: <Ban aria-hidden className="size-3.5" /> }
+      ? { label: t("Not approved"), icon: <Ban aria-hidden className="size-3.5" /> }
       : status === "error"
-        ? { label: "Failed", icon: <CircleX aria-hidden className="size-3.5" /> }
+        ? { label: t("Failed"), icon: <CircleX aria-hidden className="size-3.5" /> }
         : undefined;
   const headingId = useId();
   const verdictId = useId();
@@ -327,7 +335,7 @@ export function ProposedPlan({
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-body">
         <ClipboardList aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
         <span id={headingId} className="flex-1 font-medium">
-          Proposed plan
+          {t("Proposed plan")}
         </span>
         {verdict && (
           <span id={verdictId} className="flex shrink-0 items-center gap-1.5 text-meta text-danger">
@@ -370,7 +378,7 @@ export function ProposedPlan({
           ) : (
             <ChevronDown aria-hidden className="size-3.5" />
           )}
-          {open ? "Show less" : "Show full plan"}
+          {open ? t("Show less") : t("Show full plan")}
         </button>
       )}
       {actions && (

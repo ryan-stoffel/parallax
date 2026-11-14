@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { memo, useRef, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,6 +7,7 @@ import { codeComponents, highlight } from "../AgentChat";
 import { icons } from "../icons";
 import { reducedMotion } from "../motion";
 import { Kbd } from "../ui";
+import { msg } from "../../i18n";
 import {
   rehypeGithubAlerts,
   rehypeGithubHtml,
@@ -14,15 +16,15 @@ import {
 } from "./githubHtml";
 
 const alerts: Record<AlertKind, { Icon: typeof icons.info; label: string; tone: string }> = {
-  note: { Icon: icons.info, label: "Note", tone: "text-accent border-accent" },
-  tip: { Icon: icons.tip, label: "Tip", tone: "text-added border-added" },
+  note: { Icon: icons.info, label: msg("Note"), tone: "text-accent border-accent" },
+  tip: { Icon: icons.tip, label: msg("Tip"), tone: "text-added border-added" },
   important: {
     Icon: icons.important,
-    label: "Important",
+    label: msg("Important"),
     tone: "text-project-violet border-project-violet",
   },
-  warning: { Icon: icons.warning, label: "Warning", tone: "text-warning border-warning" },
-  caution: { Icon: icons.error, label: "Caution", tone: "text-danger border-danger" },
+  warning: { Icon: icons.warning, label: msg("Warning"), tone: "text-warning border-warning" },
+  caution: { Icon: icons.error, label: msg("Caution"), tone: "text-danger border-danger" },
 };
 
 const https = (url?: string) => !!url && /^https:\/\/[^/]/i.test(url);
@@ -81,7 +83,7 @@ export const GithubMarkdown = memo(function GithubMarkdown({
         />
       ) : typeof src === "string" && src ? (
         <a href={src} onClick={(e) => e.preventDefault()}>
-          {alt || "Image"}
+          {alt || t("Image")}
         </a>
       ) : (
         <>{alt}</>
@@ -98,7 +100,7 @@ export const GithubMarkdown = memo(function GithubMarkdown({
         >
           <p className="flex items-center gap-1.5 font-medium">
             <alert.Icon aria-hidden className="size-4" />
-            {alert.label}
+            {t(alert.label)}
           </p>
           <div className="text-foreground [&>*+*]:mt-2">{children}</div>
         </div>

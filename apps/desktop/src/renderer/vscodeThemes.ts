@@ -1,5 +1,7 @@
 import { strFromU8, unzipSync } from "fflate";
+import { t } from "i18next";
 
+import { msg } from "../i18n";
 import { stored } from "./stored";
 
 // VS Code color themes, added from Open VSX in Settings > Appearance. Each theme's VS Code colors
@@ -216,7 +218,10 @@ export function themesFromVsix(
   });
   const read = (name: string) => {
     const file = files[name];
-    if (!file) throw new Error(`The extension has no ${name.replace(/^extension\//, "")}.`);
+    if (!file)
+      throw new Error(
+        t("The extension has no {{file}}.", { file: name.replace(/^extension\//, "") }),
+      );
     return parseJsonc(strFromU8(file)) as VscodeTheme & { include?: string };
   };
   // A theme file, with any `include` merged under it.
@@ -241,7 +246,7 @@ export function themesFromVsix(
       { id: slug(`${id}-${name}`), name, mode, ...tokensOf(theme(file), mode, defaults[mode]) },
     ];
   });
-  if (!themes.length) throw new Error("This extension has no color themes.");
+  if (!themes.length) throw new Error(t("This extension has no color themes."));
   return themes;
 }
 
@@ -267,7 +272,8 @@ export async function searchThemes(query: string, signal?: AbortSignal): Promise
     size: "24",
   });
   const response = await fetch(`${openVsx}/-/search?${params}`, { signal });
-  if (!response.ok) throw new Error(`Open VSX answered ${response.status}.`);
+  if (!response.ok)
+    throw new Error(t("Open VSX answered {{status}}.", { status: response.status }));
   const { extensions = [] } = (await response.json()) as { extensions?: FoundExtension[] };
   return extensions.filter((e) => !/\bicons?\b/i.test(`${e.displayName ?? e.name}`));
 }
@@ -296,7 +302,7 @@ type ExtensionMeta = { displayName?: string; files: { download: string; icon?: s
 
 async function extensionMeta(namespace: string, name: string): Promise<ExtensionMeta> {
   const meta = await fetch(`${openVsx}/${namespace}/${name}`);
-  if (!meta.ok) throw new Error(`Open VSX answered ${meta.status}.`);
+  if (!meta.ok) throw new Error(t("Open VSX answered {{status}}.", { status: meta.status }));
   return (await meta.json()) as ExtensionMeta;
 }
 
@@ -308,7 +314,7 @@ export async function fetchExtension(
 ): Promise<AddedExtension> {
   const { displayName, files } = await extensionMeta(namespace, name);
   const vsix = await fetch(files.download);
-  if (!vsix.ok) throw new Error(`Open VSX answered ${vsix.status}.`);
+  if (!vsix.ok) throw new Error(t("Open VSX answered {{status}}.", { status: vsix.status }));
   const id = `${namespace}.${name}`;
   return {
     id,
@@ -377,25 +383,25 @@ export function themeCss(extensions: AddedExtension[]) {
     .join("\n");
 }
 
-/** The tokens Settings > Appearance > Colors changes, by their names there. */
+/** The tokens Settings > Appearance > Colors changes, by their names there, marked with `msg`: show them with `t`. */
 export const colorTokens: Record<string, string> = {
-  "--accent": "Accent",
-  "--background": "Background",
-  "--sidebar": "Sidebar",
-  "--surface": "Cards and menus",
-  "--code": "Code blocks",
-  "--foreground": "Text",
-  "--muted-foreground": "Secondary text",
-  "--faint-foreground": "Faint text",
-  "--added": "Added",
-  "--danger": "Removed and errors",
-  "--warning": "Warnings",
-  "--syntax-keyword": "Keywords",
-  "--syntax-string": "Strings",
-  "--syntax-number": "Numbers",
-  "--syntax-title": "Functions",
-  "--syntax-type": "Types",
-  "--syntax-comment": "Comments",
+  "--accent": msg("Accent"),
+  "--background": msg("Background"),
+  "--sidebar": msg("Sidebar"),
+  "--surface": msg("Cards and menus"),
+  "--code": msg("Code blocks"),
+  "--foreground": msg("Text"),
+  "--muted-foreground": msg("Secondary text"),
+  "--faint-foreground": msg("Faint text"),
+  "--added": msg("Added"),
+  "--danger": msg("Removed and errors"),
+  "--warning": msg("Warnings"),
+  "--syntax-keyword": msg("Keywords"),
+  "--syntax-string": msg("Strings"),
+  "--syntax-number": msg("Numbers"),
+  "--syntax-title": msg("Functions"),
+  "--syntax-type": msg("Types"),
+  "--syntax-comment": msg("Comments"),
 };
 /** Tokens only Edit as JSON changes: they're usually see-through, which a color picker can't set. */
 const jsonOnlyTokens = ["--border", "--hover", "--selected"];
@@ -441,13 +447,19 @@ export function customColors(json: unknown): { tokens: Tokens; errors: string[] 
   const tokens: Tokens = {};
   const errors: string[] = [];
   if (!json || typeof json !== "object" || Array.isArray(json))
-    return { tokens, errors: ['Colors must be an object, like { "accent": "#ff4a1f" }.'] };
+    return {
+      tokens,
+      errors: [
+        t("Colors must be an object, like {{example}}.", { example: '{ "accent": "#ff4a1f" }' }),
+      ],
+    };
   for (const [key, value] of Object.entries(json)) {
     const name = key.startsWith("--") ? key : `--${key}`;
     const token =
       vscodeKeys[key] ?? (name in colorTokens || jsonOnlyTokens.includes(name) ? name : undefined);
-    if (!token) errors.push(`${key} isn't a color Parallax has.`);
-    else if (!isCssColor(value)) errors.push(`${key}: ${JSON.stringify(value)} isn't a color.`);
+    if (!token) errors.push(t("{{key}} isn't a color Parallax has.", { key }));
+    else if (!isCssColor(value))
+      errors.push(t("{{key}}: {{value}} isn't a color.", { key, value: JSON.stringify(value) }));
     else tokens[token] = value.trim();
   }
   return { tokens, errors };

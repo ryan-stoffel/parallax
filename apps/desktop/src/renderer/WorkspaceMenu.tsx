@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronDown, Folder, FolderGit2, FolderPlus, FolderSearch, Search } from "lucide-react";
 import {
   Fragment,
@@ -149,12 +150,14 @@ export function WorkspaceMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         aria-label={
-          value && host ? `Workspace: ${value.repo.name} on ${host.name}` : "Workspace: none"
+          value && host
+            ? t("Workspace: {{repo}} on {{host}}", { repo: value.repo.name, host: host.name })
+            : t("Workspace: none")
         }
         className={`${menuButton} min-w-0`}
       >
         {host ? hostIcon(host) : <Folder />}
-        <span className="truncate">{value?.repo.name ?? "Choose a workspace"}</span>
+        <span className="truncate">{value?.repo.name ?? t("Choose a workspace")}</span>
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
@@ -162,7 +165,7 @@ export function WorkspaceMenu({
         id={id}
         popover="auto"
         role="menu"
-        aria-label="Workspace"
+        aria-label={t("Workspace")}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
           setOpen(e.newState === "open");
           if (e.newState === "open") searchBox.current?.focus();
@@ -178,8 +181,8 @@ export function WorkspaceMenu({
           <input
             ref={searchBox}
             type="search"
-            aria-label="Search repositories"
-            placeholder="Search repositories"
+            aria-label={t("Search repositories")}
+            placeholder={t("Search repositories")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -212,11 +215,11 @@ export function WorkspaceMenu({
                 {!q &&
                   (g.host.id === localId ? (
                     <>
-                      {add("create", <FolderGit2 aria-hidden />, "New repository…")}
-                      {add("browse", <FolderPlus aria-hidden />, "Choose folder…")}
+                      {add("create", <FolderGit2 aria-hidden />, t("New repository…"))}
+                      {add("browse", <FolderPlus aria-hidden />, t("Choose folder…"))}
                     </>
                   ) : (
-                    <Unavailable icon={<FolderSearch aria-hidden />} label="Browse folders" />
+                    <Unavailable icon={<FolderSearch aria-hidden />} label={t("Browse folders")} />
                   ))}
               </div>
             </Fragment>
@@ -228,12 +231,12 @@ export function WorkspaceMenu({
                 <p aria-hidden className={menuHeading}>
                   GitHub
                 </p>
-                {add("clone", <GitHubLogo />, "Clone a repository…")}
+                {add("clone", <GitHubLogo />, t("Clone a repository…"))}
               </div>
             </>
           )}
           {q && shown.length === 0 && (
-            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">{t("No matches")}</p>
           )}
         </div>
       </div>
@@ -244,11 +247,13 @@ export function WorkspaceMenu({
 /** A host's state under its repositories, while it has none to show or is still asking. */
 function ListingNote({ listing }: { listing?: Listing }) {
   let note: string;
-  if (!listing || listing.status === "listing") note = "Loading…";
-  else if (listing.status === "connecting") note = "Connecting…";
-  else if (listing.status === "unreachable") note = `Can't connect: ${listing.message}`;
-  else if (listing.status === "failed") note = `Can't list its repositories: ${listing.message}`;
-  else if (listing.repos.length === 0) note = "No repositories yet";
+  if (!listing || listing.status === "listing") note = t("Loading…");
+  else if (listing.status === "connecting") note = t("Connecting…");
+  else if (listing.status === "unreachable")
+    note = t("Can't connect: {{message}}", { message: listing.message });
+  else if (listing.status === "failed")
+    note = t("Can't list its repositories: {{message}}", { message: listing.message });
+  else if (listing.repos.length === 0) note = t("No repositories yet");
   else return null;
   return (
     <p title={note} className="line-clamp-3 px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
@@ -268,7 +273,7 @@ function Unavailable({ icon, label }: { icon: ReactNode; label: string }) {
     >
       {icon}
       <span className="min-w-0 flex-1 truncate leading-5">{label}</span>
-      <span className={unavailableBadge}>Not available yet</span>
+      <span className={unavailableBadge}>{t("Not available yet")}</span>
     </button>
   );
 }

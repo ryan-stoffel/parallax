@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
@@ -291,7 +292,7 @@ export function PullRequestList({
   const synced = read.every((r) => r?.at) ? read.map((r) => r!.at!).sort()[0] : undefined;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ul aria-label="Pull requests" className="min-h-0 flex-1 overflow-y-auto p-2">
+      <ul aria-label={t("Pull requests")} className="min-h-0 flex-1 overflow-y-auto p-2">
         {[...prs.urls].reverse().map((url) => {
           const { pr, error } = prs.get(url) ?? {};
           return (
@@ -302,7 +303,11 @@ export function PullRequestList({
         })}
       </ul>
       <p className="border-t border-border px-4 py-2.5 text-meta text-faint-foreground">
-        {open} open · {prs.urls.length} linked · {synced ? `synced ${ago(synced)}` : "syncing…"}
+        {t("{{open}} open · {{linked}} linked · {{sync}}", {
+          open,
+          linked: prs.urls.length,
+          sync: synced ? t("synced {{ago}}", { ago: ago(synced) }) : t("syncing…"),
+        })}
       </p>
     </div>
   );
@@ -332,7 +337,7 @@ export function LinkedPullRequests({
   if (!newest.length) return null;
   return (
     <>
-      <ul aria-label="Linked pull requests" className="flex flex-col gap-px">
+      <ul aria-label={t("Linked pull requests")} className="flex flex-col gap-px">
         {shown.map((url) => {
           const { pr, error } = prs.get(url) ?? {};
           return (
@@ -350,7 +355,7 @@ export function LinkedPullRequests({
           className={`${menuItem} text-faint-foreground hover:text-foreground`}
         >
           <icons.add aria-hidden className={`transition-transform ${all ? "rotate-45" : ""}`} />
-          {all ? "Show less" : `Show ${more} more`}
+          {all ? t("Show less") : t("Show {{count}} more", { count: more })}
         </button>
       )}
       {all && newest.length > EXPANDED && (
@@ -360,7 +365,7 @@ export function LinkedPullRequests({
           className={`${menuItem} text-faint-foreground hover:text-foreground`}
         >
           <icons.external aria-hidden />
-          View all {newest.length}
+          {t("View all {{count}}", { count: newest.length })}
         </button>
       )}
     </>

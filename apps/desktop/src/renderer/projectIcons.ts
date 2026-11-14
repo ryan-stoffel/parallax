@@ -152,6 +152,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { msg } from "../i18n";
 import type { ChosenIcon } from "../protocol/generated/protocol";
 
 /** One of the icons an orchestrator can wear: its Lucide name, which plxd keeps (0032), and its glyph. */
@@ -352,31 +353,31 @@ export interface IconColor {
 }
 
 export const iconColors: IconColor[] = [
-  { label: "Accent", text: "text-accent", fill: "bg-accent" },
-  { key: "red", label: "Red", text: "text-project-red", fill: "bg-project-red" },
+  { label: msg("Accent"), text: "text-accent", fill: "bg-accent" },
+  { key: "red", label: msg("Red"), text: "text-project-red", fill: "bg-project-red" },
   {
     key: "orange",
-    label: "Orange",
+    label: msg("Orange"),
     text: "text-project-orange",
     fill: "bg-project-orange",
   },
   {
     key: "yellow",
-    label: "Yellow",
+    label: msg("Yellow"),
     text: "text-project-yellow",
     fill: "bg-project-yellow",
   },
-  { key: "green", label: "Green", text: "text-project-green", fill: "bg-project-green" },
-  { key: "teal", label: "Teal", text: "text-project-teal", fill: "bg-project-teal" },
-  { key: "sky", label: "Sky", text: "text-project-sky", fill: "bg-project-sky" },
+  { key: "green", label: msg("Green"), text: "text-project-green", fill: "bg-project-green" },
+  { key: "teal", label: msg("Teal"), text: "text-project-teal", fill: "bg-project-teal" },
+  { key: "sky", label: msg("Sky"), text: "text-project-sky", fill: "bg-project-sky" },
   {
     key: "violet",
-    label: "Violet",
+    label: msg("Violet"),
     text: "text-project-violet",
     fill: "bg-project-violet",
   },
-  { key: "pink", label: "Pink", text: "text-project-pink", fill: "bg-project-pink" },
-  { key: "gray", label: "Gray", text: "text-project-gray", fill: "bg-project-gray" },
+  { key: "pink", label: msg("Pink"), text: "text-project-pink", fill: "bg-project-pink" },
+  { key: "gray", label: msg("Gray"), text: "text-project-gray", fill: "bg-project-gray" },
 ];
 const colorsByKey = new Map(iconColors.map((c) => [c.key, c]));
 

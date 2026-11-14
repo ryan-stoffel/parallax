@@ -1,4 +1,5 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import { t } from "i18next";
+import { Fragment, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Host } from "../hosts";
 import { Picker } from "../ui";
@@ -209,6 +210,15 @@ export function StatusDot({ tone }: { tone: "on" | "off" | "warn" | "error" }) {
   return <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${color}`} />;
 }
 
+/** A mark `t` leaves where `name`'s control goes, for `withNodes`. */
+const mark = (name: string) => `\u0001${name}\u0001`;
+
+/** A translated sentence with each `mark` in it replaced by its node, so a control can sit in it. */
+const withNodes = (text: string, nodes: Record<string, ReactNode>) =>
+  text
+    .split("\u0001")
+    .map((part, i) => (i % 2 ? <Fragment key={i}>{nodes[part]}</Fragment> : part));
+
 /**
  * "on <host>", a select of `hosts`, shown only when there's more than one, or with `always`, as
  * the host's name alone.
@@ -230,28 +240,38 @@ export function HostPicker({
   /** What on the host the settings are for, as a menu, read before the host. */
   scope?: ReactNode;
 }) {
-  const lead = scope ? <>Applying settings for {scope} on</> : "Applying settings on";
+  const sentence = (computer: ReactNode) =>
+    withNodes(
+      scope
+        ? t("Applying settings for {{scope}} on {{computer}}", {
+            scope: mark("scope"),
+            computer: mark("computer"),
+          })
+        : t("Applying settings on {{computer}}", { computer: mark("computer") }),
+      { scope, computer },
+    );
   if (hosts.length < 2)
     return always ? (
       <div className="flex flex-wrap items-center gap-1.5 text-reading text-muted-foreground">
-        {lead} <span className="font-medium text-foreground">{hosts[0]?.name}</span>
+        {sentence(<span className="font-medium text-foreground">{hosts[0]?.name}</span>)}
       </div>
     ) : null;
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-reading text-muted-foreground">
-      {lead}
-      <Picker
-        field
-        label="Computer"
-        value={value}
-        onChange={onChange}
-        options={[
-          ...(all ? [{ value: allHosts, label: "All computers" }] : []),
-          ...hosts.map((h) => ({ value: h.id, label: h.name })),
-        ]}
-        className="max-w-56"
-        panelClassName="min-w-48"
-      />
+      {sentence(
+        <Picker
+          field
+          label={t("Computer")}
+          value={value}
+          onChange={onChange}
+          options={[
+            ...(all ? [{ value: allHosts, label: t("All computers") }] : []),
+            ...hosts.map((h) => ({ value: h.id, label: h.name })),
+          ]}
+          className="max-w-56"
+          panelClassName="min-w-48"
+        />,
+      )}
     </span>
   );
 }
@@ -265,7 +285,7 @@ export const hostsOf = (hosts: Host[], value: string) =>
  * double click or a second Enter can't remove.
  */
 export function ConfirmRemove({
-  label = "Remove",
+  label = t("Remove"),
   disabled,
   onRemove,
   onCancel,
@@ -281,7 +301,7 @@ export function ConfirmRemove({
         {label}
       </button>
       <button type="button" autoFocus onClick={onCancel} className={quietButton}>
-        Cancel
+        {t("Cancel")}
       </button>
     </>
   );
@@ -289,14 +309,16 @@ export function ConfirmRemove({
 
 /** 1536 → "1.5 KB": a size in bytes for people. */
 export function formatBytes(bytes: number): string {
-  const units = ["bytes", "KB", "MB", "GB", "TB"];
+  const units = ["", "KB", "MB", "GB", "TB"];
   let n = bytes;
   let i = 0;
   while (n >= 1024 && i < units.length - 1) {
     n /= 1024;
     i++;
   }
-  return i === 0 ? `${n} ${units[0]}` : `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+  return i === 0
+    ? t("{{count}} bytes", { count: n })
+    : `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
 
 /** A name to edit in place: Enter or Save calls `onSave`, and Escape or Cancel `onCancel`. */
@@ -334,10 +356,10 @@ export function RenameForm({
         className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-body text-foreground"
       />
       <button type="submit" className={primaryButton}>
-        Save
+        {t("Save")}
       </button>
       <button type="button" className={quietButton} onClick={onCancel}>
-        Cancel
+        {t("Cancel")}
       </button>
     </form>
   );

@@ -1,4 +1,10 @@
-/** A bundled asset's notice, shown in Settings > About > Licenses and credits. */
+import { msg } from "../../i18n";
+
+/**
+ * A bundled asset's notice, shown in Settings > About > Licenses and credits. Font notices stay in
+ * English, as their licenses are written. `artwork`'s names, licenses, and texts are marked with
+ * `msg`, so they show with `t`, except the Android robot's attribution, which Google words.
+ */
 interface Notice {
   name: string;
   license: string;
@@ -94,33 +100,41 @@ export const notices: Notice[] = [
 /** Logos and icons in the app, and whose they are. */
 export const artwork: Notice[] = [
   {
-    name: "Agent and service logos",
-    license: "Trademarks of their owners",
-    text: "The Claude, OpenAI, Cursor, Google Antigravity, OpenCode, Pi, Grok, Ollama, OpenRouter, Amp, Cline, Hermes, GitHub, Ko-fi, and Clerk marks and the subscription plan badges are trademarks of their owners, shown to identify their products. They come from LobeHub's icon set (@lobehub/icons-static-svg, MIT) and the vendors' brand kits.",
+    name: msg("Agent and service logos"),
+    license: msg("Trademarks of their owners"),
+    text: msg(
+      "The Claude, OpenAI, Cursor, Google Antigravity, OpenCode, Pi, Grok, Ollama, OpenRouter, Amp, Cline, Hermes, GitHub, Ko-fi, and Clerk marks and the subscription plan badges are trademarks of their owners, shown to identify their products. They come from LobeHub's icon set (@lobehub/icons-static-svg, MIT) and the vendors' brand kits.",
+    ),
   },
   {
-    name: "Apple logo",
-    license: "Trademark of Apple Inc.",
-    text: "Apple and the Apple logo are trademarks of Apple Inc., shown to identify iOS Simulators. The drawing comes from Simple Icons (https://simpleicons.org, CC0 1.0).",
+    name: msg("Apple logo"),
+    license: msg("Trademark of Apple Inc."),
+    text: msg(
+      "Apple and the Apple logo are trademarks of Apple Inc., shown to identify iOS Simulators. The drawing comes from Simple Icons (https://simpleicons.org, CC0 1.0).",
+    ),
   },
   {
-    name: "Android logo",
+    name: msg("Android logo"),
     license: "CC BY 3.0",
     text: "The Android robot is reproduced or modified from work created and shared by Google and used according to terms described in the Creative Commons 3.0 Attribution License. The drawing comes from Simple Icons (https://simpleicons.org, CC0 1.0).",
   },
   {
-    name: "Editor and terminal icons",
-    license: "Trademarks of their owners",
-    text: "The Visual Studio Code, Cursor, Ghostty, and Alacritty icons in Open menus are trademarks of their owners, shown to identify those apps.",
+    name: msg("Editor and terminal icons"),
+    license: msg("Trademarks of their owners"),
+    text: msg(
+      "The Visual Studio Code, Cursor, Ghostty, and Alacritty icons in Open menus are trademarks of their owners, shown to identify those apps.",
+    ),
   },
   {
     name: "Lucide",
     license: "ISC",
-    text: "The interface's icons are Lucide (https://lucide.dev). Its license is under Code.",
+    text: msg("The interface's icons are Lucide (https://lucide.dev). Its license is under Code."),
   },
   {
     name: "Material Icon Theme",
     license: "MIT",
-    text: "File and folder icons are Material Icon Theme (https://github.com/material-extensions/vscode-material-icon-theme). Its license is under Code.",
+    text: msg(
+      "File and folder icons are Material Icon Theme (https://github.com/material-extensions/vscode-material-icon-theme). Its license is under Code.",
+    ),
   },
 ];

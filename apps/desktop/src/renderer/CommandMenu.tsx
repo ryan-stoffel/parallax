@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   Archive,
   ArrowLeft,
@@ -21,6 +22,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
+import { msg } from "../i18n";
 import type { ThemePreference } from "../preload/bridge";
 import type { GrepMatch } from "../protocol/generated/protocol";
 import { close, Footer, navigate } from "./AddDialog";
@@ -59,20 +61,21 @@ export type CommandMenuHandle = { open: (page?: MenuPage) => void; toggle: () =>
 /** A row as the list draws it, under its group's heading. */
 type Row = MenuItem & { group: string };
 
+// Each page's title and search placeholder, in English, shown with `t`.
 const pageTitles: Record<Exclude<MenuPage, "root">, string> = {
-  repos: "New thread in",
-  theme: "Change theme",
-  appearance: "Change appearance",
-  files: "Go to file",
-  contents: "Search project contents",
+  repos: msg("New thread in"),
+  theme: msg("Change theme"),
+  appearance: msg("Change appearance"),
+  files: msg("Go to file"),
+  contents: msg("Search project contents"),
 };
 const placeholders: Record<MenuPage, string> = {
-  root: "Search commands, orchestrators, and threads…",
-  repos: "Search repositories…",
-  theme: "Search themes…",
-  appearance: "Search…",
-  files: "Search files by name…",
-  contents: "Search the thread's files for text…",
+  root: msg("Search commands, orchestrators, and threads…"),
+  repos: msg("Search repositories…"),
+  theme: msg("Search themes…"),
+  appearance: msg("Search…"),
+  files: msg("Search files by name…"),
+  contents: msg("Search the thread's files for text…"),
 };
 /** Parallax's own themes, which Settings > Appearance calls each just Parallax. */
 const parallaxThemes: { id: string; name: string; mode: Mode }[] = [
@@ -168,7 +171,8 @@ export function CommandMenu({
             });
             if (!("result" in answer)) return;
             const { threads, snippets } = answer.result;
-            for (const t of threads) hits.set(`${host.id}/${t.id}`, snippets?.[t.id]);
+            for (const thread of threads)
+              hits.set(`${host.id}/${thread.id}`, snippets?.[thread.id]);
           }),
       );
       if (live) setFound({ words: wordsKey, hits });
@@ -228,17 +232,17 @@ export function CommandMenu({
   const threadRows = useMemo(
     () =>
       (shown ? hosts : []).flatMap(({ host, view }) =>
-        view.state.threads.map((t) => {
-          const repo = view.state.repos.find((r) => r.id === t.repo);
-          const run = view.state.runs[t.id];
+        view.state.threads.map((thread) => {
+          const repo = view.state.repos.find((r) => r.id === thread.repo);
+          const run = view.state.runs[thread.id];
           return {
-            key: `${host.id}/${t.id}`,
+            key: `${host.id}/${thread.id}`,
             hostId: host.id,
-            thread: t,
-            title: view.state.titles[t.id] ?? "Thread",
+            thread,
+            title: view.state.titles[thread.id] ?? t("Thread"),
             repo,
             place: [
-              repo && !repo.scratch ? repo.name : "No repo",
+              repo && !repo.scratch ? repo.name : t("No repo"),
               run?.branch,
               ...(run?.pullRequests ?? []).map((url) => `#${url.split("/").pop()}`),
               hosts.length > 1 ? host.name : undefined,
@@ -282,13 +286,13 @@ export function CommandMenu({
       run: () => onOpenThread(r.hostId, r.thread.id),
     });
     if (!words.length) {
-      add("Actions", actions);
+      add(t("Actions"), actions);
       const recent = threadRows
         .filter((r) => !r.thread.archived && !r.thread.parent)
         .sort((a, b) => Date.parse(lastPrompt(b.thread)) - Date.parse(lastPrompt(a.thread)))
         .slice(0, 8);
       add(
-        "Recent threads",
+        t("Recent threads"),
         recent.map((r) => threadItem(r)),
       );
     } else {
@@ -308,18 +312,18 @@ export function CommandMenu({
         [r.title, r.thread.archived ? 0.9 : 1],
         [r.place, 0.6],
       ]);
-      const titled = new Set(threads.map((t) => t.item.key));
+      const titled = new Set(threads.map((found) => found.item.key));
       const inMessages = threadRows.filter((r) => !titled.has(r.key) && messageHits?.has(r.key));
       const groups = [
-        { name: "Actions", found: ranked(actions) },
-        { name: "Repositories", found: ranked(repos).slice(0, 6) },
-        { name: "Orchestrators", found: ranked(orchestrators).slice(0, 6) },
+        { name: t("Actions"), found: ranked(actions) },
+        { name: t("Repositories"), found: ranked(repos).slice(0, 6) },
+        { name: t("Orchestrators"), found: ranked(orchestrators).slice(0, 6) },
         {
-          name: "Threads",
+          name: t("Threads"),
           found: [
-            ...threads.slice(0, 20).map((t) => ({
-              item: threadItem(t.item),
-              score: t.score,
+            ...threads.slice(0, 20).map((found) => ({
+              item: threadItem(found.item),
+              score: found.score,
             })),
             ...inMessages.slice(0, 20).map((r) => ({
               item: threadItem(r, messageHits?.get(r.key)),
@@ -339,44 +343,46 @@ export function CommandMenu({
     }
   } else if (listed === "repos") {
     add(
-      "Repositories",
+      t("Repositories"),
       ranked(repos).map((r) => r.item),
     );
   } else if (listed === "theme") {
     const shown = shownThemes(appearance, added);
     const themes = [
       ...parallaxThemes,
-      ...added.flatMap((e) => e.themes.map((t) => ({ id: t.id, name: t.name, mode: t.mode }))),
+      ...added.flatMap((e) =>
+        e.themes.map((each) => ({ id: each.id, name: each.name, mode: each.mode })),
+      ),
     ];
-    const items = themes.map((t): MenuItem => ({
-      id: `theme:${t.id}`,
-      label: t.name,
-      text: t.name,
-      keywords: t.mode,
-      hint: t.mode === "light" ? "Light" : "Dark",
+    const items = themes.map((each): MenuItem => ({
+      id: `theme:${each.id}`,
+      label: each.name,
+      text: each.name,
+      keywords: each.mode,
+      hint: each.mode === "light" ? t("Light") : t("Dark"),
       icon: (
         <span
           aria-hidden
-          className={`scheme-${t.mode} theme-${t.id} theme-orb block size-4 rounded-full border border-border`}
+          className={`scheme-${each.mode} theme-${each.id} theme-orb block size-4 rounded-full border border-border`}
         />
       ),
-      checked: shown[t.mode] === t.id,
+      checked: shown[each.mode] === each.id,
       run: () => {
-        setAppearance(t.mode === "light" ? { lightTheme: t.id } : { darkTheme: t.id });
+        setAppearance(each.mode === "light" ? { lightTheme: each.id } : { darkTheme: each.id });
         // A theme for the mode that isn't showing switches to it, so the pick shows.
         const dark = document.documentElement.classList.contains("dark");
-        if (dark !== (t.mode === "dark")) onThemeChange(t.mode);
+        if (dark !== (each.mode === "dark")) onThemeChange(each.mode);
       },
     }));
     add(
-      "Themes",
+      t("Themes"),
       ranked(items).map((r) => r.item),
     );
   } else if (listed === "appearance") {
     const modes: [ThemePreference, string, ReactNode][] = [
-      ["light", "Light", <Sun aria-hidden className="size-4" />],
-      ["dark", "Dark", <Moon aria-hidden className="size-4" />],
-      ["system", "System", <Monitor aria-hidden className="size-4" />],
+      ["light", t("Light"), <Sun aria-hidden className="size-4" />],
+      ["dark", t("Dark"), <Moon aria-hidden className="size-4" />],
+      ["system", t("System"), <Monitor aria-hidden className="size-4" />],
     ];
     const items = modes.map(([value, name, icon]): MenuItem => ({
       id: `appearance:${value}`,
@@ -387,7 +393,7 @@ export function CommandMenu({
       run: () => onThemeChange(value),
     }));
     add(
-      "Appearance",
+      t("Appearance"),
       ranked(items).map((r) => r.item),
     );
   } else if (listed === "files" && files && typeof fileList === "object") {
@@ -396,7 +402,7 @@ export function CommandMenu({
       [path, 0.7],
     ]).slice(0, 100);
     add(
-      "Files",
+      t("Files"),
       found.map(({ item: path }) => ({
         id: `file:${path}`,
         label: path.slice(path.lastIndexOf("/") + 1),
@@ -414,7 +420,7 @@ export function CommandMenu({
     trimmed
   ) {
     add(
-      "Matches",
+      t("Matches"),
       grepped.matches.map((m) => ({
         id: `line:${m.path}:${m.line}`,
         label: <Marked text={m.text || " "} words={[grepped.query.toLowerCase()]} />,
@@ -443,32 +449,32 @@ export function CommandMenu({
   if (shown && !rows.length) {
     if (page === "files")
       empty = !files
-        ? "Open a thread to search its files"
+        ? t("Open a thread to search its files")
         : fileList === undefined
-          ? "Reading files…"
+          ? t("Reading files…")
           : typeof fileList === "string"
             ? fileList
-            : "No files match";
+            : t("No files match");
     else if (page === "contents")
       empty = !files
-        ? "Open a thread to search its files"
+        ? t("Open a thread to search its files")
         : !grep
-          ? "Update Parallax on this computer to search file contents"
+          ? t("Update Parallax on this computer to search file contents")
           : !trimmed
-            ? "Type to search the thread's files"
+            ? t("Type to search the thread's files")
             : typeof grepped === "string"
               ? grepped
               : grepped?.runId === files.runId && grepped.query === trimmed
-                ? "Nothing found"
-                : "Searching…";
-    else if (page === "root" && words.length && !messageHits) empty = "Searching…";
-    else empty = "No results";
+                ? t("Nothing found")
+                : t("Searching…");
+    else if (page === "root" && words.length && !messageHits) empty = t("Searching…");
+    else empty = t("No results");
   }
 
   return (
     <dialog
       ref={dialog}
-      aria-label="Command menu"
+      aria-label={t("Command menu")}
       onClose={() => {
         // What was found for one thread never shows for the next.
         setGrepped(undefined);
@@ -506,7 +512,7 @@ export function CommandMenu({
           ) : (
             <button
               type="button"
-              aria-label="Back"
+              aria-label={t("Back")}
               onClick={() => show("root")}
               className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
             >
@@ -515,7 +521,7 @@ export function CommandMenu({
           )}
           {page !== "root" && (
             <span className="shrink-0 rounded-md bg-selected px-1.5 py-0.5 text-meta text-foreground">
-              {pageTitles[page]}
+              {t(pageTitles[page])}
             </span>
           )}
           <input
@@ -529,9 +535,11 @@ export function CommandMenu({
             aria-controls={listId}
             aria-activedescendant={current && `${listId}-${rows.indexOf(current)}`}
             aria-label={
-              page === "root" ? "Search commands, orchestrators, and threads" : pageTitles[page]
+              page === "root"
+                ? t("Search commands, orchestrators, and threads")
+                : t(pageTitles[page])
             }
-            placeholder={placeholders[page]}
+            placeholder={t(placeholders[page])}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -544,7 +552,7 @@ export function CommandMenu({
           ref={list}
           id={listId}
           role="listbox"
-          aria-label="Results"
+          aria-label={t("Results")}
           className="max-h-[min(60vh,28rem)] overflow-y-auto px-2 pb-2"
         >
           {rows.map((row, i) => (
@@ -566,7 +574,7 @@ export function CommandMenu({
           ))}
           {empty && <p className="px-2.5 py-3 text-body text-faint-foreground">{empty}</p>}
         </div>
-        <Footer keys={[navigate, ["Enter", "Select"], close]} />
+        <Footer keys={[navigate, ["Enter", msg("Select")], close]} />
       </div>
     </dialog>
   );
@@ -619,7 +627,7 @@ function MenuRow({
           {shortcut}
         </kbd>
       )}
-      {row.checked && <Check aria-label="Current" className="size-4 shrink-0 text-accent" />}
+      {row.checked && <Check aria-label={t("Current")} className="size-4 shrink-0 text-accent" />}
       {row.page && <ChevronRight aria-hidden className="size-4 shrink-0 text-faint-foreground" />}
     </button>
   );

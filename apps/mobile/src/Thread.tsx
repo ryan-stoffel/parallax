@@ -10,6 +10,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import type { NativeStackHeaderItemMenu, NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { t } from "i18next";
 import type { LucideIcon } from "lucide-react-native";
 import { Check, ChevronRight, Copy, Ellipsis, FoldVertical, Hand, KeyRound, MessageCircleQuestion, RotateCcw, WifiOff } from "lucide-react-native";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
@@ -133,7 +134,7 @@ function TraceLine({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityHint="Opens its steps"
+      accessibilityHint={t("Opens its steps")}
       onPress={onPress}
       hitSlop={6}
       style={({ pressed }) => pressed && { opacity: 0.55 }}
@@ -168,9 +169,9 @@ function StepLine({ item, live, onPress }: { item: Item; live: boolean; onPress?
     case "tool":
       return <ToolLine item={item} live={live} onPress={onPress} />;
     case "reasoning":
-      return <TraceLine icon={<KindIcon kind="thinking" color={c.mutedForeground} />} title="Thought" onPress={onPress} />;
+      return <TraceLine icon={<KindIcon kind="thinking" color={c.mutedForeground} />} title={t("Thought")} onPress={onPress} />;
     case "todo":
-      return <TraceLine icon={<KindIcon kind="planning" color={c.mutedForeground} />} title="Updated the plan" onPress={onPress} />;
+      return <TraceLine icon={<KindIcon kind="planning" color={c.mutedForeground} />} title={t("Updated the plan")} onPress={onPress} />;
     default:
       return <RowView row={item} live={live} />;
   }
@@ -203,7 +204,7 @@ function Steps({ work, live }: { work: Work; live: boolean }) {
     <TraceLine
       icon={<KindIcon kind={summary.kind} color={summary.failures ? c.danger : c.mutedForeground} />}
       title={summary.label}
-      description={summary.failures ? `${summary.failures} failed` : undefined}
+      description={summary.failures ? t("{{count}} failed", { count: summary.failures }) : undefined}
       status={summary.failures ? "error" : undefined}
       onPress={open()}
     />
@@ -223,7 +224,7 @@ function ReplyActions({ text }: { text: string }) {
     <View style={styles.actions}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={copied ? "Copied" : "Copy"}
+        accessibilityLabel={copied ? t("Copied") : t("Copy")}
         hitSlop={6}
         onPress={() => {
           void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -354,7 +355,7 @@ function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   const { hostId, runId, root, editable } = useContext(RowContext);
   const { text, paths } = splitFiles(item.text ?? "");
   const files = paths.filter((p) => !isImagePath(p));
-  const said = item.text === null ? "A message" : text;
+  const said = item.text === null ? t("A message") : text;
   return (
     <View style={{ alignItems: "flex-end", gap: 6 }}>
       {!!item.images?.length && (
@@ -396,8 +397,13 @@ function Divider({ icon, label }: { icon?: LucideIcon; label: string }) {
 
 type Row = Item | Work;
 
-/** How a secret request ended, by its status, as the desktop's SecretLine says it. */
-const secretOutcomes: Record<string, string> = { saved: "Saved", declined: "Declined", cancelled: "Closed" };
+/** A secret request's line: how it ended, by its status, as the desktop's SecretLine says it, and its label. */
+function secretTitle(status: string | undefined, label: string): string {
+  if (!status) return t("Waiting for you: {{label}}", { label });
+  if (status === "saved") return t("Saved {{label}}", { label });
+  if (status === "declined") return t("Declined {{label}}", { label });
+  return status === "cancelled" ? t("Closed {{label}}", { label }) : t("Ended {{label}}", { label });
+}
 
 /**
  * Each turn's run by its last reply's row key, for its changed files: the turns by their prompt's
@@ -453,7 +459,7 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
       return (
         <TraceLine
           icon={<Icon icon={KeyRound} size={15} color={row.status ? c.mutedForeground : c.warning} />}
-          title={`${row.status ? (secretOutcomes[row.status] ?? "Ended") : "Waiting for you:"} ${row.request.label}`}
+          title={secretTitle(row.status, row.request.label)}
         />
       );
     case "files":
@@ -465,15 +471,15 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
         </T>
       );
     case "compaction":
-      return <Divider icon={FoldVertical} label={row.done ? "Compacted the conversation" : "Compacting…"} />;
+      return <Divider icon={FoldVertical} label={row.done ? t("Compacted the conversation") : t("Compacting…")} />;
     case "epoch":
-      return <Divider icon={RotateCcw} label="New session" />;
+      return <Divider icon={RotateCcw} label={t("New session")} />;
     case "end":
       return (
         <Divider
           label={
             row.outcome.status === "failed"
-              ? `Failed: ${failureText(row.outcome.failure)}`
+              ? t("Failed: {{reason}}", { reason: failureText(row.outcome.failure) })
               : statusLabel(row.outcome.status)
           }
         />
@@ -492,7 +498,7 @@ function WorkingFor({ since }: { since?: string }) {
   return (
     <View style={styles.line}>
       <WorkingMark />
-      <T style={{ ...styles.trace, color: c.accent }}>Working for {duration(useSeconds(since))}</T>
+      <T style={{ ...styles.trace, color: c.accent }}>{t("Working for {{duration}}", { duration: duration(useSeconds(since)) })}</T>
     </View>
   );
 }
@@ -517,7 +523,7 @@ function threadMenu(title: string, items: MenuEntry[]) {
       unstable_headerRightItems: () => [
         {
           type: "menu" as const,
-          label: "Thread actions",
+          label: t("Thread actions"),
           icon: { type: "sfSymbol" as const, name: "ellipsis" as const },
           menu: { title, items },
         },
@@ -525,7 +531,7 @@ function threadMenu(title: string, items: MenuEntry[]) {
     };
   return {
     headerRight: () => (
-      <GlassButton label="Thread actions" onPress={() => showMenu(items.flatMap(flatActions), title)}>
+      <GlassButton label={t("Thread actions")} onPress={() => showMenu(items.flatMap(flatActions), title)}>
         <Icon icon={Ellipsis} size={22} />
       </GlassButton>
     ),
@@ -550,7 +556,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const state = computer?.view.state;
   const thread = state?.threads.find((t) => t.id === runId);
   const run = state?.runs[runId];
-  const title = state?.titles[runId] ?? "Thread";
+  const title = state?.titles[runId] ?? t("Thread");
   const prs = run?.pullRequests ?? [];
   const attention = thread && state ? attentionOf(thread, run, asksOf(state, runId)) : "settled";
 
@@ -567,7 +573,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const working = isRunning(transcript.run?.status) && !transcript.turnDone;
 
   const rename = () =>
-    showPrompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title);
+    showPrompt(t("Rename thread"), undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title);
   const archive = () => {
     void computer?.view.archive(runId, !thread?.archived);
     // The main view has no back stack, so an archived thread gives way to a new one.
@@ -584,18 +590,18 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
       ...threadMenu(title, [
               {
                 type: "submenu",
-                label: "Thread",
+                label: t("Thread"),
                 inline: true,
                 items: [
                   {
                     type: "action",
-                    label: "Thread details",
+                    label: t("Thread details"),
                     icon: symbol("info.circle"),
                     onPress: () => navigation.navigate("ThreadDetails", { hostId, runId }),
                   },
                   {
                     type: "action",
-                    label: "Changes",
+                    label: t("Changes"),
                     icon: symbol("plus.forwardslash.minus"),
                     onPress: () => navigation.navigate("ThreadChanges", { hostId, runId }),
                   },
@@ -603,7 +609,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     ? [
                         {
                           type: "action" as const,
-                          label: "Files",
+                          label: t("Files"),
                           icon: symbol("folder"),
                           onPress: () => navigation.navigate("ThreadFiles", { hostId, runId }),
                         },
@@ -611,7 +617,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     : []),
                   ...prs.map((url) => ({
                     type: "action" as const,
-                    label: `Pull request #${url.split("/").pop()}`,
+                    label: t("Pull request #{{number}}", { number: url.split("/").pop() }),
                     icon: symbol("arrow.triangle.pull"),
                     onPress: () => navigation.navigate("PullRequest", { hostId, runId, url }),
                   })),
@@ -619,17 +625,17 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
               },
               {
                 type: "submenu",
-                label: "Edit",
+                label: t("Edit"),
                 inline: true,
                 items: [
-                  { type: "action", label: "Rename", icon: symbol("pencil"), onPress: rename },
+                  { type: "action", label: t("Rename"), icon: symbol("pencil"), onPress: rename },
                   // As on the desktop: an orchestrator's chat isn't forked.
                   ...(run && computer && "threadFork" in computer.view.capabilities && !state?.orchestrators.some((o) => o.run === runId)
-                    ? [{ type: "action" as const, label: "Fork", icon: symbol("arrow.triangle.branch"), onPress: () => setForking(true) }]
+                    ? [{ type: "action" as const, label: t("Fork"), icon: symbol("arrow.triangle.branch"), onPress: () => setForking(true) }]
                     : []),
                   {
                     type: "action",
-                    label: thread?.pinned ? "Unpin" : "Pin",
+                    label: thread?.pinned ? t("Unpin") : t("Pin"),
                     icon: symbol(thread?.pinned ? "pin.slash" : "pin"),
                     onPress: () => void computer?.view.update(runId, { pinned: !thread?.pinned }),
                   },
@@ -637,7 +643,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     ? [
                         {
                           type: "action" as const,
-                          label: "Copy branch name",
+                          label: t("Copy branch name"),
                           description: run.branch,
                           icon: symbol("doc.on.doc"),
                           onPress: () => void Clipboard.setStringAsync(run.branch!),
@@ -648,14 +654,14 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
               },
               {
                 type: "submenu",
-                label: "End",
+                label: t("End", { context: "menu section" }),
                 inline: true,
                 items: [
                   ...(working
                     ? [
                         {
                           type: "action" as const,
-                          label: "Stop",
+                          label: t("Stop"),
                           icon: symbol("stop.circle"),
                           destructive: true,
                           onPress: () => void cancel(),
@@ -664,7 +670,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     : []),
                   {
                     type: "action",
-                    label: thread?.archived ? "Unarchive" : "Archive",
+                    label: thread?.archived ? t("Unarchive") : t("Archive"),
                     icon: symbol(thread?.archived ? "tray.and.arrow.up" : "archivebox"),
                     destructive: !thread?.archived,
                     onPress: archive,
@@ -741,7 +747,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
       key: unanswered.key,
       edit: () =>
         void cancel(true).then((failed) =>
-          failed ? showAlert("Couldn't stop the thread", failed) : changeDraft(unanswered.text),
+          failed ? showAlert(t("Couldn't stop the thread"), failed) : changeDraft(unanswered.text),
         ),
     },
   };
@@ -758,10 +764,10 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
             <Icon icon={WifiOff} size={14} color={c.mutedForeground} />
             <T muted style={{ fontSize: 13 }}>
               {!computer
-                ? "This computer was removed."
+                ? t("This computer was removed.")
                 : computer.state.updating
-                  ? `${computer.machine.name} is restarting for an update…`
-                  : `Reconnecting to ${computer.machine.name}…`}
+                  ? t("{{name}} is restarting for an update…", { name: computer.machine.name })
+                  : t("Reconnecting to {{name}}…", { name: computer.machine.name })}
             </T>
           </View>
         )}
@@ -775,7 +781,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
             // A short transcript starts at the top, as a chat does: inverted, the end is the top.
             contentContainerStyle={styles.transcript}
             keyboardDismissMode="interactive"
-            accessibilityLabel="Transcript"
+            accessibilityLabel={t("Transcript")}
             // Inverted, the end is the top: scrolling up to it loads the older page (PLX-1001).
             onEndReached={older ? loadOlder : undefined}
             onEndReachedThreshold={1}
@@ -787,7 +793,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                       <Markdown text={splitFiles(first).text} selectable={false} />
                     </View>
                     <T faint style={{ fontSize: 12 }}>
-                      Sending…
+                      {t("Sending…")}
                     </T>
                   </View>
                 )}
@@ -797,7 +803,11 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                       <Markdown text={splitFiles(m.text).text} selectable={false} />
                     </View>
                     <T faint style={{ fontSize: 12 }}>
-                      {`${connected ? "Sending…" : "Waiting for connection"}${m.steer ? " · steer" : ""}`}
+                      {m.steer
+                        ? t("{{status}} · steer", { status: connected ? t("Sending…") : t("Waiting for connection") })
+                        : connected
+                          ? t("Sending…")
+                          : t("Waiting for connection")}
                     </T>
                   </View>
                 ))}
@@ -854,7 +864,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           stalled={stalled}
           original={
             original && {
-              name: state?.titles[original.id] ?? "Thread",
+              name: state?.titles[original.id] ?? t("Thread"),
               open: () => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: original.id } }] }),
             }
           }

@@ -4,13 +4,15 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "types": [],
-    // The desktop files mobile shares (metro.config.js) import React, resolved here as Metro does.
-    // Types only: app.json turns off Expo's use of these paths in Metro.
+    // The desktop files mobile shares (metro.config.js) import React and i18next, resolved here as
+    // Metro does. Types only: app.json turns off Expo's use of these paths in Metro.
     "paths": {
       "react": ["./node_modules/@types/react"],
-      "react/*": ["./node_modules/@types/react/*"]
+      "react/*": ["./node_modules/@types/react/*"],
+      "i18next": ["./node_modules/i18next"],
+      "react-i18next": ["./node_modules/react-i18next"]
     }
   },
-  "include": ["index.ts", "src", "modules/*/index.ts", "../desktop/src/renderer/parallax.d.ts"],
+  "include": ["index.ts", "src", "modules/*/index.ts", "../desktop/src/renderer/parallax.d.ts", "../desktop/src/i18n/loaders.native.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

@@ -123,6 +123,8 @@ export default defineConfig({
   test: {
     root: ".",
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
+    // English, so tests read the strings as the code writes them, plurals included.
+    setupFiles: ["src/i18n/testSetup.ts"],
     // Its ES modules import each other without file extensions, which only a bundler resolves,
     // so tests bundle it too (browserTheme.ts). Enriched Markdown's web build is what the app
     // bundles, by its `browser` field, which Node's resolution in tests skips.

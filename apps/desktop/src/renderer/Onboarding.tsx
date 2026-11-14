@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import {
   ArrowLeft,
   ArrowRight,
@@ -24,6 +25,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { msg } from "../i18n";
 import { NPM_INSTALLS, type Profile } from "../preload/bridge";
 import type { ProviderInfo } from "../protocol/generated/protocol";
 import { SecuredByClerk } from "./Account";
@@ -44,7 +46,7 @@ const SignInTerminal = lazy(() =>
   import("./SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
 );
 
-const steps = ["Account", "Agents", "Import", "Tour", "Start"];
+const steps = [msg("Account"), msg("Agents"), msg("Import"), msg("Tour"), msg("Start")];
 
 /** The tour's step, whose arrows and Back move between its slides. */
 const tourStep = steps.indexOf("Tour");
@@ -116,7 +118,11 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
             Parallax
           </span>
           <ol
-            aria-label={`Step ${step + 1} of ${steps.length}: ${steps[step]}`}
+            aria-label={t("Step {{step}} of {{total}}: {{name}}", {
+              step: step + 1,
+              total: steps.length,
+              name: t(steps[step]!),
+            })}
             className="flex gap-1.5"
           >
             {steps.map((name, i) => (
@@ -128,7 +134,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
             ))}
           </ol>
           <span className="flex w-28 justify-end">
-            <IconButton label="Skip setup" onClick={() => finish(false)}>
+            <IconButton label={t("Skip setup")} onClick={() => finish(false)}>
               <X aria-hidden />
             </IconButton>
           </span>
@@ -158,7 +164,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
               className={quiet}
             >
               <ArrowLeft aria-hidden />
-              Back
+              {t("Back")}
             </button>
           ) : (
             <span />
@@ -166,17 +172,17 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
           {step === 0 ? (
             profile ? (
               <button type="button" onClick={next} className={bigPrimary}>
-                Continue
+                {t("Continue")}
                 <ArrowRight aria-hidden />
               </button>
             ) : (
               <button type="button" onClick={next} className={quiet}>
-                Not now
+                {t("Not now")}
               </button>
             )
           ) : step < tourStep ? (
             <button type="button" onClick={next} className={bigPrimary}>
-              Continue
+              {t("Continue")}
               <ArrowRight aria-hidden />
             </button>
           ) : step === tourStep ? (
@@ -185,16 +191,16 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
               onClick={() => (slide < tour.length - 1 ? setSlide(slide + 1) : next())}
               className={bigPrimary}
             >
-              {slide < tour.length - 1 ? "Next" : "Continue"}
+              {slide < tour.length - 1 ? t("Next") : t("Continue")}
               <ArrowRight aria-hidden />
             </button>
           ) : (
             <span className="flex gap-2">
               <button type="button" onClick={() => finish(false)} className={quiet}>
-                Explore on my own
+                {t("Explore on my own")}
               </button>
               <button type="button" autoFocus onClick={() => finish(true)} className={bigPrimary}>
-                Start a thread
+                {t("Start a thread")}
                 <ArrowRight aria-hidden />
               </button>
             </span>
@@ -270,17 +276,19 @@ function AccountStep({
     <div className="flex flex-col items-center pt-4 text-center">
       <Hero />
       <h1 id={titleId} className="text-display font-semibold tracking-tight">
-        Welcome to Parallax
+        {t("Welcome to Parallax")}
       </h1>
       <p className="mt-2 max-w-md text-reading text-muted-foreground">
-        Run Claude Code, Codex, Cursor, and more side by side, on every computer you use.
+        {t("Run Claude Code, Codex, Cursor, and more side by side, on every computer you use.")}
       </p>
       {profile ? (
         <div className="onboard-rise mt-9 flex items-center gap-3 rounded-xl border border-border bg-surface py-3 pr-5 pl-3 text-left">
           <Avatar profile={profile} size={40} />
           <div className="min-w-0">
             <p className="truncate text-reading font-medium">
-              {profile.firstName ? `Welcome, ${profile.firstName}` : "You're signed in"}
+              {profile.firstName
+                ? t("Welcome, {{name}}", { name: profile.firstName })
+                : t("You're signed in")}
             </p>
             <p className="truncate text-body text-muted-foreground">{profile.email}</p>
           </div>
@@ -289,15 +297,15 @@ function AccountStep({
       ) : (
         <div className="mt-9 flex w-80 flex-col gap-2">
           <button type="button" data-first onClick={() => void signIn(true)} className={bigPrimary}>
-            Create your Parallax account
+            {t("Create your Parallax account")}
           </button>
           <button type="button" onClick={() => void signIn(false)} className={bigOutline}>
-            I already have an account
+            {t("I already have an account")}
           </button>
           <p role="status" className="mt-2 min-h-10 text-body text-muted-foreground">
             {waiting
-              ? "Finish in your browser, then come back here."
-              : (note ?? "Your account links your computers and your phone to Parallax.")}
+              ? t("Finish in your browser, then come back here.")
+              : (note ?? t("Your account links your computers and your phone to Parallax."))}
           </p>
         </div>
       )}
@@ -348,7 +356,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
   // setUpAgents runs one at a time, so a sign-in's never races the first.
   const setUp = useCallback((refresh: boolean) => {
     void setUpAgents(localId, refresh).then((failed) => {
-      agentFailed("Couldn't set up your agents", failed);
+      agentFailed(t("Couldn't set up your agents"), failed);
       setScanned(true);
     });
   }, []);
@@ -381,7 +389,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
       setUp(false);
     } else if (cursor?.signInError) {
       setCursorWaiting(false);
-      agentFailed("Couldn't sign in to Cursor", cursor.signInError);
+      agentFailed(t("Couldn't sign in to {{agent}}", { agent: "Cursor" }), cursor.signInError);
     }
   }, [cursorWaiting, cursor, setUp]);
 
@@ -395,7 +403,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
       if ("error" in answer) failed = describeError(answer.error);
     } else failed = await window.parallax.install(localId, agent.kind);
     setWorking(undefined);
-    if (failed) agentFailed(`Couldn't install ${agent.name}`, failed);
+    if (failed) agentFailed(t("Couldn't install {{agent}}", { agent: agent.name }), failed);
     else setUp(true);
   };
   const signIn = async (agent: Agent, info: ProviderInfo) => {
@@ -406,7 +414,10 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
       instance: info.instance.id,
     });
     if ("error" in answer)
-      return agentFailed(`Couldn't sign in to ${agent.name}`, describeError(answer.error));
+      return agentFailed(
+        t("Couldn't sign in to {{agent}}", { agent: agent.name }),
+        describeError(answer.error),
+      );
     window.open(answer.result.url, "_blank");
     setCursorWaiting(true);
   };
@@ -416,17 +427,32 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
 
   return (
     <>
-      <Heading id={titleId} title="Your agents">
+      <Heading id={titleId} title={t("Your agents")}>
         {!scanned
-          ? `Looking for coding agents on ${hostName}…`
+          ? t("Looking for coding agents on {{computer}}…", { computer: hostName })
           : count > 0
-            ? `${count === 1 ? "One is" : `${count} are`} ready on ${hostName}, and on for every thread. Add more any time in Settings.`
-            : `None are ready on ${hostName} yet. Install or sign in to one to start a thread.`}
+            ? t(
+                "{{count}} are ready on {{computer}}, and on for every thread. Add more any time in Settings.",
+                {
+                  count,
+                  computer: hostName,
+                  defaultValue_one:
+                    "One is ready on {{computer}}, and on for every thread. Add more any time in Settings.",
+                },
+              )
+            : t(
+                "None are ready on {{computer}} yet. Install or sign in to one to start a thread.",
+                {
+                  computer: hostName,
+                },
+              )}
       </Heading>
       {connection?.status === "failed" ? (
         <p role="alert" className="rounded-xl border border-border bg-surface px-4 py-3 text-body">
-          Parallax couldn't start on {hostName}. You can set up agents later in Settings &gt;
-          Providers.
+          {t(
+            "Parallax couldn't start on {{computer}}. You can set up agents later in Settings > Providers.",
+            { computer: hostName },
+          )}
         </p>
       ) : (
         <ul className="overflow-hidden rounded-xl border border-border bg-surface">
@@ -437,51 +463,53 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
             let line: string;
             let action: ReactNode = null;
             if (looking) {
-              line = "Looking…";
+              line = t("Looking…");
               action = <Spinner />;
             } else if (working === agent.id || info?.installing) {
-              line = info?.note ?? `Installing ${agent.name}…`;
+              line = info?.note ?? t("Installing {{agent}}…", { agent: agent.name });
               action = <Spinner />;
             } else if (agent.kind === "cursor" && cursorWaiting) {
-              line = "Approve the sign-in in your browser.";
+              line = t("Approve the sign-in in your browser.");
               action = (
                 <button type="button" onClick={() => setCursorWaiting(false)} className={small}>
-                  Cancel
+                  {t("Cancel")}
                 </button>
               );
             } else if (info && ready(info)) {
-              line = info.account ? `Ready · ${capitalized(info.account)}` : "Ready";
+              line = info.account
+                ? t("Ready · {{account}}", { account: capitalized(info.account) })
+                : t("Ready");
               action = (
                 <span className="onboard-pop flex shrink-0 items-center gap-1 rounded-full bg-added/15 px-2.5 py-1 text-meta font-medium text-added [&_svg]:size-3.5">
                   <Check aria-hidden />
-                  Set up
+                  {t("Set up", { context: "agent status, done" })}
                 </span>
               );
             } else if (info?.installed) {
-              line = "Installed, but not signed in";
+              line = t("Installed, but not signed in");
               action =
                 info.login || agent.kind === "cursor" ? (
                   <button
                     type="button"
-                    aria-label={`Sign in to ${agent.name}`}
+                    aria-label={t("Sign in to {{agent}}", { agent: agent.name })}
                     disabled={!!terminal}
                     onClick={() => void signIn(agent, info)}
                     className={small}
                   >
-                    Sign in
+                    {t("Sign in")}
                   </button>
                 ) : null;
             } else {
-              line = `${agent.blurb} · Not installed`;
+              line = t("{{blurb}} · Not installed", { blurb: t(agent.blurb) });
               action = (
                 <button
                   type="button"
-                  aria-label={`Install ${agent.name}`}
+                  aria-label={t("Install {{agent}}", { agent: agent.name })}
                   disabled={!!terminal || !!working}
                   onClick={() => void install(agent)}
                   className={`${small} text-muted-foreground`}
                 >
-                  Install
+                  {t("Install")}
                 </button>
               );
             }
@@ -542,10 +570,10 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
 function ImportStep({ titleId }: { titleId: string }) {
   return (
     <div className="flex h-full flex-col">
-      <Heading id={titleId} title="Bring your history">
-        Pick past sessions from the Claude, Codex, and Cursor apps, here or on your other computers.
-        Each lands in Archived as a thread you can pick up again. Find this in Settings &gt;
-        Threads.
+      <Heading id={titleId} title={t("Bring your history")}>
+        {t(
+          "Pick past sessions from the Claude, Codex, and Cursor apps, here or on your other computers. Each lands in Archived as a thread you can pick up again. Find this in Settings > Threads.",
+        )}
       </Heading>
       <ImportStepBody className="onboard-rise min-h-0 flex-1" />
     </div>
@@ -586,14 +614,14 @@ function Parallel() {
   const threads = [
     {
       Logo: ClaudeLogo,
-      title: "Fix the login redirect",
+      title: t("Fix the login redirect"),
       at: "left-[6%] top-[22%] -rotate-6",
       depth: 10,
     },
-    { Logo: OpenAILogo, title: "Add rate limiting", at: "left-[33%] top-[10%]", depth: 22 },
+    { Logo: OpenAILogo, title: t("Add rate limiting"), at: "left-[33%] top-[10%]", depth: 22 },
     {
       Logo: CursorLogo,
-      title: "Write the API tests",
+      title: t("Write the API tests"),
       at: "left-[60%] top-[24%] rotate-6",
       depth: 14,
     },
@@ -631,7 +659,8 @@ function Parallel() {
           style={after(500)}
           className="onboard-pop flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-meta font-medium whitespace-nowrap shadow-composer"
         >
-          <span className="size-1.5 animate-pulse rounded-full bg-working" />3 threads, 3 worktrees
+          <span className="size-1.5 animate-pulse rounded-full bg-working" />
+          {t("3 threads, 3 worktrees")}
         </span>
       </Layer>
     </>
@@ -642,9 +671,9 @@ function Parallel() {
 function Delegate() {
   // In the stage's 400 by 240 viewBox, stretched to fill it, so the nodes' percentages match.
   const children = [
-    { Logo: ClaudeLogo, name: "Plan the API", x: 80, y: 180 },
-    { Logo: OpenAILogo, name: "Build it", x: 200, y: 195 },
-    { Logo: OpenCodeLogo, name: "Test it", x: 320, y: 180 },
+    { Logo: ClaudeLogo, name: t("Plan the API"), x: 80, y: 180 },
+    { Logo: OpenAILogo, name: t("Build it"), x: 200, y: 195 },
+    { Logo: OpenCodeLogo, name: t("Test it"), x: 320, y: 180 },
   ];
   const pos = (x: number, y: number) => ({ left: `${x / 4}%`, top: `${y / 2.4}%` });
   return (
@@ -671,9 +700,9 @@ function Delegate() {
         >
           <p className="flex items-center gap-2 text-body font-semibold">
             <ParallaxMark className="size-5" />
-            Orchestrator
+            {t("Orchestrator")}
           </p>
-          <p className="mt-0.5 text-meta text-muted-foreground">Ship the billing API</p>
+          <p className="mt-0.5 text-meta text-muted-foreground">{t("Ship the billing API")}</p>
         </div>
       </Layer>
       <Layer depth={16}>
@@ -738,9 +767,9 @@ function Review() {
           className="onboard-pop absolute right-[8%] bottom-[8%] flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-meta font-medium shadow-composer [&_svg]:size-4"
         >
           <GitPullRequest aria-hidden className="text-added" />
-          Pull request #128
+          {t("Pull request #{{number}}", { number: 128 })}
           <span className="rounded-full bg-added/15 px-2 py-0.5 text-caption text-added">
-            Checks passed
+            {t("Checks passed")}
           </span>
         </span>
       </Layer>
@@ -751,9 +780,9 @@ function Review() {
 /** This computer, a server, and a phone, in touch. */
 function Anywhere() {
   const devices: { Icon: LucideIcon; name: string; note: string; depth: number }[] = [
-    { Icon: Server, name: "build-box", note: "Over SSH", depth: 10 },
-    { Icon: Laptop, name: "This computer", note: "3 threads", depth: 24 },
-    { Icon: Smartphone, name: "Your phone", note: "Following along", depth: 14 },
+    { Icon: Server, name: "build-box", note: t("Over SSH"), depth: 10 },
+    { Icon: Laptop, name: t("This computer"), note: t("3 threads"), depth: 24 },
+    { Icon: Smartphone, name: t("Your phone"), note: t("Following along"), depth: 14 },
   ];
   return (
     <>
@@ -786,23 +815,31 @@ function Anywhere() {
 
 const tour = [
   {
-    title: "Every agent, side by side",
-    body: "Start Claude Code, Codex, and Cursor on the same repository at once. Each thread works in a worktree of its own, so they never step on each other.",
+    title: msg("Every agent, side by side"),
+    body: msg(
+      "Start Claude Code, Codex, and Cursor on the same repository at once. Each thread works in a worktree of its own, so they never step on each other.",
+    ),
     Scene: Parallel,
   },
   {
-    title: "Orchestrator threads",
-    body: "Give an orchestrator thread a goal. It splits the work, hands each piece to an agent, and checks what comes back.",
+    title: msg("Orchestrator threads"),
+    body: msg(
+      "Give an orchestrator thread a goal. It splits the work, hands each piece to an agent, and checks what comes back.",
+    ),
     Scene: Delegate,
   },
   {
-    title: "Review, then ship",
-    body: "Every change is a diff you can read before it lands, and a pull request is a click away, right beside the thread.",
+    title: msg("Review, then ship"),
+    body: msg(
+      "Every change is a diff you can read before it lands, and a pull request is a click away, right beside the thread.",
+    ),
     Scene: Review,
   },
   {
-    title: "On any computer, even your phone",
-    body: "Run agents on a server over SSH or on your other computers with Parallax Connect, and follow along from your phone.",
+    title: msg("On any computer, even your phone"),
+    body: msg(
+      "Run agents on a server over SSH or on your other computers with Parallax Connect, and follow along from your phone.",
+    ),
     Scene: Anywhere,
   },
 ];
@@ -831,18 +868,18 @@ function Tour({
       </div>
       <div key={`text-${slide}`} className="onboard-rise mt-6">
         <h1 id={titleId} className="text-display font-semibold tracking-tight">
-          {title}
+          {t(title)}
         </h1>
-        <p className="mt-1.5 max-w-xl text-body text-muted-foreground">{body}</p>
+        <p className="mt-1.5 max-w-xl text-body text-muted-foreground">{t(body)}</p>
       </div>
-      <div role="tablist" aria-label="Tour" className="mt-5 flex gap-1.5">
+      <div role="tablist" aria-label={t("Tour")} className="mt-5 flex gap-1.5">
         {tour.map((s, i) => (
           <button
             key={s.title}
             type="button"
             role="tab"
             aria-selected={i === slide}
-            aria-label={s.title}
+            aria-label={t(s.title)}
             onClick={() => onSlide(i)}
             className={`h-1.5 rounded-full transition-all duration-300 ${i === slide ? "w-6 bg-foreground" : "w-1.5 bg-faint-foreground/40 hover:bg-faint-foreground"}`}
           />
@@ -894,10 +931,12 @@ function DoneStep({
         />
       </svg>
       <h1 id={titleId} className="text-display font-semibold tracking-tight">
-        {profile?.firstName ? `You're all set, ${profile.firstName}` : "You're all set"}
+        {profile?.firstName
+          ? t("You're all set, {{name}}", { name: profile.firstName })
+          : t("You're all set")}
       </h1>
       <p className="mt-2 max-w-md text-body text-muted-foreground">
-        Pick a folder and tell an agent what to build. Start as many threads as you like.
+        {t("Pick a folder and tell an agent what to build. Start as many threads as you like.")}
       </p>
       <div className="mt-8 grid w-full max-w-lg grid-cols-2 gap-3 text-left">
         <div style={after(150)} className={card}>
@@ -908,10 +947,10 @@ function DoneStep({
           )}
           <div className="min-w-0">
             <p className="truncate text-body font-medium">
-              {profile ? profile.name || profile.email : "No account yet"}
+              {profile ? profile.name || profile.email : t("No account yet")}
             </p>
             <p className="truncate text-meta text-muted-foreground">
-              {profile ? "Parallax account" : "Sign in from the profile menu"}
+              {profile ? t("Parallax account") : t("Sign in from the profile menu")}
             </p>
           </div>
         </div>
@@ -935,10 +974,13 @@ function DoneStep({
           )}
           <div className="min-w-0">
             <p className="truncate text-body font-medium">
-              {on.length === 1 ? "1 agent ready" : `${on.length} agents ready`}
+              {t("{{count}} agents ready", {
+                count: on.length,
+                defaultValue_one: "{{count}} agent ready",
+              })}
             </p>
             <p className="truncate text-meta text-muted-foreground">
-              {on.length ? on.map((p) => p.instance.name).join(", ") : "Add one in Settings"}
+              {on.length ? on.map((p) => p.instance.name).join(", ") : t("Add one in Settings")}
             </p>
           </div>
         </div>
@@ -947,9 +989,9 @@ function DoneStep({
         style={after(400)}
         className="onboard-rise mt-8 flex flex-wrap justify-center gap-x-6 gap-y-2"
       >
-        <Keys command="newThread" name="New thread" />
-        <Keys command="panel" name="Side panel" />
-        <Keys command="settings" name="Settings" />
+        <Keys command="newThread" name={t("New thread")} />
+        <Keys command="panel" name={t("Side panel")} />
+        <Keys command="settings" name={t("Settings")} />
       </div>
     </div>
   );

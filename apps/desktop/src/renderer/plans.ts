@@ -1,6 +1,8 @@
 // The agent's plan as the transcript and the strip over the composer read it (PLX-220): a turn's
 // checklist from TodoWrite or Claude Code's task tools (PLX-248), its updates, and Claude Code's
 // proposed plan. Pure, so the mobile app shares it; Plan.tsx draws them.
+import { t } from "i18next";
+
 import type {
   AgentTodoItem,
   AgentTodoStatus,
@@ -305,12 +307,33 @@ export function planChanges(
     else if (status === "inProgress" && old !== "inProgress") changes.Started.push(text);
     else if (old === "inProgress" && status !== "inProgress") changes.Paused.push(text);
   }
-  const said = Object.entries(changes)
-    .filter(([, steps]) => steps.length > 0)
-    .map(([verb, steps]) =>
-      steps.length > 2 ? `${verb} ${steps.length} steps` : `${verb}: ${steps.join(", ")}`,
-    )
+  const said = (Object.keys(changes) as Change[])
+    .filter((verb) => changes[verb].length > 0)
+    .map((verb) => changeLine(verb, changes[verb]))
     .join(" · ");
   const order = (list: readonly AgentTodoItem[]) => list.map((s) => s.text).join("\n");
-  return said || (order(before) !== order(after) ? "Reordered the steps" : "");
+  return said || (order(before) !== order(after) ? t("Reordered the steps") : "");
+}
+
+type Change = "Finished" | "Started" | "Paused" | "Reopened" | "Added" | "Removed";
+
+/** One kind of change in `planChanges`' line: its steps by name, or more than two as a count. */
+function changeLine(verb: Change, list: string[]): string {
+  const count = list.length;
+  const steps = list.join(", ");
+  const many = count > 2;
+  switch (verb) {
+    case "Finished":
+      return many ? t("Finished {{count}} steps", { count }) : t("Finished: {{steps}}", { steps });
+    case "Started":
+      return many ? t("Started {{count}} steps", { count }) : t("Started: {{steps}}", { steps });
+    case "Paused":
+      return many ? t("Paused {{count}} steps", { count }) : t("Paused: {{steps}}", { steps });
+    case "Reopened":
+      return many ? t("Reopened {{count}} steps", { count }) : t("Reopened: {{steps}}", { steps });
+    case "Added":
+      return many ? t("Added {{count}} steps", { count }) : t("Added: {{steps}}", { steps });
+    case "Removed":
+      return many ? t("Removed {{count}} steps", { count }) : t("Removed: {{steps}}", { steps });
+  }
 }

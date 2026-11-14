@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { execFile } from "node:child_process";
 
 import { exitError, sshCommand } from "./connection";
@@ -86,7 +87,8 @@ export function installPlxd(
   platform = process.platform,
 ): Promise<string | undefined> {
   // The version reaches the host's login shell as an argument.
-  if (!/^[\w.-]+$/.test(version)) return Promise.resolve(`${version} isn't a release version.`);
+  if (!/^[\w.-]+$/.test(version))
+    return Promise.resolve(t("{{version}} isn't a release version.", { version }));
   const [file, ...args] = sshCommand(destination, ssh, ["sh", "-s", "--", version], platform);
   return new Promise((resolve) => {
     const child = execFile(file!, args, { timeout: 15 * 60_000 }, (error, _stdout, stderr) => {
@@ -96,7 +98,12 @@ export function installPlxd(
       if (code === 3) return resolve(last);
       if (code === 255)
         return resolve(exitError(code, null, stderr, destination, platform).message);
-      resolve(`Parallax couldn't install plxd on ${destination}: ${last || error.message}`);
+      resolve(
+        t("Parallax couldn't install plxd on {{destination}}: {{why}}", {
+          destination,
+          why: last || error.message,
+        }),
+      );
     });
     child.stdin?.on("error", () => {}); // EPIPE when ssh exits early; the callback reports it.
     child.stdin?.end(INSTALL_SCRIPT);

@@ -1,3 +1,4 @@
+import { t } from "i18next";
 import { ChevronDown, GitBranch, Search } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
@@ -24,7 +25,7 @@ const known = new Map<string, RepoRef[] | string>();
 
 /** A ref's quiet note in the menu. */
 const hint = (r: RepoRef) =>
-  r.current ? "current" : r.worktree ? "worktree" : r.default ? "default" : undefined;
+  r.current ? t("current") : r.worktree ? t("worktree") : r.default ? t("default") : undefined;
 
 /**
  * New Thread's ref picker, for a plxd with `repoRefs`. For a new worktree its button reads its ref,
@@ -92,7 +93,7 @@ export function RefMenu({
     refs === undefined && value === undefined && last !== undefined
       ? last
       : checkout
-        ? (value ?? "Select ref")
+        ? (value ?? t("Select ref"))
         : (value ?? base ?? list.find((r) => r.current)?.name ?? "HEAD");
   if (label !== last) setLast(label);
   // Where the label's visible end starts: its last word, after a `-`, `/`, or space, up to
@@ -114,7 +115,7 @@ export function RefMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         // The icon says it's a branch. A new worktree starts from it, which the title spells out.
-        title={checkout ? label : `From ${label}`}
+        title={checkout ? label : t("From {{ref}}", { ref: label })}
         className={`${menuButton} min-w-0 max-w-72`}
       >
         <GitBranch />
@@ -133,7 +134,7 @@ export function RefMenu({
         id={id}
         popover="auto"
         role="menu"
-        aria-label="Ref"
+        aria-label={t("Ref")}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
           if (e.newState === "closed") return setQuery("");
           searchBox.current?.focus();
@@ -147,8 +148,8 @@ export function RefMenu({
           <input
             ref={searchBox}
             type="search"
-            aria-label="Search refs"
-            placeholder="Search refs..."
+            aria-label={t("Search refs")}
+            placeholder={t("Search refs...")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -168,13 +169,17 @@ export function RefMenu({
           ))}
           {(refs === undefined || typeof refs === "string" || shown.length === 0) && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">
-              {refs === undefined ? "Loading…" : typeof refs === "string" ? refs : "No matches"}
+              {refs === undefined
+                ? t("Loading…")
+                : typeof refs === "string"
+                  ? refs
+                  : t("No matches")}
             </p>
           )}
         </div>
         {matches.length > maxRows && (
           <p className="border-t border-border px-3 py-2 text-meta text-faint-foreground">
-            Showing {maxRows} of {matches.length} refs
+            {t("Showing {{shown}} of {{count}} refs", { shown: maxRows, count: matches.length })}
           </p>
         )}
       </div>
