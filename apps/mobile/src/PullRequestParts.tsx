@@ -496,7 +496,7 @@ export function Timeline({
         if (e.kind === "thread")
           return (
             <Event key={i} icon={MessageSquareCode} color={c.faintForeground} last={last}>
-              <Byline author={e.author} action="commented on the code" at={e.at} />
+              <Byline author={e.author} action={t("commented on the code")} at={e.at} />
               {renderThread(e.thread)}
             </Event>
           );

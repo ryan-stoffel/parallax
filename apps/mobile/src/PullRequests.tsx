@@ -758,7 +758,7 @@ function Diff({
             {at ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Comment on ${at.path} line ${at.line}`}
+                accessibilityLabel={t("Comment on {{path}} line {{line}}", { path: at.path, line: at.line })}
                 onPress={() => onLine!(at)}
                 style={({ pressed }) => pressed && { opacity: 0.6 }}
               >
@@ -865,7 +865,7 @@ export function PullRequestScreen({
   async function send(w: PrWrite): Promise<boolean> {
     const answer = await window.parallax.request(hostId, "pr/write", { url, write: w });
     if ("error" in answer) {
-      showAlert("GitHub didn't take that", answer.error.message);
+      showAlert(t("GitHub didn't take that"), answer.error.message);
       return false;
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -882,11 +882,11 @@ export function PullRequestScreen({
         canWrite
           ? () =>
               setWriting({
-                title: "Reply",
-                placeholder: "Reply",
+                title: t("Reply", { context: "noun" }),
+                placeholder: t("Reply", { context: "noun" }),
                 actions: [
-                  { label: "Reply and resolve", empty: false, write: (body) => ({ kind: "replyToThread", reviewThreadId: thread.id, body, resolve: true }) },
-                  { label: "Reply", primary: true, write: (body) => ({ kind: "replyToThread", reviewThreadId: thread.id, body }) },
+                  { label: t("Reply and resolve"), empty: false, write: (body) => ({ kind: "replyToThread", reviewThreadId: thread.id, body, resolve: true }) },
+                  { label: t("Reply", { context: "verb" }), primary: true, write: (body) => ({ kind: "replyToThread", reviewThreadId: thread.id, body }) },
                 ],
               })
           : undefined
@@ -901,11 +901,11 @@ export function PullRequestScreen({
     if (!nodeId) return;
     setWriting({
       title: `${at.path.slice(at.path.lastIndexOf("/") + 1)}:${at.line}`,
-      note: "Adds to your pending review, which Review sends.",
-      placeholder: "Comment on this line",
+      note: t("Adds to your pending review, which Review sends."),
+      placeholder: t("Comment on this line"),
       actions: [
         {
-          label: "Add to review",
+          label: t("Add to review"),
           primary: true,
           write: (body) => ({ kind: "addReviewComment", pullRequestId: nodeId, path: at.path, line: at.line, side: at.side, body }),
         },
@@ -922,15 +922,15 @@ export function PullRequestScreen({
       ...(pr && canWrite
         ? [
             {
-              label: "Edit title and description",
+              label: t("Edit title and description"),
               icon: PencilLine,
               onPress: () =>
                 setWriting({
-                  title: "Edit",
-                  placeholder: "Description",
+                  title: t("Edit"),
+                  placeholder: t("Description"),
                   titleField: pr.title,
                   body: pr.body,
-                  actions: [{ label: "Save", primary: true, empty: true, write: (body, title) => ({ kind: "edit", title, body }) }],
+                  actions: [{ label: t("Save"), primary: true, empty: true, write: (body, title) => ({ kind: "edit", title, body }) }],
                 }),
             },
           ]
@@ -1041,7 +1041,7 @@ export function PullRequestScreen({
           { value: "overview", label: t("Overview") },
           { value: "activity", label: t("Activity") },
           { value: "changes", label: t("Changes") },
-          ...(canGuide ? [{ value: "guide" as const, label: "Guide" }] : []),
+          ...(canGuide ? [{ value: "guide" as const, label: t("Guide") }] : []),
         ]}
         value={tab}
         onChange={(next) => {
@@ -1101,13 +1101,13 @@ export function PullRequestScreen({
             <CardGroup>
               <CardRow
                 icon={MessageSquarePlus}
-                title="Comment"
+                title={t("Comment", { context: "verb" })}
                 divider={false}
                 onPress={() =>
                   setWriting({
-                    title: "Comment",
-                    placeholder: "Leave a comment",
-                    actions: [{ label: "Comment", primary: true, write: (body) => ({ kind: "comment", body }) }],
+                    title: t("Comment", { context: "noun" }),
+                    placeholder: t("Leave a comment"),
+                    actions: [{ label: t("Comment", { context: "verb" }), primary: true, write: (body) => ({ kind: "comment", body }) }],
                   })
                 }
               />
@@ -1134,8 +1134,8 @@ export function PullRequestScreen({
             {open && canWrite && (
               <CardRow
                 icon={MessageSquareText}
-                title="Review"
-                value={pending ? `${pending} pending` : undefined}
+                title={t("Review", { context: "noun" })}
+                value={pending ? t("{{count}} pending", { count: pending }) : undefined}
                 onPress={() => setWriting(reviewWriting(pr.pendingReviewId, pending))}
               />
             )}
