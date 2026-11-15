@@ -590,20 +590,16 @@ export class HostRelay extends DurableObject<Env> {
   async hop() {}
 
   /**
-   * Another stream for a client whose `stream`, which [`open`] or [`redeem`] just answered, already
+   * Another stream for a client whose stream, which [`open`] or [`redeem`] just answered, already
    * has a client: the spare's claim was lost when this object reset after the claim's answer left
-   * (PLX-1506). That stream is marked taken, so it's no longer offered and stays counted until it
-   * ends, and the client takes another. Only the Worker calls this, after the stream refused.
+   * (PLX-1506). The claim that handed it out again already marked it taken, so it's no longer
+   * offered and stays counted until it ends, and the client takes another. With no spare left,
+   * that's a new stream, whose confirmed reservation also saves that claim. Only the Worker calls
+   * this, after the stream refused.
    */
-  async retake(stream: string, timed = false): Promise<Refusal | { stream: string }> {
+  async retake(timed = false): Promise<Refusal | { stream: string }> {
     const owner = await this.owner();
     if (!owner) return { status: 404, error: "not_found" };
-    await this.ctx.blockConcurrencyWhile(async () => {
-      const streams = await this.streams();
-      if (!streams[stream]?.spare) return;
-      streams[stream] = {};
-      await this.ctx.storage.put<Streams>("streams", streams);
-    });
     if (!this.host()) return { status: 503, error: "host_offline" };
     return this.take(owner.user, timed);
   }

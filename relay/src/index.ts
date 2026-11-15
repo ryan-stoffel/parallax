@@ -236,7 +236,7 @@ async function relayed(
   if (response.status === 409) {
     // The stream already has a client: a spare whose claim the host's object lost in a reset after
     // its answer left (PLX-1506). The object stops offering it, and this client takes another, once.
-    const again = await host.retake(opened.stream, timed);
+    const again = await host.retake(timed);
     if ("error" in again) return json(again.status, { error: again.error });
     response = await join(again.stream);
   }
