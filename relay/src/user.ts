@@ -114,10 +114,14 @@ export class UserAccount extends DurableObject<Env> {
     const notification: Notification = { hostId, run, state, ...(sealed && { sealed }) };
     for (const device of await this.devices()) {
       // A send that throws, such as on a bad secret or a failed request, fails only its own device.
+      // Only the error's name: JSON.parse's message can quote the secret.
       const sent = await (device.startsWith(FCM)
         ? sendFcm(this.env, device.slice(FCM.length), notification)
         : sendApns(this.env, device, notification)
-      ).catch(() => "failed" as const);
+      ).catch((error: unknown) => {
+        console.log("push threw", device.startsWith(FCM) ? "fcm" : "apns", error instanceof Error ? error.name : typeof error);
+        return "failed" as const;
+      });
       if (sent === "gone") await this.removeDevice(device);
       if (sent === "stubbed") {
         this.outbox.push({ device, notification });
