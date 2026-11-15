@@ -214,9 +214,9 @@ async function relayed(
     opened = await host.open(user, timed);
     if (timed) record("host_open", openStart);
     // The trip to the host's object and back with nothing to do there, made beside the stream's
-    // join. What `host_open` takes over this is the object's own work, with the confirmation of
-    // the claim's write, which its answer waits for. The object's own timers can't show that,
-    // since Cloudflare's advance only after I/O.
+    // join. What `host_open` takes over this is the object's own work, and any confirmation its
+    // answer waits for, which since PLX-1506 a spare's claim doesn't. The object's own timers can't
+    // show that, since Cloudflare's advance only after I/O.
     if (timed && !("error" in opened)) {
       const hopStart = performance.now();
       hop = host.hop().then(
@@ -226,10 +226,20 @@ async function relayed(
     }
   }
   if ("error" in opened) return json(opened.status, { error: opened.error });
-  const object = streamObject(env, hostId, opened.stream);
-  if (!object) return json(404, { error: "not_found" });
+  const join = (stream: string) => {
+    const object = streamObject(env, hostId, stream);
+    if (!object) return json(404, { error: "not_found" });
+    return object.fetch("https://stream/client", { headers: { upgrade: "websocket", ...(timed ? { "x-parallax-timing": "1" } : {}) } });
+  };
   const joinStart = performance.now();
-  const response = await object.fetch("https://stream/client", { headers: { upgrade: "websocket", ...(timed ? { "x-parallax-timing": "1" } : {}) } });
+  let response = await join(opened.stream);
+  if (response.status === 409) {
+    // The stream already has a client: a spare whose claim the host's object lost in a reset after
+    // its answer left (PLX-1506). The object stops offering it, and this client takes another, once.
+    const again = await host.retake(timed);
+    if ("error" in again) return json(again.status, { error: again.error });
+    response = await join(again.stream);
+  }
   if (!timed || response.status !== 101) return response;
   record("stream_join", joinStart);
   if (opened.timing) {

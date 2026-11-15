@@ -157,6 +157,12 @@ export class StreamRelay extends DurableObject<Env> {
     return !!this.side("host");
   }
 
+  /** Whether a client is here, which the host's object asks of a spare still listed when plxd asks
+   *  for the next one: a spare whose claim it lost in a reset has its client (PLX-1506). */
+  async clientJoined() {
+    return !!this.side("client");
+  }
+
   /** A client took this stream as the spare, and the Worker is bringing it here. If it hung up or
    *  the Worker failed, nothing else would end this stream, since plxd's end stays open. */
   async taken(deadline = Date.now() + JOIN_TIMEOUT, timed = false) {

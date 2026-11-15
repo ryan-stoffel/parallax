@@ -326,7 +326,7 @@ export class HostRelay extends DurableObject<Env> {
 
   /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
   protected streamObject(hostId: string, stream: string): Pick<import("./stream").StreamRelay,
-    "arm" | "close" | "hostJoined" | "taken" | "hostGone"> | null {
+    "arm" | "close" | "hostJoined" | "clientJoined" | "taken" | "hostGone"> | null {
     return streamObject(this.env, hostId, stream);
   }
 
@@ -590,6 +590,21 @@ export class HostRelay extends DurableObject<Env> {
   async hop() {}
 
   /**
+   * Another stream for a client whose stream, which [`open`] or [`redeem`] just answered, already
+   * has a client: the spare's claim was lost when this object reset after the claim's answer left
+   * (PLX-1506). The claim that handed it out again already marked it taken, so it's no longer
+   * offered and stays counted until it ends, and the client takes another. With no spare left,
+   * that's a new stream, whose confirmed reservation also saves that claim. Only the Worker calls
+   * this, after the stream refused.
+   */
+  async retake(timed = false): Promise<Refusal | { stream: string }> {
+    const owner = await this.owner();
+    if (!owner) return { status: 404, error: "not_found" };
+    if (!this.host()) return { status: 503, error: "host_offline" };
+    return this.take(owner.user, timed);
+  }
+
+  /**
    * A ticket for one stream to this host, for its own user only. Clients from before 0091, and
    * plxd's own connection check, which asks over its control socket (PLX-1356).
    */
@@ -623,7 +638,11 @@ export class HostRelay extends DurableObject<Env> {
       const spare = Object.keys(streams).find((id) => streams[id]?.spare && !streams[id]?.pending);
       if (spare) {
         streams[spare] = {};
-        await this.ctx.storage.put<Streams>("streams", streams);
+        // The answer doesn't wait for this write's confirmation (PLX-1506). The next open reads it
+        // at once. If it's lost, this object resets with the stream still a spare while its client
+        // joins: the stream refuses a second client, which [`retake`]s, and plxd's next `spare`
+        // request keeps it counted.
+        await this.ctx.storage.put<Streams>("streams", streams, { allowUnconfirmed: true });
         return { spare, owner };
       }
       return null;
@@ -631,8 +650,8 @@ export class HostRelay extends DurableObject<Env> {
     if (taken && "error" in taken) return taken;
     if (taken) {
       const { spare, owner } = taken;
-      // Ownership is durable before the Worker gets the id. This object's lifetime, not the
-      // Worker's request, owns cleanup. A late notification must not re-arm a joined stream.
+      // This object's lifetime, not the Worker's request, owns cleanup. A late notification must
+      // not re-arm a joined stream.
       const notification = this.streamObject(owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT, timed);
       if (notification) this.ctx.waitUntil(notification.catch((error) => logError("host.take", this.context(), error)));
       return { stream: spare, ...(timed ? { spare: true } : {}) };
@@ -783,16 +802,46 @@ export class HostRelay extends DurableObject<Env> {
       const carried = typeof sealed === "string" && sealed.length <= MAX_SEALED ? sealed : undefined;
       await account.push(owner.hostId, run, state as Notification["state"], carried);
     } else if (parsed?.t === "spare") {
-      // plxd asks once its spare was taken or ended, so any spare still listed is gone.
+      // plxd asks once its spare was taken or ended, so a spare still listed is no longer offered.
+      // One whose claim was lost in a reset has its client (PLX-1506), and stays counted until it
+      // ends. Any other is gone.
       const owner = await this.owner();
       if (!owner || !this.limits.allow("spares", LIMITS.spares)) return;
-      await this.ctx.blockConcurrencyWhile(async () => {
+      const listed = await this.ctx.blockConcurrencyWhile(async () => {
         // Supersedes any spare request still placing (PLX-1540).
         this.spareRequests++;
         const streams = await this.streams();
-        for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
+        const listed: string[] = [];
+        for (const id of Object.keys(streams)) {
+          if (!streams[id]?.spare) continue;
+          if (streams[id].pending) delete streams[id];
+          else {
+            streams[id] = {};
+            listed.push(id);
+          }
+        }
         await this.ctx.storage.put<Streams>("streams", streams);
+        return listed;
       });
+      if (listed.length) {
+        const joined = await Promise.all(
+          listed.map((id) =>
+            this.streamObject(owner.hostId, id)
+              ?.clientJoined()
+              .catch((error) => {
+                logError("host.spare", this.context(), error);
+                return false;
+              }),
+          ),
+        );
+        const ended = listed.filter((_, index) => !joined[index]);
+        if (ended.length)
+          await this.ctx.blockConcurrencyWhile(async () => {
+            const streams = await this.streams();
+            for (const id of ended) delete streams[id];
+            await this.ctx.storage.put<Streams>("streams", streams);
+          });
+      }
       await this.newStream(owner.user, true);
     } else if (parsed?.t === "gone" && typeof parsed.stream === "string") {
       // plxd says this whenever a stream ends, so it's usually already forgotten. Only an id in
