@@ -1695,3 +1695,70 @@ async fn a_move_trusts_the_production_account_beside_the_development_one() {
         .unwrap();
     server.stop().await;
 }
+
+/// While a computer moves to production (PLX-1465), a removal statement from an approved computer
+/// counts when it's signed for either account this one trusts, and not for any other account.
+#[tokio::test]
+async fn a_removal_counts_when_signed_for_either_account_of_a_move() {
+    const MOVED: &str = "user_prod";
+    let (production, development) = (clerk().await, clerk().await);
+    let dir = temp_dir();
+    let port = free_port();
+    let start = |relay: &str| {
+        let mut config = config(dir.path(), &production, relay, port);
+        config.clerk_legacy = Some(plxd::clerk::Config {
+            issuer: development.clone(),
+            client_ids: Vec::new(),
+            authorized_parties: Vec::new(),
+        });
+        config
+    };
+    // On the development account, trusting production too after a move the relay couldn't make.
+    let old_relay = relay_answering("404 Not Found", r#"{"error":"not_found"}"#).await;
+    let (server, mut client, _, _) = host_at(start(&old_relay)).await;
+    client
+        .call::<RelaySign>(RelaySignParams {
+            token_hash: "hash".to_owned(),
+            user_id: Some(USER.to_owned()),
+            issuer: None,
+        })
+        .await
+        .unwrap();
+    let moving = RelayMoveParams {
+        token: token(&production, MOVED),
+        from: token(&development, USER),
+    };
+    assert!(client.call::<RelayMove>(moving).await.is_err());
+    server.stop().await;
+
+    let (relay, frames, _announcements) = fake_control_relay().await;
+    let server = InProcess::start(start(&relay));
+    let mut client = Client::ready(&server.socket).await;
+    let approved = remote::DpopKey::generate();
+    client
+        .call::<AccessMerge>(AccessMergeParams {
+            approved_hosts: vec![approved.thumbprint()],
+            ..AccessMergeParams::default()
+        })
+        .await
+        .unwrap();
+    let [phone, tablet, laptop] = [(); 3].map(|()| remote::DpopKey::generate().thumbprint());
+    for (account, key) in [(USER, &phone), (MOVED, &tablet), ("user_other", &laptop)] {
+        let statement = remote::signed_removal(&approved, account, std::slice::from_ref(key));
+        let frame = json!({ "t": "removed", "statement": statement }).to_string();
+        frames.send(frame).await.unwrap();
+    }
+    let mut expected = vec![phone, tablet];
+    expected.sort();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut removed = access(&mut client).await.removed_clients;
+    while removed.len() < 2 && Instant::now() < deadline {
+        sleep(Duration::from_millis(20)).await;
+        removed = access(&mut client).await.removed_clients;
+    }
+    sleep(Duration::from_millis(200)).await;
+    let mut removed = access(&mut client).await.removed_clients;
+    removed.sort();
+    assert_eq!(removed, expected, "not the one for another account");
+    server.stop().await;
+}

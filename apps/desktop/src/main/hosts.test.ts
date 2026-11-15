@@ -179,7 +179,7 @@ function signedIn() {
       onSignIn: (listener: () => void) => void listeners.push(listener),
       clerkUnreachable: () => fake.clerkDown,
       move: {
-        pending: (): { hosts: string[]; signedIn: boolean } | undefined => undefined,
+        pending: (): { hosts?: string[]; signedIn: boolean } | undefined => undefined,
         developmentToken: async (): Promise<string | undefined> => undefined,
         listed: (_hosts: string[]) => {},
       },
@@ -1572,10 +1572,7 @@ test("a sign-in to production moves each computer this app reaches, and one it c
   fake.answers.clear();
   try {
     const devToken = clerkToken("development");
-    let pending: { hosts: string[]; signedIn: boolean } | undefined = {
-      hosts: [],
-      signedIn: false,
-    };
+    let pending: { hosts?: string[]; signedIn: boolean } | undefined = { signedIn: false };
     const { account: base, signIn } = signedIn();
     const account = {
       ...base,
@@ -1632,7 +1629,7 @@ test("a sign-in to production moves each computer this app reaches, and one it c
     expect(moves).toEqual([]);
 
     // build box isn't reached: it waits, and keeps the development account's token.
-    pending = { hosts: [], signedIn: true };
+    pending = { signedIn: true };
     signIn();
     await vi.advanceTimersByTimeAsync(0);
     const both = { token: relayToken, from: devToken };
@@ -1662,6 +1659,92 @@ test("a sign-in to production moves each computer this app reaches, and one it c
       waiting: [],
       done: true,
     });
+  } finally {
+    fake.visible = false;
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("until the development list is read once, a sign-in to production registers nothing and moves nothing (PLX-1465)", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const devToken = clerkToken("development");
+    let pending: { hosts?: string[]; signedIn: boolean } | undefined = { signedIn: false };
+    const { account: base, signIn } = signedIn();
+    const account = {
+      ...base,
+      move: {
+        pending: () => pending,
+        developmentToken: async () => devToken,
+        listed: (hosts: string[]) => {
+          if (pending)
+            pending = pending.signedIn && !hosts.length ? undefined : { ...pending, hosts };
+        },
+      },
+    };
+    const local = await start(
+      { accounts: [{ hostId: studio, name: "studio", routes: [] }] },
+      account,
+    );
+    const onDevelopment = new Set([newBox, studio]);
+    let developmentAnswers = false;
+    fake.answers.set("relay/id", { result: { hostId: newBox } });
+    fake.answers.set("relay/hosts", ({ token }: { token: string }) =>
+      token === devToken && !developmentAnswers
+        ? {
+            error: {
+              code: -32603,
+              message: "The relay answered 502.",
+              data: { kind: "relayUnreachable" },
+            },
+          }
+        : {
+            result: {
+              hosts: [newBox, studio]
+                .filter((id) => onDevelopment.has(id) === (token === devToken))
+                .map((hostId) => ({
+                  hostId,
+                  name: hostId,
+                  online: true,
+                  thisComputer: hostId === newBox,
+                })),
+              removed: [],
+            },
+          },
+    );
+    const calls: [string, unknown][] = [];
+    for (const method of ["relay/register", "relay/sign", "relay/move"])
+      fake.answers.set(method, (_params: unknown, c: unknown) => {
+        calls.push([method, c]);
+        if (method === "relay/move") onDevelopment.delete(c === local ? newBox : studio);
+        return { result: method === "relay/sign" ? { signature: "s" } : {} };
+      });
+    local.set(connected());
+    accountConnection(studio)!.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Signed in to development only, this computer registers under it as before.
+    expect(calls).toEqual([["relay/register", local]]);
+    calls.length = 0;
+
+    // The development list fails at the sign-in: every computer waits, and none registers.
+    pending = { signedIn: true };
+    signIn();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([]);
+    expect(pending).toEqual({ signedIn: true });
+
+    // Once it answers, a look a minute on moves both, still with no plain registration.
+    developmentAnswers = true;
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toEqual([
+      ["relay/move", local],
+      ["relay/move", accountConnection(studio)],
+    ]);
+    expect(pending).toBeUndefined();
   } finally {
     fake.visible = false;
     vi.useRealTimers();

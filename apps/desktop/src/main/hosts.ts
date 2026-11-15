@@ -1294,15 +1294,31 @@ async function checkRelay(): Promise<RelayCheckResult | string> {
 async function registerRelay(): Promise<string | undefined> {
   const token = await account?.accessToken();
   if (!token) return noToken();
+  const own = await connections.get("local")?.request("relay/id", {});
+  if (waitsToMove(own && "result" in own ? own.result.hostId : undefined)) {
+    await moveAccount();
+    return undefined;
+  }
   const answer = await connections.get("local")?.request("relay/register", { token });
   if (!answer) return t("Parallax isn't connected to this computer's plxd.");
   if ("error" in answer) return answer.error.message;
-  const own = await connections.get("local")?.request("relay/id", {});
   const user = tokenSubject(token);
   if (own && "result" in own && user) keepJoined(own.result.hostId, user);
   // Ends the `notListed` notice now, rather than at the next look.
   void discoverAccounts();
   return undefined;
+}
+
+/**
+ * Whether computer `relayId` is still on the development account after a sign-in to production,
+ * so it moves (`moveAccount`) and never registers: a plain registration would take it from the
+ * development account and make its plxd drop that account's trust (PLX-1465). Every computer is,
+ * an unknown one included, until the development list was read once.
+ */
+function waitsToMove(relayId: string | undefined): boolean {
+  const pending = account?.move.pending();
+  if (!pending?.signedIn) return false;
+  return !relayId || !pending.hosts || pending.hosts.includes(relayId);
 }
 
 /**
@@ -1329,14 +1345,11 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
   const token = await account?.accessToken();
   const local = connections.get("local");
   if (!token || local?.state.status !== "connected") return;
-  const pending = account?.move.pending();
-  const waiting = (relayId?: string) =>
-    !!relayId && !!pending?.signedIn && pending.hosts.includes(relayId);
   if (hostId === "local") {
     const own = await local.request("relay/id", {});
     const hostId = "result" in own ? own.result.hostId : undefined;
     const user = tokenSubject(token);
-    if (waiting(hostId)) return;
+    if (waitsToMove(hostId)) return;
     if (!signingIn && hostId) {
       const answer = await local.request("relay/hosts", { token });
       const list = "result" in answer ? answer.result : undefined;
@@ -1352,7 +1365,7 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
     if ("result" in joined && hostId && user) keepJoined(hostId, user);
     return;
   }
-  if (waiting(tailnetRelayIds.get(hostId))) return;
+  if (waitsToMove(tailnetRelayIds.get(hostId))) return;
   const tokenHash = createHash("sha256").update(token).digest("base64url");
   const userId = tokenSubject(token);
   const issuer = tokenIssuer(token);

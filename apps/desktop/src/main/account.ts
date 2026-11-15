@@ -131,8 +131,11 @@ export type Account = {
  * computers on that account have moved. Until the user signs in to production, it's the account.
  */
 export type AccountMove = {
-  /** Undefined with no development session. `hosts` are the computers it last listed. */
-  pending(): { hosts: string[]; signedIn: boolean } | undefined;
+  /**
+   * Undefined with no development session. `hosts` are the computers it last listed, absent until
+   * its list was read once, when every computer counts as still on it.
+   */
+  pending(): { hosts?: string[]; signedIn: boolean } | undefined;
   /** The development session's access token. */
   developmentToken(): Promise<string | undefined>;
   /**
@@ -174,9 +177,9 @@ export function startAccount(): Account {
   };
 
   // The development session through the move to production (PLX-1465), with the computers its
-  // account last listed, in a file of its own.
+  // account last listed, absent until it was read once, in a file of its own.
   const legacyFile = path.join(app.getPath("userData"), "account-development");
-  let legacy: (Session & { hosts: string[] }) | undefined = read(legacyFile);
+  let legacy: (Session & { hosts?: string[] }) | undefined = read(legacyFile);
   const saveLegacy = (next: typeof legacy) => {
     legacy = next;
     write(legacyFile, next);
@@ -189,7 +192,7 @@ export function startAccount(): Account {
   const saved = read(file);
   if (saved && issuedBy(saved) === api) session = { ...saved, api };
   else if (saved && issuedBy(saved) === DEVELOPMENT_API)
-    saveLegacy({ ...saved, api: DEVELOPMENT_API, hosts: [] });
+    saveLegacy({ ...saved, api: DEVELOPMENT_API });
   else if (saved) moved = true;
   const save = (next: Session | undefined) => {
     session = next;
@@ -306,9 +309,13 @@ export function startAccount(): Account {
     legacyAccess = await legacyRefresh();
     return legacyAccess?.token;
   }
-  /** Whether a call for computer `hostId` takes the development session's token. */
+  /**
+   * Whether a call for computer `hostId` takes the development session's token: every computer's
+   * does until the development list was read once.
+   */
   const onDevelopment = (hostId?: string) =>
-    !!legacy && (!session || (hostId !== undefined && legacy.hosts.includes(hostId)));
+    !!legacy &&
+    (!session || (hostId !== undefined && (!legacy.hosts || legacy.hosts.includes(hostId))));
   /** Drops the development session once nothing needs it, and revokes it. */
   function dropLegacy() {
     const held = legacy;
@@ -487,12 +494,13 @@ export function startAccount(): Account {
     onSignIn: (listener) => void signedIn.push(listener),
     clerkUnreachable: () => (session ? unreachable : !!legacy && legacyUnreachable),
     move: {
-      pending: () => legacy && { hosts: legacy.hosts, signedIn: !!session },
+      pending: () =>
+        legacy && { ...(legacy.hosts && { hosts: legacy.hosts }), signedIn: !!session },
       developmentToken: legacyToken,
       listed(hosts) {
         if (!legacy) return;
         if (session && !hosts.length) return dropLegacy();
-        if (hosts.join() !== legacy.hosts.join()) saveLegacy({ ...legacy, hosts });
+        if (hosts.join() !== legacy.hosts?.join()) saveLegacy({ ...legacy, hosts });
       },
     },
   };

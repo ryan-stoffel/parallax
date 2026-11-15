@@ -346,7 +346,7 @@ test("a development session stays for its computers until they move to productio
   // Until production signs in, it's the account, for every computer.
   expect(await call("parallax:profile")).toMatchObject({ firstName: "Dev" });
   expect(await call("parallax:accountMoved")).toBe(false);
-  expect(first.move.pending()).toEqual({ hosts: [], signedIn: false });
+  expect(first.move.pending()).toEqual({ signedIn: false });
   expect(await first.accessToken()).toMatch(/^dev_at/);
   expect(await first.accessToken("host_a")).toMatch(/^dev_at/);
 
@@ -359,6 +359,9 @@ test("a development session stays for its computers until they move to productio
   await signInInBrowser(electron.opened[0]!);
   await answer;
   expect(published.at(-1)?.firstName).toBe(clerk.user.given_name);
+  // Until the development list is read, every computer is still on it.
+  expect(account.move.pending()).toEqual({ signedIn: true });
+  expect(await account.accessToken("host_b")).toMatch(/^dev_at/);
   account.move.listed(["host_a"]);
   expect(account.move.pending()).toEqual({ hosts: ["host_a"], signedIn: true });
   expect(await account.accessToken()).toMatch(/^at\d/);
