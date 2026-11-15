@@ -1946,17 +1946,34 @@ pub type Opened = (String, TlsStream<crate::relay::Stream>, String);
 /// as soon as every direct one failed. With `in_order`, the user's order: each route starts
 /// [`RELAY_HEAD_START`] after the one above it, or as soon as those above it failed. Nothing is sent
 /// over any of them before its certificate checks out, and the others are dropped once one does.
+/// When a `relay:` route waits for others, the relay's connection opens from the start, and that
+/// route sends its first request over it ([`crate::relay::warm`], PLX-1549).
 ///
 /// # Errors
 ///
 /// The last route's error when none answered with the pinned certificate.
 pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened, Error> {
-    let opened = first(routes, in_order, |route| async move {
+    let racing = first(routes, in_order, |route| async move {
         open_pinned(&route, pin).await
-    })
-    .await?;
-    let (route, (tls, fingerprint)) = opened;
+    });
+    let opened = if relay_waits(routes, in_order) {
+        crate::relay::warm::ahead(racing).await
+    } else {
+        racing.await
+    };
+    let (route, (tls, fingerprint)) = opened?;
     Ok((route, tls, fingerprint))
+}
+
+/// Whether [`race`] starts a `relay:` route in `routes` after other routes had a head start.
+fn relay_waits(routes: &[String], in_order: bool) -> bool {
+    let relay = |route: &String| route.starts_with(RELAY_ROUTE);
+    let first_waits = if in_order {
+        routes.first().is_some_and(|route| !relay(route))
+    } else {
+        !routes.iter().all(relay)
+    };
+    first_waits && routes.iter().any(relay)
 }
 
 /// The first of `routes` that `open` opens, in [`race`]'s order, with the route.
@@ -2853,6 +2870,145 @@ mod tests {
         // Nothing answers: the last error.
         let (won, _) = race_of(&[("192.168.1.5", 10, false), ("relay:h", 0, false)]).await;
         assert_eq!(won, Err("relay:h failed".to_owned()));
+    }
+
+    #[test]
+    fn the_relay_connects_early_only_when_its_route_waits_for_others() {
+        let routes = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        assert!(relay_waits(&routes(&["192.168.1.5", "relay:h"]), false));
+        assert!(relay_waits(&routes(&["relay:h", "192.168.1.5"]), false));
+        assert!(!relay_waits(&routes(&["relay:h"]), false));
+        assert!(!relay_waits(&routes(&["192.168.1.5"]), false));
+        assert!(relay_waits(&routes(&["192.168.1.5", "relay:h"]), true));
+        assert!(!relay_waits(&routes(&["relay:h", "192.168.1.5"]), true));
+    }
+
+    /// What a stand-in relay saw on one connection, in milliseconds since `t0`.
+    #[derive(Debug, Default, Clone)]
+    struct RelaySaw {
+        accepted: u128,
+        request: Option<u128>,
+        closed_unasked: Option<u128>,
+    }
+
+    /// A relay on loopback that records each connection and refuses each request with 503.
+    async fn recording_relay(t0: std::time::Instant) -> (String, Arc<Mutex<Vec<RelaySaw>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let saw = Arc::new(Mutex::new(Vec::<RelaySaw>::new()));
+        let record = Arc::clone(&saw);
+        tokio::spawn(async move {
+            loop {
+                let (mut tcp, _) = listener.accept().await.unwrap();
+                let index = {
+                    let mut saw = record.lock().unwrap();
+                    saw.push(RelaySaw {
+                        accepted: t0.elapsed().as_millis(),
+                        ..RelaySaw::default()
+                    });
+                    saw.len() - 1
+                };
+                let record = Arc::clone(&record);
+                tokio::spawn(async move {
+                    let mut read = Vec::new();
+                    let mut chunk = [0; 4096];
+                    loop {
+                        let n = tcp.read(&mut chunk).await.unwrap_or(0);
+                        let at = Some(t0.elapsed().as_millis());
+                        if n == 0 {
+                            record.lock().unwrap()[index].closed_unasked = at;
+                            return;
+                        }
+                        read.extend_from_slice(&chunk[..n]);
+                        if read.windows(4).any(|four| four == b"\r\n\r\n") {
+                            record.lock().unwrap()[index].request = at;
+                            let refusal =
+                                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n";
+                            let _ = tcp.write_all(refusal.as_bytes()).await;
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (url, saw)
+    }
+
+    /// A route that takes TCP and never answers TLS, as a LAN address can look from elsewhere.
+    async fn silent_route() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let route = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((tcp, _)) = listener.accept().await {
+                held.push(tcp);
+            }
+        });
+        route
+    }
+
+    // The only test here that signs in to a relay, as `plxd dial` does once per process.
+    #[tokio::test]
+    async fn a_race_opens_the_relay_connection_at_its_start_and_closes_it_when_a_direct_route_wins()
+    {
+        let t0 = std::time::Instant::now();
+        let (url, saw) = recording_relay(t0).await;
+        crate::relay::sign_in(url, "tok".to_owned());
+
+        // A direct route that doesn't answer: the relay route takes the connection opened at the
+        // start, and its request goes over it at the end of the head start.
+        let routes = [silent_route().await, "relay:h".to_owned()];
+        let start = t0.elapsed().as_millis();
+        let raced =
+            tokio::time::timeout(Duration::from_millis(1500), race(&routes, false, &Pin::Any));
+        assert!(
+            !matches!(raced.await, Ok(Ok(_))),
+            "nothing answered with a host"
+        );
+        {
+            let saw = saw.lock().unwrap().clone();
+            assert_eq!(saw.len(), 1, "one connection to the relay: {saw:?}");
+            assert!(
+                saw[0].accepted - start < 150,
+                "opened at the start: {saw:?}"
+            );
+            let asked = saw[0].request.expect("the relay route asked over it");
+            let head_start = RELAY_HEAD_START.as_millis();
+            assert!(
+                asked - start >= head_start,
+                "asked at the relay route's turn: {saw:?}"
+            );
+        }
+
+        // A direct route that answers within the head start: the early connection closes unasked.
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(key.server_config().unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let direct = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            // Late enough that the early connection opened first.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _tls = acceptor.accept(tcp).await;
+            std::future::pending::<()>().await;
+        });
+        let routes = [direct.clone(), "relay:h".to_owned()];
+        let (won, ..) = race(&routes, false, &Pin::Any).await.unwrap();
+        assert_eq!(won, direct);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let saw = saw.lock().unwrap().clone();
+            if saw.len() == 2 && saw[1].closed_unasked.is_some() {
+                assert_eq!(saw[1].request, None);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the early connection stayed open: {saw:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[test]

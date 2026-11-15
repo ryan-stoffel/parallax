@@ -11,7 +11,9 @@
 //
 //     node scripts/bench/t3-compare.mjs --token-file ~/.config/parallax/probe-token --out t3-compare.jsonl
 //
-// Other options: [--parallax-tag <exact-release-tag>] [--gap-ms 2200]
+// Other options: [--parallax-tag <exact-release-tag>] [--gap-ms 2200] [--plxd <path>] [--parallax-only]
+// --plxd times a plxd built here instead of a release's. --parallax-only skips T3, for comparing
+// two Parallax builds on one network.
 // Sampling gap defaults to 2200 ms on both sides to respect the relay's 30 opens/minute.
 // Other options: [--connects 30] [--trips 50] [--version latest].
 //
@@ -58,6 +60,8 @@ const { values: options } = parseArgs({
     trips: { type: "string", default: "50" },
     timings: { type: "boolean", default: false },
     "parallax-tag": { type: "string" },
+    plxd: { type: "string" },
+    "parallax-only": { type: "boolean", default: false },
     "gap-ms": { type: "string", default: "2200" },
     version: { type: "string", default: "latest" },
     out: { type: "string" },
@@ -315,7 +319,12 @@ for (const event of ["uncaughtException", "unhandledRejection"]) {
 }
 
 let failed = false;
-try {
+/** T3's numbers, for the comparison after Parallax's run. */
+let t3Results;
+if (options["parallax-only"]) {
+  console.log("--parallax-only, so T3 isn't timed.");
+  await cleanUp();
+} else try {
   // Only this step sees the real PATH, since npx needn't sit beside node. It just downloads T3.
   await attached("npx", ["--yes", `t3@${options.version}`, "--version"], { ...env, PATH: `${env.PATH}:${process.env.PATH}` });
   const version = readdirSync(join(home, "runtime", "versions")).filter((name) => !name.includes(".staging")).at(-1);
@@ -353,6 +362,7 @@ try {
     ...(await measure(base, token)),
   };
   console.log(JSON.stringify(results, null, 2));
+  t3Results = results;
   if (options.out) writeFileSync(options.out, `${JSON.stringify(results)}\n`, { flag: "a" });
 } catch (error) {
   failed = true;
@@ -368,7 +378,7 @@ if (!probeEnv.PROBE_CLERK_REFRESH_TOKEN && !process.env.PROBE_CLERK_REFRESH_TOKE
 const probeFile = join(dirname(fileURLToPath(import.meta.url)), "relay-probe.mjs");
 const outDir = mkdtempSync(join(tmpdir(), "t3-compare-probe-"));
 try {
-  execFileSync(process.execPath, [probeFile, "--out", outDir, "--connects", options.connects, "--trips", options.trips, "--gap-ms", options["gap-ms"], ...(options.timings ? ["--timings"] : []), ...(options["parallax-tag"] ? ["--tag", options["parallax-tag"]] : [])], {
+  execFileSync(process.execPath, [probeFile, "--out", outDir, "--connects", options.connects, "--trips", options.trips, "--gap-ms", options["gap-ms"], ...(options.timings ? ["--timings"] : []), ...(options["parallax-tag"] ? ["--tag", options["parallax-tag"]] : []), ...(options.plxd ? ["--plxd", absolute(options.plxd)] : [])], {
     env: { ...process.env, ...probeEnv, PATH: env.PATH },
     stdio: "inherit",
   });
@@ -378,7 +388,24 @@ try {
   try {
     const result = JSON.parse(readFileSync(join(outDir, "relay-probe.json"), "utf8"));
     if (options.out) writeFileSync(options.out, `${JSON.stringify({ product: "parallax", ...result })}\n`, { flag: "a" });
+    compare(result.metrics);
   } catch {}
   rmSync(outDir, { recursive: true, force: true });
+}
+
+/**
+ * T3 against Parallax's relay-only dial, which like T3's connect goes straight to the relay. The
+ * app's dial away from home has no T3 counterpart, since it includes the 200 ms the app gives a
+ * LAN route first, so it gets a line of its own (PLX-1549).
+ */
+function compare(metrics) {
+  const both = (summary) => summary && `median ${summary.medianMs} ms, p95 ${summary.p95Ms} ms`;
+  console.log("\nConnect, compared:");
+  if (t3Results) console.log(`  T3 through its tunnel: ${both(t3Results.connect)}`);
+  if (metrics.connect) console.log(`  Parallax, the relay alone: ${both(metrics.connect)}`);
+  if (metrics.appConnect) {
+    const older = metrics.appDial?.early === 0 ? ", with a plxd from before PLX-1549" : "";
+    console.log(`  Parallax as its app dials away from home, a LAN route first${older}: ${both(metrics.appConnect)}`);
+  }
 }
 process.exit(failed ? 1 : 0);
