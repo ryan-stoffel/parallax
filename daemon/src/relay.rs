@@ -1292,6 +1292,10 @@ pub(crate) async fn register(
     signed: Option<RelaySignResult>,
 ) -> Result<(), String> {
     let own = signed.is_none();
+    // An app still signed in to development doesn't take back a computer that moved (PLX-1465).
+    if own && let Some(named) = crate::clerk::issuer_of(token) {
+        crate::server::remote::access::refuse_going_back(daemon, &named).await?;
+    }
     let signed = match signed {
         Some(signed) => signed,
         None => {

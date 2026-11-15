@@ -541,6 +541,7 @@ pub(crate) async fn record_account(
     user: &str,
     issuer: &str,
 ) -> Result<(), String> {
+    refuse_going_back(daemon, issuer).await?;
     let account = (issuer.to_owned(), user.to_owned());
     change_accounts(daemon, move |accounts| {
         if accounts.get(1) == Some(&account) {
@@ -553,6 +554,25 @@ pub(crate) async fn record_account(
     .await?;
     info!(%user, %issuer, "recorded this computer's account");
     Ok(())
+}
+
+/// What an app signed in to Clerk's development instance hears once this host moved to
+/// production (PLX-1465).
+pub(crate) const MOVED_TO_PRODUCTION: &str =
+    "This computer moved to your new Parallax account. Update Parallax and sign in again.";
+
+/// Refuses an account on the legacy instance `issuer` once this host registered under the home
+/// one (PLX-1465): an older app still signed in to development would take it back, on the relay
+/// too, and the apps signed in to production would lose it.
+pub(crate) async fn refuse_going_back(daemon: &Daemon, issuer: &str) -> Result<(), String> {
+    if daemon.clerk.legacy_issuer() != Some(issuer) {
+        return Ok(());
+    }
+    let home = daemon.clerk.issuer();
+    match accounts(daemon).await.first() {
+        Some((first, _)) if first == home => Err(MOVED_TO_PRODUCTION.to_owned()),
+        _ => Ok(()),
+    }
 }
 
 /// Trusts `account` beside the one this host registered under, which stays first, for the move

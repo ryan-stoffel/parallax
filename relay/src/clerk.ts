@@ -35,6 +35,15 @@ export const accountOf = (issuer: string, userId: string) =>
   issuer === DEVELOPMENT ? userId : `${issuer}|${userId}`;
 
 /**
+ * Whether account `to` taking a host from account `from` would undo its move to production
+ * (PLX-1465): `to` is the development instance's, and `from` another instance's. An older app
+ * signed in to development registers or moves the host again, and the production apps would take
+ * it for removed, so the relay refuses it.
+ */
+export const backToDevelopment = (from: string, to: string) =>
+  from.includes("|") && !to.includes("|");
+
+/**
  * The relay account of a Parallax account token (0067), by [`accountOf`]: a session token from
  * Clerk's web or Expo SDK, or the desktop app's OAuth access token. Null when it isn't one.
  * `CLERK_ISSUER` lists the instances whose tokens count, so a move between instances can take

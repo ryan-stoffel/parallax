@@ -112,8 +112,17 @@ async fn host(dir: &Path, issuer: &str) -> (InProcess, Client, String, String) {
 
 /// [`host`], from `config`.
 async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, String) {
-    let port = config.remote_port;
     let issuer = config.clerk.issuer.clone();
+    host_as(config, Some(issuer)).await
+}
+
+/// [`host_at`], with [`USER`] on the instance `issuer`, which absent is the development one, as an
+/// app from before PLX-1465 names none.
+async fn host_as(
+    config: plxd::server::Config,
+    issuer: Option<String>,
+) -> (InProcess, Client, String, String) {
+    let port = config.remote_port;
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     // The signing computer's app names the account; the relay never does.
@@ -121,7 +130,7 @@ async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, St
         .call::<RelaySign>(RelaySignParams {
             token_hash: "hash".to_owned(),
             user_id: Some(USER.to_owned()),
-            issuer: Some(issuer),
+            issuer,
         })
         .await
         .unwrap();
@@ -1611,16 +1620,8 @@ async fn a_move_trusts_the_production_account_beside_the_development_one() {
     };
     // A relay from before PLX-1465, which has no move.
     let old_relay = relay_answering("404 Not Found", r#"{"error":"not_found"}"#).await;
-    let (server, mut client, route, host_id) = host_at(start(&old_relay)).await;
     // The development app set it up, and approved the phone.
-    client
-        .call::<RelaySign>(RelaySignParams {
-            token_hash: "hash".to_owned(),
-            user_id: Some(USER.to_owned()),
-            issuer: None,
-        })
-        .await
-        .unwrap();
+    let (server, mut client, route, host_id) = host_as(start(&old_relay), None).await;
     let phone = temp_dir();
     client
         .call::<AccessMerge>(AccessMergeParams {
@@ -1715,15 +1716,7 @@ async fn a_removal_counts_when_signed_for_either_account_of_a_move() {
     };
     // On the development account, trusting production too after a move the relay couldn't make.
     let old_relay = relay_answering("404 Not Found", r#"{"error":"not_found"}"#).await;
-    let (server, mut client, _, _) = host_at(start(&old_relay)).await;
-    client
-        .call::<RelaySign>(RelaySignParams {
-            token_hash: "hash".to_owned(),
-            user_id: Some(USER.to_owned()),
-            issuer: None,
-        })
-        .await
-        .unwrap();
+    let (server, mut client, _, _) = host_as(start(&old_relay), None).await;
     let moving = RelayMoveParams {
         token: token(&production, MOVED),
         from: token(&development, USER),
@@ -1760,5 +1753,58 @@ async fn a_removal_counts_when_signed_for_either_account_of_a_move() {
     let mut removed = access(&mut client).await.removed_clients;
     removed.sort();
     assert_eq!(removed, expected, "not the one for another account");
+    server.stop().await;
+}
+
+/// Once a computer is production's (PLX-1465), an app still signed in to development can't take
+/// it back: plxd refuses to record a development account, by `relay/sign` or its own
+/// registration, and posts nothing to the relay. A production registration still works.
+#[tokio::test]
+async fn a_computer_on_production_refuses_to_go_back_to_development() {
+    let (production, development) = (clerk().await, clerk().await);
+    let relay = relay_answering("200 OK", "{}").await;
+    let dir = temp_dir();
+    let mut config = config(dir.path(), &production, &relay, free_port());
+    config.clerk_legacy = Some(plxd::clerk::Config {
+        issuer: development.clone(),
+        client_ids: Vec::new(),
+        authorized_parties: Vec::new(),
+    });
+    // The production app set it up.
+    let (server, mut client, _, _) = host_at(config).await;
+    assert_eq!(access(&mut client).await.account.as_deref(), Some(USER));
+
+    let moved = |error: parallax_protocol::jsonrpc::ErrorObject| {
+        assert!(
+            error.message.contains("moved to your new Parallax account"),
+            "{error:?}"
+        );
+    };
+    for issuer in [None, Some(development.clone())] {
+        let signed = client
+            .call::<RelaySign>(RelaySignParams {
+                token_hash: "hash".to_owned(),
+                user_id: Some("user_dev".to_owned()),
+                issuer,
+            })
+            .await;
+        moved(signed.unwrap_err());
+    }
+    let registered = client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token(&development, "user_dev"),
+            signed: None,
+        })
+        .await;
+    moved(registered.unwrap_err());
+    assert_eq!(access(&mut client).await.account.as_deref(), Some(USER));
+
+    client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token(&production, USER),
+            signed: None,
+        })
+        .await
+        .unwrap();
     server.stop().await;
 }

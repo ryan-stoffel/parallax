@@ -1,5 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
+import { backToDevelopment } from "./clerk";
+
 import {
   type HostJwk,
   isHostJwk,
@@ -459,7 +461,7 @@ export class HostRelay extends DurableObject<Env> {
    * Registers this host under `user`, whose session token hashes to `tokenHash`. `body.jwk` must
    * be the key the host id names, and `body.signature` its signature of [`registerMessage`], so
    * nobody registers a key they don't hold. A host registered to another user moves, and its
-   * connections close.
+   * connections close, unless that would take it back to development after its move (PLX-1465).
    */
   async register(
     user: string,
@@ -476,6 +478,7 @@ export class HostRelay extends DurableObject<Env> {
     if (!this.limits.allow("register", LIMITS.register))
       return { status: 429, error: "rate_limited" };
     const before = await this.owner();
+    if (before && backToDevelopment(before.user, user)) return { status: 409, error: "moved_to_production" };
     if (before && before.user !== user) {
       this.closeHost(4409, "moved to another user");
       await this.closeStreams(hostId, 4409, "moved to another user");
@@ -496,6 +499,7 @@ export class HostRelay extends DurableObject<Env> {
   async move(from: string, user: string, hostId: string, jwk: HostJwk, name: string): Promise<Refusal | { hostId: string; name: string }> {
     const owner = await this.owner();
     if (owner && owner.user !== from && owner.user !== user) return { status: 409, error: "not_owner" };
+    if (owner && backToDevelopment(owner.user, user)) return { status: 409, error: "moved_to_production" };
     this.tickets.clear();
     const kept = owner?.name ?? name.replace(/\p{Cc}/gu, "").trim().slice(0, 64);
     await this.ctx.storage.put<Owner>("owner", { user, hostId, jwk, name: kept });

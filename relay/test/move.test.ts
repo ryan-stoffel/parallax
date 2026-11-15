@@ -142,6 +142,20 @@ describe("moving a host to a production account (PLX-1465)", () => {
     expect((await list(await dev())).ids).toEqual([host.id]);
   });
 
+  it("never goes back to development once moved, by a registration or a move", async () => {
+    const { host, user, dev } = await onDevelopment();
+    const production = await session(user);
+    expect((await move(host, production, await dev())).status).toBe(200);
+    // An older app still signed in to development reaches the computer and registers it again.
+    const again = await register(host, await dev());
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: "moved_to_production" });
+    expect((await move(host, await dev(), production)).status).toBe(409);
+    expect((await owner(host))?.user).toBe(accountOf("https://clerk.test", user));
+    expect(await list(production)).toMatchObject({ ids: [host.id], removed: [] });
+    expect((await list(await dev())).ids).toEqual([]);
+  });
+
   it("counts the host against the new account's 10 computers", async () => {
     const { host, user, dev } = await onDevelopment();
     const production = await session(user);
