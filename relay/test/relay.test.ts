@@ -974,6 +974,120 @@ describe("streams", () => {
     },
   );
 
+  it("answers a spare's claim before its write is confirmed (PLX-1506)", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, spare));
+    // Every write the host's object makes from the client's open on.
+    const puts: { value: unknown; options: unknown }[] = [];
+    const original = HostRelay.prototype.open;
+    const spy = vi.spyOn(HostRelay.prototype, "open").mockImplementation(function (this: HostRelay, user, timed) {
+      const { storage } = (this as unknown as { ctx: DurableObjectState }).ctx;
+      const put = storage.put.bind(storage) as (key: string, value: unknown, options?: unknown) => Promise<void>;
+      vi.spyOn(storage, "put").mockImplementation(((key: string, value: unknown, options?: unknown) => {
+        puts.push({ value, options });
+        return put(key, value, options);
+      }) as typeof storage.put);
+      return original.call(this, user, timed);
+    });
+    try {
+      const client = opened(await connect(host, token));
+      expect(await client.next()).toBe("ready");
+      expect(await side.next()).toBe("ready");
+      expect(puts).toEqual([{ value: { [spare.stream]: {} }, options: { allowUnconfirmed: true } }]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /** What the host's object is left with when a spare's claim is lost: the write fails after the
+   *  answer left, and the object resets with the stream still a spare (PLX-1506). Its sockets drop. */
+  async function loseClaim(host: Host, stream: string) {
+    const object = () => hosts.get(hosts.idFromName(host.id));
+    await runInDurableObject(object(), async (_: HostRelay, state) => {
+      const saved = (await state.storage.get<Record<string, object>>("streams")) ?? {};
+      await state.storage.put("streams", { ...saved, [stream]: { spare: true } });
+    });
+    await expect(
+      runInDurableObject(object(), (_: HostRelay, state) => state.abort("a write failed")),
+    ).rejects.toThrow("a write failed");
+  }
+
+  it.each(["a second client", "plxd's next spare request"] as const)(
+    "keeps a spare whose claim was lost to its client, counted until it ends, after %s (PLX-1506)",
+    async (first) => {
+      const { host, token, control } = await online();
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, spare));
+      const client = opened(await connect(host, token));
+      expect(await client.next()).toBe("ready");
+      expect(await side.next()).toBe("ready");
+
+      await loseClaim(host, spare.stream);
+      await control.closed;
+      // plxd reconnects, still holding the stream.
+      const { control: again } = await connectHost(host, [spare.stream]);
+      expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready", check: true });
+      expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
+
+      if (first === "a second client") {
+        // It's offered, refuses this client, and the client gets a new stream instead.
+        const second = opened(await connect(host, token));
+        const open = JSON.parse((await again.next()) as string) as Open;
+        expect(open.spare).toBeUndefined();
+        expect(open.stream).not.toBe(spare.stream);
+        opened(await join(host, open));
+        expect(await second.next()).toBe("ready");
+      } else {
+        // plxd asks for the next spare, which the lost one doesn't stop.
+        again.ws.send(JSON.stringify({ t: "spare" }));
+        const next = JSON.parse((await again.next()) as string) as Open;
+        expect(next.spare).toBe(true);
+        expect(await openStreams(host)).toEqual({ [spare.stream]: {}, [next.stream]: { spare: true } });
+        opened(await join(host, next));
+        expect(await opened(await connect(host, token)).next()).toBe("ready");
+      }
+      expect((await openStreams(host))[spare.stream]).toEqual({});
+      // Still only the first client is on it.
+      const clients = await runInDurableObject(streamObject(spare.stream), (_: StreamRelay, state) =>
+        state.getWebSockets("client").length);
+      expect(clients).toBe(1);
+
+      // It counts against the 16.
+      for (let open = Object.keys(await openStreams(host)).length; open < MAX_STREAMS; open++) {
+        opened(await connect(host, token));
+        await again.next();
+      }
+      const over = await connect(host, token);
+      expect(over instanceof Response && over.status).toBe(429);
+
+      // Its end frees its place.
+      client.ws.close();
+      expect(await side.closed).toBe(1000);
+      await expect.poll(() => openStreams(host)).not.toHaveProperty(spare.stream);
+    },
+  );
+
+  it("closes a spare whose claim was lost and whose client never arrives, which frees its place (PLX-1506)", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const { host, control } = await online(user);
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, spare));
+    // What the Worker does for a client, which here hangs up before it reaches the stream.
+    expect(await hosts.get(hosts.idFromName(host.id)).open(account(user))).toEqual({ stream: spare.stream });
+    await expect.poll(() =>
+      runInDurableObject(streamObject(spare.stream), (_: StreamRelay, state) => state.storage.getAlarm())).not.toBeNull();
+
+    await loseClaim(host, spare.stream);
+    expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
+    expect(await runDurableObjectAlarm(streamObject(spare.stream))).toBe(true);
+    expect(await side.closed).toBe(4408);
+    await expect.poll(() => openStreams(host)).toEqual({});
+  });
+
   it("closes a stream plxd says is gone, counting its frames, and only plxd's own", async () => {
     const { host, token, control } = await online();
     const client = opened(await connect(host, token));
