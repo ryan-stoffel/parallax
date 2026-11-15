@@ -54,7 +54,10 @@ keys.unref();
 const production = `http://127.0.0.1:${keys.address().port}`;
 const scratch = mkdtempSync(join(tmpdir(), "plx-relay-e2e-"));
 const envFile = join(scratch, ".env");
-writeFileSync(envFile, `CLERK_ISSUER=${issuer},${production}\nCLERK_JWKS='${JSON.stringify(jwks)}'\n`);
+// A third issuer gives the removal test its own relay account for the same user id, since the
+// tests together register more computers than one account holds.
+const removals = `${issuer}/removals`;
+writeFileSync(envFile, `CLERK_ISSUER=${issuer},${production},${removals}\nCLERK_JWKS='${JSON.stringify(jwks)}'\n`);
 
 const wrangler = spawn(
   join(relayDir, "node_modules", ".bin", "wrangler"),
@@ -167,6 +170,7 @@ const test = spawn(command, args, {
     PLXD_TEST_RELAY_CHECK_TOKEN: sessionToken("user_e2e_check"),
     PLXD_TEST_RELAY_PEERS_TOKEN: sessionToken("user_e2e_peers"),
     PLXD_TEST_RELAY_SYNC_TOKEN: sessionToken("user_e2e_sync"),
+    PLXD_TEST_RELAY_REMOVAL_TOKEN: sessionToken("user_e2e", removals),
     // The move to production (PLX-1465): the user's development account, then their production one.
     PLXD_TEST_RELAY_MOVE_FROM_TOKEN: sessionToken("user_e2e_move"),
     PLXD_TEST_RELAY_MOVE_TOKEN: sessionToken("user_e2e_moved", production),
