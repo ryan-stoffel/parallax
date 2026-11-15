@@ -980,6 +980,109 @@ async fn a_file_secret_reaches_only_the_thread_s_own_file() {
     host.server.stop().await;
 }
 
+/// 0106: a secret saved in Settings reaches any thread's file through `use_secret` with no card,
+/// as often as it's used. `secret/list` shows its name and never its value, saving the name again
+/// replaces the keystore value, and once it's deleted or expired `use_secret` refuses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_secret_reaches_any_thread_s_file_until_it_goes() {
+    use parallax_protocol::methods::{SecretDelete, SecretList, SecretSave};
+    use parallax_protocol::{SecretDeleteParams, SecretListParams, SecretSaveParams};
+    let keys = Arc::new(Keys::default());
+    let host = Host::start_with_keys(temp_dir(), fake(steered()), keys.clone());
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    let mut mcp = tools(&host, me).await;
+    let save = |value: &str, expires_at| SecretSaveParams {
+        name: "sudo password".to_owned(),
+        value: value.to_owned(),
+        expires_at,
+    };
+
+    client
+        .call::<SecretSave>(save("plx1558-first", None))
+        .await
+        .unwrap();
+    client
+        .call::<SecretSave>(save("plx1558-second", None))
+        .await
+        .unwrap();
+    let held: Vec<String> = keys.0.lock().unwrap().values().cloned().collect();
+    assert_eq!(held, ["plx1558-second"], "the replaced value leaves");
+    let listed = client
+        .call::<SecretList>(SecretListParams {})
+        .await
+        .unwrap();
+    assert_eq!(listed.secrets.len(), 1);
+    assert_eq!(listed.secrets[0].name, "sudo password");
+    assert!(!serde_json::to_string(&listed).unwrap().contains("plx1558"));
+
+    for _ in 0..2 {
+        let used = mcp.ok("use_secret", json!({"name": "sudo password"})).await;
+        let file = Path::new(used["file"].as_str().unwrap());
+        assert_eq!(
+            file.parent().unwrap(),
+            plxd::paths::secret_files_dir(host.dir.path(), me)
+        );
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "plx1558-second");
+    }
+    let unknown = mcp.refused("use_secret", json!({"name": "nope"})).await;
+    assert!(unknown.contains("request_secret"), "{unknown}");
+
+    let past = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
+    let refused = client
+        .call::<SecretSave>(save("plx1558-third", Some(past)))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
+
+    let soon = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(1);
+    client
+        .call::<SecretSave>(save("plx1558-soon", Some(soon)))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    while !keys.0.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the expired value stays");
+        sleep(Duration::from_millis(50)).await;
+    }
+    let gone = mcp
+        .refused("use_secret", json!({"name": "sudo password"}))
+        .await;
+    assert!(gone.contains("no secret is saved"), "{gone}");
+
+    client
+        .call::<SecretSave>(save("plx1558-last", None))
+        .await
+        .unwrap();
+    let id = client
+        .call::<SecretList>(SecretListParams {})
+        .await
+        .unwrap()
+        .secrets[0]
+        .id
+        .clone();
+    client
+        .call::<SecretDelete>(SecretDeleteParams { id })
+        .await
+        .unwrap();
+    assert!(
+        keys.0.lock().unwrap().is_empty(),
+        "deleting removes the value"
+    );
+    // An id that isn't a saved secret's, such as an API key's, leaves the keystore alone.
+    let other = parallax_protocol::AccountId::generate();
+    plxd::keystore::KeyStore::set(&*keys, other, "an API key").unwrap();
+    client
+        .call::<SecretDelete>(SecretDeleteParams {
+            id: other.to_string(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(keys.0.lock().unwrap().len(), 1, "the API key stays");
+    host.server.stop().await;
+}
+
 /// 0099: a picked file reaches the thread's file byte for byte, binary included, and `input: file`
 /// can't ask for a ref.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

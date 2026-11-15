@@ -1,7 +1,8 @@
 //! A thread's delegation tools (0063, PLX-648), with T3 Code's names and inputs:
 //! `orchestrator_capabilities`, `delegate_task`, `task_status`, `task_cancel`, and `create_threads`
 //! through `task/delegate`, `task/status`, and `orchestration/dispatch`, and `thread_merge_back`
-//! through `thread/mergeBack`, and `request_secret` through `secret/request`. Every caller gets
+//! through `thread/mergeBack`, `request_secret` through `secret/request`, and `use_secret` through
+//! `secret/use` (0106). Every caller gets
 //! them; plxd refuses to delegate from an orchestrator's runs, which start children through their
 //! orchestrator.
 //!
@@ -21,14 +22,14 @@ use std::time::Duration;
 
 use parallax_protocol::methods::{
     OrchestrationDispatch, PeerStart, PeerTask, ProvidersList, SecretAnswer, SecretRequest,
-    TaskDelegate, TaskStatus, ThreadMergeBack,
+    SecretUse, TaskDelegate, TaskStatus, ThreadMergeBack,
 };
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake,
     DelegatedTask, OrchestrationCommand, PeerStartParams, PeerTaskParams, PeerTaskResult,
     PeerWorkspace, ProvidersListParams, RemoteTask, RunId, SecretAnswerParams, SecretChoice,
     SecretDelivery, SecretInput, SecretRequestParams, SecretRequestResult, SecretStatus,
-    TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
+    SecretUseParams, TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -46,6 +47,7 @@ pub const TOOLS: &[&str] = &[
     "create_threads",
     "thread_merge_back",
     "request_secret",
+    "use_secret",
 ];
 
 /// How long `delegate_task`'s `wait` blocks without a `timeoutMs`, and the most it takes, as T3's.
@@ -58,6 +60,23 @@ const MAX_WAIT: Duration = Duration::from_mins(60);
 /// finds out it needs a secret. The sudo steps are T3's: `-n` proves the command needs a password,
 /// `-k` makes sudo read it even with cached credentials, and the file replaces the command's stdin.
 pub const INSTRUCTIONS: &str = "When a task needs a password, passphrase, token, API key, private key, or .env contents only the user has, call request_secret yourself. A command that fails or stops on authentication counts, such as Permission denied, a 401 or 403, no password supplied, or a password prompt. Then don't stop to report the failure, ask in chat, invent a value, tell the user to set up access, or hand the command back: call request_secret and run the command again with the answer. Stop only if the user declines. When the user offers a secret, or asks whether they can give you one, such as 'can I give you the API key?', don't say no, ask them to paste it in chat, or explain how, even if nothing needs it yet: call request_secret in that same turn. Set input to what the user gives: value for one value such as an API key, token, or password, env for a whole .env file, or file with accept for a file they already have, such as a .p8, .p12, or private key. Pass its secretRef to a tool that takes one. For a shell command, use delivery 'file', then read the returned path only inside the command, or copy it where the task needs it, such as a gitignored .env. Never print the value. An HTTP API: curl -H \"Authorization: Bearer $(cat \"$file\")\" <url>. A database: set its password variable, such as PGPASSWORD for psql, from the file for that one command. For an ssh private key, use ssh -i \"$file\" <host>. To log in to ssh with what the user typed, use sshpass -f \"$file\" ssh <host> if sshpass is installed. Otherwise write a temporary executable script that cats the file, point the SSH_ASKPASS variable at it, set SSH_ASKPASS_REQUIRE to force, and run ssh with stdin from /dev/null. When a command you were asked to run needs a sudo password: settle the full command first, with its own -y if it asks to confirm and a file argument for anything it would read from stdin, since the password takes stdin. Once `sudo -n <cmd>` fails for lack of a password, call request_secret with delivery 'file' and run that exact command as `sudo -k -S -p '' <cmd> < \"$file\"`. Don't suggest passwordless sudo instead.";
+
+/// What a thread is told after [`INSTRUCTIONS`] when the user saved secrets for every thread
+/// (0106): their names, so it uses one instead of asking, sudo included.
+#[must_use]
+pub fn saved_secrets_instructions(names: &[String]) -> Option<String> {
+    if names.is_empty() {
+        return None;
+    }
+    let listed = names
+        .iter()
+        .map(|name| format!("{name:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "The user saved these secrets in Parallax for every thread: {listed}. When one of them fits what a command needs, call use_secret with its name instead of request_secret, and use the file it returns as request_secret's file. For a sudo password, run the command as `sudo -k -S -p '' <cmd> < \"$file\"` right away, without asking or trying `sudo -n` first. Call request_secret only when none of them fits, or use_secret says it's gone."
+    ))
+}
 
 /// How long `request_secret` waits for the user without a `timeoutMs`, and the most it takes, as
 /// T3's, and the longest one `secret/request` waits.
@@ -198,6 +217,17 @@ pub fn definitions() -> Vec<Value> {
             ),
             false,
         ),
+        tool(
+            "use_secret",
+            "Use a secret the user saved in Parallax's Settings for every thread, by the name your instructions list, without asking. The result's file is the path of a private file holding the value, for your own shell commands, used as request_secret's file is: read it only inside a command, and never print it. It lasts 24 hours; call again for a new one. When no saved secret fits, call request_secret instead.",
+            object(
+                json!({
+                    "name": {"type": "string", "description": "The saved secret's name, exactly as listed."},
+                }),
+                &["name"],
+            ),
+            false,
+        ),
     ]
 }
 
@@ -327,6 +357,12 @@ struct SecretArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UseSecretArgs {
+    name: String,
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct MergeBackArgs {
     #[serde(default)]
@@ -390,6 +426,16 @@ impl Delegation {
                 let args: SecretArgs = parse(arguments)?;
                 let request = self.run_id(args.client_request_id.clone());
                 request_secret(plxd, caller, request, args).await
+            }
+            "use_secret" => {
+                let UseSecretArgs { name } = parse(arguments)?;
+                let used = plxd
+                    .call::<SecretUse>(SecretUseParams {
+                        run_id: caller,
+                        name,
+                    })
+                    .await?;
+                Ok(pretty(&json!({"file": used.file})))
             }
             other => Err(format!("no tool is named {other:?}")),
         }

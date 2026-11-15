@@ -216,6 +216,7 @@ export type SettingsSection =
   | "worktrees"
   | "computerUse"
   | "schedules"
+  | "secrets"
   | "storage"
   | "connections"
   | "sharing"

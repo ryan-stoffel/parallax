@@ -102,6 +102,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0103](0103-dev-app.md) | Parallax (Dev): the Release workflow's `channel=dev` publishes any branch as `-dev` to the private repo `parallax-dev`, which the app updates from with `gh auth token`; it has its own appId, blueprint icon and sidebar, and its own plxd and data in `~/.parallax-dev` |
 | [0104](0104-move-a-thread.md) | Move to another computer: the app exports a thread from one plxd with `thread/export` and makes it a thread on another with `thread/receive`, which continues by handoff; a thread in a repository pushes its branch, which the other computer fetches into a new worktree; the source is archived |
 | [0105](0105-app-languages.md) | Languages: i18next in both apps from shared JSON keyed by the English text; the OS's language unless Settings picks one; 26 left-to-right languages, each complete, which a test and `i18next-cli extract --ci` enforce |
+| [0106](0106-saved-secrets.md) | Settings › Secrets saves a secret on a computer by name, in the keystore, until an expiry or for good; every thread's instructions name them, and `use_secret` copies one to the thread's private file with no card |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 

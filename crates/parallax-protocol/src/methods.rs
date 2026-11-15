@@ -99,21 +99,23 @@ use crate::{
     RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ReviewCommitsParams,
     ReviewCommitsResult, ReviewDiffParams, ScheduleDeleteResult, ScheduleIdParams,
     ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
-    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
-    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
-    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
-    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
-    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadExportParams, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
-    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
-    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadReceiveParams,
-    ThreadRunsParams, ThreadRunsResult, ThreadSearchParams, ThreadSearchResult,
-    ThreadSetProjectParams, ThreadSetProjectResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
-    UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
-    UsageLimitsParams, UsageLimitsResult, UsageReportClaimParams, UsageReportClaimResult,
-    UsageReportReleaseParams, UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
+    SecretAnswerResult, SecretDeleteParams, SecretListParams, SecretListResult,
+    SecretRequestParams, SecretRequestResult, SecretSaveParams, SecretSavedResult, SecretUseParams,
+    SecretUseResult, SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams,
+    SubscribeThreadResult, TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey,
+    TerminalListParams, TerminalListResult, TerminalOpenParams, TerminalOutputParams,
+    TerminalResizeParams, TerminalResult, TerminalWriteParams, ThreadArchiveParams,
+    ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult, ThreadExportParams,
+    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadImportChatParams,
+    ThreadImportParams, ThreadImportableParams, ThreadImportableResult, ThreadImportedChatsParams,
+    ThreadImportedChatsResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
+    ThreadMergeBackResult, ThreadReceiveParams, ThreadRunsParams, ThreadRunsResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
+    TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
+    UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -879,6 +881,17 @@ method_table! {
         SecretRequest = "secret/request": SecretRequestParams => SecretRequestResult;
         /// `secret/answer`: the user's answer to a secret request, or the agent giving up on it.
         SecretAnswer = "secret/answer": SecretAnswerParams => SecretAnswerResult;
+        /// `secret/list`: the secrets saved for every thread, without their values (0106). Gated
+        /// on the `savedSecrets` capability, like every method below through `secret/use`.
+        SecretList = "secret/list": SecretListParams => SecretListResult;
+        /// `secret/save`: saves a secret, replacing one with its name. Refused with
+        /// `keychainUnavailable` on a host with no keystore.
+        SecretSave = "secret/save": SecretSaveParams => SecretSavedResult;
+        /// `secret/delete`: deletes a saved secret and its value.
+        SecretDelete = "secret/delete": SecretDeleteParams => SecretSavedResult;
+        /// `secret/use`: writes a saved secret to a private file for a run's commands
+        /// (`use_secret`).
+        SecretUse = "secret/use": SecretUseParams => SecretUseResult;
         /// `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
         /// its `commandId`. Gated on the `orchestration` capability, like every
         /// `orchestration/*` method.

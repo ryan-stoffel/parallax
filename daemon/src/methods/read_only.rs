@@ -295,6 +295,10 @@ fn is_read(method: RequestName) -> bool {
         | M::TaskStatus
         | M::SecretRequest
         | M::SecretAnswer
+        | M::SecretList
+        | M::SecretSave
+        | M::SecretDelete
+        | M::SecretUse
         | M::OrchestrationDispatch
         | M::BundlePrepare
         | M::BundleRead

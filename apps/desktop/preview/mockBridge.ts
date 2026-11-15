@@ -38,6 +38,7 @@ import {
   type RelayHost,
   type RemoteSession,
   type RepoScript,
+  type SavedSecret,
   type ScheduledTask,
   type LoggedEvent,
   type MemoryScope,
@@ -238,6 +239,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "repoClone",
     "repoRefs",
     "runOptions",
+    "savedSecrets",
     "schedules",
     "sendAccount",
     "sendModel",
@@ -702,6 +704,21 @@ const lanSettings = new Set<string>([
   "schedule/list",
 ]);
 
+// Saved secrets (0106), without their values, as plxd lists them.
+let savedSecrets: SavedSecret[] = [
+  {
+    id: "0199c7a1-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+    name: "OPENAI_API_KEY",
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  },
+  {
+    id: "0199c7a1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+    name: "sudo password",
+    createdAt: new Date().toISOString(),
+  },
+];
+
 // Scheduled tasks (0063), as agents create them with `schedule_task`.
 const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 let schedules: ScheduledTask[] = [
@@ -863,6 +880,23 @@ const handlers: { [M in Method]?: Handler<M> } = {
     });
     repoScripts.set(p.repo, scripts);
     return { scripts, fileScripts: p.repo === db.repos[1]!.id ? fileScripts : [] };
+  },
+  "secret/list": () => ({ secrets: savedSecrets }),
+  "secret/save": (p) => {
+    savedSecrets = [
+      ...savedSecrets.filter((s) => s.name !== p.name),
+      {
+        id: crypto.randomUUID(),
+        name: p.name,
+        createdAt: new Date().toISOString(),
+        expiresAt: p.expiresAt,
+      },
+    ].sort((a, b) => a.name.localeCompare(b.name));
+    return {};
+  },
+  "secret/delete": (p) => {
+    savedSecrets = savedSecrets.filter((s) => s.id !== p.id);
+    return {};
   },
   "schedule/list": () => ({ tasks: schedules }),
   "schedule/save": (p) => {
