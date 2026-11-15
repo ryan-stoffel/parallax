@@ -1,16 +1,18 @@
 //! `remote/pair`, `remote/sessions`, and `remote/revoke` (PLX-641, 0065): pairing codes and the
 //! sessions of clients paired with this host. And `relay/register`, `relay/sign` (PLX-1146),
-//! `relay/hosts`, `relay/remove` (PLX-652, 0068), `relay/check` (PLX-1356), and `relay/pushKey`
-//! (0100). And `relay/id` and `access/*` (0091): who may sign in with the account.
+//! `relay/hosts`, `relay/remove` (PLX-652, 0068), `relay/check` (PLX-1356), `relay/pushKey`
+//! (0100), and `relay/move` (PLX-1465). And `relay/id` and `access/*` (0091): who may sign in with
+//! the account.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
     AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
     AccessState, RelayCheckParams, RelayCheckResult, RelayHostsParams, RelayHostsResult,
-    RelayIdParams, RelayIdResult, RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams,
-    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
-    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RelayIdParams, RelayIdResult, RelayMoveParams, RelayMoveResult, RelayPushKeyParams,
+    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
+    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
+    RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -70,9 +72,24 @@ pub(crate) async fn relay_sign(
     params: RelaySignParams,
 ) -> Result<RelaySignResult, ErrorObject> {
     let user = params.user_id.as_deref().filter(|user| !user.is_empty());
-    crate::relay::sign(&context.daemon, &params.token_hash, user)
+    let issuer = params.issuer.as_deref();
+    crate::relay::sign(&context.daemon, &params.token_hash, user, issuer)
         .await
         .map_err(ErrorObject::invalid_params)
+}
+
+/// `relay/move`: moves this host to the same user's production account (PLX-1465), detached, so a
+/// dropped connection doesn't stop it between the relay and this host's record.
+pub(crate) async fn relay_move(
+    context: &Context,
+    params: RelayMoveParams,
+) -> Result<RelayMoveResult, ErrorObject> {
+    context
+        .detached(|daemon| async move {
+            crate::relay::moving::run(&daemon, &params.token, &params.from).await?;
+            Ok(RelayMoveResult {})
+        })
+        .await
 }
 
 /// `relay/id`: this host's relay id and its routes, as its descriptor reports them.

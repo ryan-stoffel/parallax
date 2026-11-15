@@ -231,6 +231,7 @@ const bridge: ParallaxBridge = {
     return stop;
   },
   accountMoved: () => ipcRenderer.invoke("parallax:accountMoved"),
+  onAccountMove: (listener) => follow("parallax:accountMove", listener),
   onConnectNotice: (listener) => follow("parallax:connectNotice", listener),
   onRelayUsage: (listener) => follow("parallax:relayUsage", listener),
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),

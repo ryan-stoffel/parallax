@@ -212,7 +212,29 @@ pub struct RelaySignParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_id: Option<String>,
+    /// The Clerk instance that user is on, by its issuer (PLX-1465). Absent, as from a caller
+    /// before then, is the development instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub issuer: Option<String>,
 }
+
+/// Params of `relay/move` (PLX-1465): moves this host from the account it's on to the same user's
+/// production account, on the relay and here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayMoveParams {
+    /// A token of the production account, which plxd checks against production's keys and then
+    /// trusts beside the account it's on. Sent to the relay once and not kept.
+    pub token: String,
+    /// A token of the account the host is on now, which the relay checks. Not kept.
+    pub from: String,
+}
+
+/// Result of `relay/move`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayMoveResult {}
 
 /// Result of `relay/sign`: what `relay/register`'s `signed` takes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

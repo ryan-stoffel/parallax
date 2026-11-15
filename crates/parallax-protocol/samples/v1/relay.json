@@ -195,5 +195,12 @@
       "pairing": false,
       "relay": { "connected": true, "hookUrl": "https://relay.parallax.codes/v1/hooks/tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE" }
     }
-  }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "relay/move",
+    "params": { "token": "<production session token>", "from": "<development session token>" }
+  },
+  { "jsonrpc": "2.0", "id": 8, "result": {} }
 ]

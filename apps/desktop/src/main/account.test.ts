@@ -77,9 +77,31 @@ function issue(refreshToken = `rt${++clerk.issued}`) {
   });
 }
 const oauthError = (error: string) => Response.json({ error }, { status: 400 });
+
+// Clerk's development instance, as the app's development session reaches it (PLX-1465): refresh
+// and revoke, for the app's application there only.
+const development = { refresh: new Set<string>(), revoked: [] as string[], issued: 0 };
+function developmentClerk(url: URL, init?: RequestInit) {
+  const form = new URLSearchParams(init?.body as URLSearchParams | undefined);
+  if (form.get("client_id") !== "SXDueyOLOJ2v4Vmq") return oauthError("invalid_client");
+  if (url.pathname === "/oauth/token/revoke") {
+    development.revoked.push(form.get("token")!);
+    return new Response(null, { status: 200 });
+  }
+  if (!development.refresh.delete(form.get("refresh_token")!)) return oauthError("invalid_grant");
+  const n = ++development.issued;
+  development.refresh.add(`dev_rt${n}`);
+  return Response.json({
+    access_token: `dev_at${n}`,
+    refresh_token: `dev_rt${n}`,
+    expires_in: 86400,
+  });
+}
+
 const realFetch = globalThis.fetch;
 vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
   const url = new URL(input);
+  if (url.host === "adjusted-mastodon-8705.clerk.accounts.dev") return developmentClerk(url, init);
   if (url.host === "img.clerk.test" && clerk.pictureDown) throw new TypeError("fetch failed");
   if (url.host === "img.clerk.test")
     return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -293,19 +315,15 @@ test("a session from another Clerk instance is signed out, and one saved before 
   expect(issuedBy({})).toBe(dev);
   expect(issuedBy({ api: "https://clerk.parallax.codes" })).toBe("https://clerk.parallax.codes");
   const user = { given_name: "Ryan" };
-  for (const saved of [
-    { refreshToken: "rt_old", user },
-    { refreshToken: "rt_old", user, api: "https://adjusted-mastodon-8705.clerk.accounts.dev" },
-  ]) {
-    // This instance would take the token, so only the saved instance signs it out.
-    clerk.refresh.add("rt_old");
-    fs.writeFileSync(savedFile(), electron.safeStorage.encryptString(JSON.stringify(saved)));
-    startAccount();
-    expect(await call("parallax:profile")).toBeNull();
-    expect(await call("parallax:accountMoved")).toBe(true);
-    expect(fs.existsSync(savedFile())).toBe(false);
-    expect(clerk.refresh.has("rt_old")).toBe(true);
-  }
+  // This instance would take the token, so only the saved instance signs it out.
+  clerk.refresh.add("rt_old");
+  const saved = { refreshToken: "rt_old", user, api: "https://clerk.other.test" };
+  fs.writeFileSync(savedFile(), electron.safeStorage.encryptString(JSON.stringify(saved)));
+  startAccount();
+  expect(await call("parallax:profile")).toBeNull();
+  expect(await call("parallax:accountMoved")).toBe(true);
+  expect(fs.existsSync(savedFile())).toBe(false);
+  expect(clerk.refresh.has("rt_old")).toBe(true);
   // One this instance issued stays signed in.
   fs.writeFileSync(
     savedFile(),
@@ -317,6 +335,47 @@ test("a session from another Clerk instance is signed out, and one saved before 
   expect(await call("parallax:profile")).toMatchObject({ firstName: "Ryan" });
   expect(await call("parallax:accountMoved")).toBe(false);
   await settle();
+});
+
+test("a development session stays for its computers until they move to production (PLX-1465)", async () => {
+  // Saved before the app kept its instance, so the development instance's.
+  development.refresh.add("dev_rt0");
+  const saved = { refreshToken: "dev_rt0", user: { given_name: "Dev" } };
+  fs.writeFileSync(savedFile(), electron.safeStorage.encryptString(JSON.stringify(saved)));
+  const first = startAccount();
+  // Until production signs in, it's the account, for every computer.
+  expect(await call("parallax:profile")).toMatchObject({ firstName: "Dev" });
+  expect(await call("parallax:accountMoved")).toBe(false);
+  expect(first.move.pending()).toEqual({ signedIn: false });
+  expect(await first.accessToken()).toMatch(/^dev_at/);
+  expect(await first.accessToken("host_a")).toMatch(/^dev_at/);
+
+  // It outlives a restart, and a sign-in to production takes over all but the computers the
+  // development account still lists.
+  const account = startAccount();
+  expect(await call("parallax:profile")).toMatchObject({ firstName: "Dev" });
+  const answer = call("parallax:signIn", false);
+  await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
+  await signInInBrowser(electron.opened[0]!);
+  await answer;
+  expect(published.at(-1)?.firstName).toBe(clerk.user.given_name);
+  // Until the development list is read, every computer is still on it.
+  expect(account.move.pending()).toEqual({ signedIn: true });
+  expect(await account.accessToken("host_b")).toMatch(/^dev_at/);
+  account.move.listed(["host_a"]);
+  expect(account.move.pending()).toEqual({ hosts: ["host_a"], signedIn: true });
+  expect(await account.accessToken()).toMatch(/^at\d/);
+  expect(await account.accessToken("host_b")).toMatch(/^at\d/);
+  expect(await account.accessToken("host_a")).toMatch(/^dev_at/);
+  expect(await account.freshToken("host_a")).toMatch(/^dev_at/);
+  expect(await account.move.developmentToken()).toMatch(/^dev_at/);
+
+  // None left: the move is done, and the development session goes, revoked.
+  account.move.listed([]);
+  expect(account.move.pending()).toBeUndefined();
+  expect(await account.accessToken("host_a")).toMatch(/^at\d/);
+  await vi.waitFor(() => expect(development.revoked).toHaveLength(1));
+  expect(fs.existsSync(path.join(electron.userData, "account-development"))).toBe(false);
 });
 
 test("Linux's basic_text backend, a hardcoded password, keeps the session in memory", async () => {

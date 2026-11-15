@@ -6,7 +6,7 @@
 //!
 //! Runs only when `relay/scripts/e2e.mjs` starts a relay and passes its URL and a Clerk token in
 //! `PLXD_TEST_RELAY_URL`, `PLXD_TEST_RELAY_TOKEN`, `PLXD_TEST_RELAY_CHECK_TOKEN`,
-//! `PLXD_TEST_RELAY_PEERS_TOKEN`, and `PLXD_TEST_RELAY_SYNC_TOKEN`. Elsewhere it passes without doing anything, but for the older
+//! `PLXD_TEST_RELAY_PEERS_TOKEN`, `PLXD_TEST_RELAY_SYNC_TOKEN`, and `PLXD_TEST_RELAY_REMOVAL_TOKEN`. Elsewhere it passes without doing anything, but for the older
 //! relay's test, whose relay is its own.
 
 use std::sync::Arc;
@@ -51,6 +51,7 @@ use crate::you_sync::{TABS, body, list, write};
 
 #[cfg(feature = "host-routing-proof")]
 mod host_proof;
+mod moving;
 mod proxied;
 
 async fn set_relay(client: &mut Client, on: bool) {
@@ -75,6 +76,7 @@ async fn sign(client: &mut Client, token: &str) -> parallax_protocol::RelaySignR
         .call::<RelaySign>(RelaySignParams {
             token_hash: hash,
             user_id: None,
+            issuer: None,
         })
         .await
         .unwrap()
@@ -465,7 +467,7 @@ const REMOVAL_ARRIVES: Duration = Duration::from_secs(5);
 async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seconds() {
     let (Ok(url), Ok(relay_token)) = (
         std::env::var("PLXD_TEST_RELAY_URL"),
-        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+        std::env::var("PLXD_TEST_RELAY_REMOVAL_TOKEN"),
     ) else {
         return;
     };

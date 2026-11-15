@@ -10,13 +10,13 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::methods::{
     AccessApprove, AccessDeny, AccessForgetHost, AccessGet, AccessMerge, AccessRemove,
-    AccessSetupCode, HostSettingsSet, RelayId, RelayPushKey, RelayRegister, RelaySign,
+    AccessSetupCode, HostSettingsSet, RelayId, RelayMove, RelayPushKey, RelayRegister, RelaySign,
     RemoteRevoke, RemoteSessions,
 };
 use parallax_protocol::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
-    AccessRequestParams, AccessSetupCodeParams, HostSettingsSetParams, RelayIdParams,
-    RelayPushKeyParams, RelayRegisterParams, RelaySignParams, RemoteRevokeParams,
+    AccessRequestParams, AccessSetupCodeParams, ErrorKind, HostSettingsSetParams, RelayIdParams,
+    RelayMoveParams, RelayPushKeyParams, RelayRegisterParams, RelaySignParams, RemoteRevokeParams,
     RemoteSessionsParams,
 };
 use plxd::remote::{self, SignIn};
@@ -32,7 +32,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::connect::free_port;
 use crate::remote::{LOOPBACK, https, open_account, refusal, set_remote, wait_listening};
-use crate::support::{Client, InProcess, temp_dir};
+use crate::support::{Client, InProcess, kind, temp_dir};
 
 const USER: &str = "user_1";
 
@@ -112,6 +112,16 @@ async fn host(dir: &Path, issuer: &str) -> (InProcess, Client, String, String) {
 
 /// [`host`], from `config`.
 async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, String) {
+    let issuer = config.clerk.issuer.clone();
+    host_as(config, Some(issuer)).await
+}
+
+/// [`host_at`], with [`USER`] on the instance `issuer`, which absent is the development one, as an
+/// app from before PLX-1465 names none.
+async fn host_as(
+    config: plxd::server::Config,
+    issuer: Option<String>,
+) -> (InProcess, Client, String, String) {
     let port = config.remote_port;
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
@@ -120,6 +130,7 @@ async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, St
         .call::<RelaySign>(RelaySignParams {
             token_hash: "hash".to_owned(),
             user_id: Some(USER.to_owned()),
+            issuer,
         })
         .await
         .unwrap();
@@ -1572,5 +1583,228 @@ async fn request_and_setup_limits_and_a_waiting_request_survive_a_restart() {
         matches!(right, Err(remote::Error::Refused)),
         "the sixth run"
     );
+    server.stop().await;
+}
+
+/// Whether a device whose data folder is `dir`, approved here, signs in with a fresh token of
+/// `user` from `issuer`.
+async fn approved(issuer: &str, routes: &[String], host_id: &str, user: &str, dir: &Path) -> bool {
+    let signed_in = sign_in(issuer, routes, host_id, user, "phone", dir).await;
+    matches!(signed_in, Ok((_, SignIn::Approved { .. })))
+}
+
+/// A relay on loopback that answers every request with `status` and the JSON `body`.
+async fn relay_answering(status: &str, body: &str) -> String {
+    let length = body.len();
+    let head = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\n");
+    fake_relay(format!("{head}Content-Length: {length}\r\n\r\n{body}")).await
+}
+
+/// The move to production (PLX-1465): a computer on the development account trusts the production
+/// account once plxd checks a production token itself, keeps trusting the development one and its
+/// approvals, and is production's once the relay moves it.
+#[tokio::test]
+async fn a_move_trusts_the_production_account_beside_the_development_one() {
+    const MOVED: &str = "user_prod";
+    let (production, development) = (clerk().await, clerk().await);
+    let dir = temp_dir();
+    let port = free_port();
+    let start = |relay: &str| {
+        let mut config = config(dir.path(), &production, relay, port);
+        config.clerk_legacy = Some(plxd::clerk::Config {
+            issuer: development.clone(),
+            client_ids: Vec::new(),
+            authorized_parties: Vec::new(),
+        });
+        config
+    };
+    // A relay from before PLX-1465, which has no move.
+    let old_relay = relay_answering("404 Not Found", r#"{"error":"not_found"}"#).await;
+    // The development app set it up, and approved the phone.
+    let (server, mut client, route, host_id) = host_as(start(&old_relay), None).await;
+    let phone = temp_dir();
+    client
+        .call::<AccessMerge>(AccessMergeParams {
+            approved_clients: vec![thumbprint(phone.path())],
+            ..AccessMergeParams::default()
+        })
+        .await
+        .unwrap();
+    let routes = [route];
+    let signs_in = |issuer: &str, user: &str| {
+        let (issuer, user, routes, id) = (
+            issuer.to_owned(),
+            user.to_owned(),
+            routes.clone(),
+            host_id.clone(),
+        );
+        let phone = phone.path().to_owned();
+        async move { approved(&issuer, &routes, &id, &user, &phone).await }
+    };
+    assert!(signs_in(&development, USER).await);
+    assert!(!signs_in(&production, MOVED).await);
+
+    let moving = |token: String| RelayMoveParams {
+        token,
+        from: crate::account::token(&development, USER),
+    };
+    // Only a production token plxd checks itself counts.
+    let refused = client
+        .call::<RelayMove>(moving(token(&development, USER)))
+        .await;
+    assert!(
+        refused
+            .unwrap_err()
+            .message
+            .contains("isn't a production account's")
+    );
+    let refused = client
+        .call::<RelayMove>(moving("not.a.token".to_owned()))
+        .await;
+    assert!(refused.unwrap_err().message.contains("didn't accept"));
+    assert!(!signs_in(&production, MOVED).await);
+
+    // A relay that can't move it yet leaves it on development, trusting production too.
+    let waiting = client
+        .call::<RelayMove>(moving(token(&production, MOVED)))
+        .await;
+    assert_eq!(kind(&waiting.unwrap_err()), ErrorKind::RelayUnreachable);
+    assert_eq!(access(&mut client).await.account.as_deref(), Some(USER));
+    assert!(signs_in(&production, MOVED).await);
+    assert!(signs_in(&development, USER).await);
+    server.stop().await;
+
+    // Once the relay moves it, production is its account. Development's devices still sign in.
+    let relay = relay_answering("200 OK", "{}").await;
+    let server = InProcess::start(start(&relay));
+    let mut client = Client::ready(&server.socket).await;
+    wait_listening(port, true).await;
+    client
+        .call::<RelayMove>(moving(token(&production, MOVED)))
+        .await
+        .unwrap();
+    let state = access(&mut client).await;
+    assert_eq!(state.account.as_deref(), Some(MOVED));
+    assert_eq!(state.approved_clients, [thumbprint(phone.path())]);
+    assert!(signs_in(&production, MOVED).await);
+    assert!(signs_in(&development, USER).await);
+    assert!(!signs_in(&production, "user_other").await);
+    // Asked again, it's done.
+    client
+        .call::<RelayMove>(moving(token(&production, MOVED)))
+        .await
+        .unwrap();
+    server.stop().await;
+}
+
+/// While a computer moves to production (PLX-1465), a removal statement from an approved computer
+/// counts when it's signed for either account this one trusts, and not for any other account.
+#[tokio::test]
+async fn a_removal_counts_when_signed_for_either_account_of_a_move() {
+    const MOVED: &str = "user_prod";
+    let (production, development) = (clerk().await, clerk().await);
+    let dir = temp_dir();
+    let port = free_port();
+    let start = |relay: &str| {
+        let mut config = config(dir.path(), &production, relay, port);
+        config.clerk_legacy = Some(plxd::clerk::Config {
+            issuer: development.clone(),
+            client_ids: Vec::new(),
+            authorized_parties: Vec::new(),
+        });
+        config
+    };
+    // On the development account, trusting production too after a move the relay couldn't make.
+    let old_relay = relay_answering("404 Not Found", r#"{"error":"not_found"}"#).await;
+    let (server, mut client, _, _) = host_as(start(&old_relay), None).await;
+    let moving = RelayMoveParams {
+        token: token(&production, MOVED),
+        from: token(&development, USER),
+    };
+    assert!(client.call::<RelayMove>(moving).await.is_err());
+    server.stop().await;
+
+    let (relay, frames, _announcements) = fake_control_relay().await;
+    let server = InProcess::start(start(&relay));
+    let mut client = Client::ready(&server.socket).await;
+    let approved = remote::DpopKey::generate();
+    client
+        .call::<AccessMerge>(AccessMergeParams {
+            approved_hosts: vec![approved.thumbprint()],
+            ..AccessMergeParams::default()
+        })
+        .await
+        .unwrap();
+    let [phone, tablet, laptop] = [(); 3].map(|()| remote::DpopKey::generate().thumbprint());
+    for (account, key) in [(USER, &phone), (MOVED, &tablet), ("user_other", &laptop)] {
+        let statement = remote::signed_removal(&approved, account, std::slice::from_ref(key));
+        let frame = json!({ "t": "removed", "statement": statement }).to_string();
+        frames.send(frame).await.unwrap();
+    }
+    let mut expected = vec![phone, tablet];
+    expected.sort();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut removed = access(&mut client).await.removed_clients;
+    while removed.len() < 2 && Instant::now() < deadline {
+        sleep(Duration::from_millis(20)).await;
+        removed = access(&mut client).await.removed_clients;
+    }
+    sleep(Duration::from_millis(200)).await;
+    let mut removed = access(&mut client).await.removed_clients;
+    removed.sort();
+    assert_eq!(removed, expected, "not the one for another account");
+    server.stop().await;
+}
+
+/// Once a computer is production's (PLX-1465), an app still signed in to development can't take
+/// it back: plxd refuses to record a development account, by `relay/sign` or its own
+/// registration, and posts nothing to the relay. A production registration still works.
+#[tokio::test]
+async fn a_computer_on_production_refuses_to_go_back_to_development() {
+    let (production, development) = (clerk().await, clerk().await);
+    let relay = relay_answering("200 OK", "{}").await;
+    let dir = temp_dir();
+    let mut config = config(dir.path(), &production, &relay, free_port());
+    config.clerk_legacy = Some(plxd::clerk::Config {
+        issuer: development.clone(),
+        client_ids: Vec::new(),
+        authorized_parties: Vec::new(),
+    });
+    // The production app set it up.
+    let (server, mut client, _, _) = host_at(config).await;
+    assert_eq!(access(&mut client).await.account.as_deref(), Some(USER));
+
+    let moved = |error: parallax_protocol::jsonrpc::ErrorObject| {
+        assert!(
+            error.message.contains("moved to your new Parallax account"),
+            "{error:?}"
+        );
+    };
+    for issuer in [None, Some(development.clone())] {
+        let signed = client
+            .call::<RelaySign>(RelaySignParams {
+                token_hash: "hash".to_owned(),
+                user_id: Some("user_dev".to_owned()),
+                issuer,
+            })
+            .await;
+        moved(signed.unwrap_err());
+    }
+    let registered = client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token(&development, "user_dev"),
+            signed: None,
+        })
+        .await;
+    moved(registered.unwrap_err());
+    assert_eq!(access(&mut client).await.account.as_deref(), Some(USER));
+
+    client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token(&production, USER),
+            signed: None,
+        })
+        .await
+        .unwrap();
     server.stop().await;
 }

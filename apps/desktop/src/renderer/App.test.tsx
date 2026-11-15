@@ -35,6 +35,7 @@ const bridge: Partial<ParallaxBridge> = {
   terminalApps: async () => [],
   terminalApp: async () => null,
   onProfile: () => () => {},
+  onAccountMove: () => () => {},
   onConnectNotice: () => () => {},
   onRelayUsage: () => () => {},
 };

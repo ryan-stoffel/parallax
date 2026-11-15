@@ -26,6 +26,7 @@ import {
   NPM_INSTALLS,
   type AccessPrompt,
   type AccountAccess,
+  type AccountMove,
   type ConnectionState,
   type ConnectState,
   type DeviceHost,
@@ -65,6 +66,7 @@ import {
   NoticeWatch,
   outageOf,
   relayOffline,
+  tokenIssuer,
   tokenSubject,
   unionLists,
   type SavedAccount,
@@ -80,6 +82,7 @@ import {
   type SavedDevice,
 } from "./connect";
 import type { Account } from "./account";
+import { moveComputers, type Movable } from "./accountMove";
 import {
   backoffMs,
   Connection,
@@ -215,9 +218,11 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   setInterval(() => {
     if (anyWindowVisible()) void lookForNewComputers();
   }, LOOK_MS).unref();
-  // Signing in registers every computer this app is connected to (PLX-1146).
-  account?.onSignIn(() => {
-    forgetOtherAccount();
+  // Signing in registers every computer this app is connected to (PLX-1146). Signing in to
+  // production with a development session kept moves its computers first (PLX-1465).
+  account?.onSignIn(async () => {
+    if (account?.move.pending()) await moveAccount();
+    else forgetOtherAccount();
     for (const [hostId, connection] of connections)
       if (connection.state.status === "connected") void joinRelay(hostId, true);
     // The account's computers, which a sign-in to another account changes (0091).
@@ -295,6 +300,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
   ipcMain.handle("parallax:connectNotice", () => connectNotice());
+  ipcMain.handle("parallax:accountMove", () => moveState());
   ipcMain.handle("parallax:relayUsage", () => relayUsage);
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
@@ -1216,9 +1222,12 @@ function addLanConnection({ fingerprint, name, routes }: SavedLan): void {
 /** The signed-in Parallax account, whose token reaches plxd only, never a renderer. */
 let account: Account | undefined;
 
-/** `plxd dial`'s sign-in for a `relay:` route (PLX-652), while one is fresh. */
-function relayEnv(): Record<string, string> | undefined {
-  const token = account?.currentToken();
+/**
+ * `plxd dial`'s sign-in for a `relay:` route (PLX-652), while one is fresh: for account computer
+ * `relayId` when given, which may still be on the development account (PLX-1465).
+ */
+function relayEnv(relayId?: string): Record<string, string> | undefined {
+  const token = account?.currentToken(relayId);
   return token ? { PLXD_RELAY_TOKEN: token } : undefined;
 }
 
@@ -1240,9 +1249,29 @@ async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
   }
   const token = await account?.accessToken();
   if (!token) return noToken();
-  const answer = await connections.get("local")?.request("relay/hosts", { token });
-  if (!answer) return t("Parallax isn't connected to this computer's plxd.");
+  const local = connections.get("local");
+  if (!local) return t("Parallax isn't connected to this computer's plxd.");
+  const answer = await listHosts(local, token);
   return "error" in answer ? answer.error.message : answer.result.hosts;
+}
+
+/**
+ * The account's list from `local`'s plxd with `token`, and while computers wait to move to
+ * production (PLX-1465), the development account's with it, as one list. A failed read of the
+ * development one leaves it out.
+ */
+async function listHosts(local: Connection, token: string) {
+  const answer = await local.request("relay/hosts", { token });
+  const from = account?.move.pending()?.signedIn && (await account.move.developmentToken());
+  if (!from || "error" in answer) return answer;
+  const old = await local.request("relay/hosts", { token: from });
+  if ("error" in old) return answer;
+  const { hosts, removed = [] } = answer.result;
+  const left = old.result.hosts.filter((each) => !hosts.some((h) => h.hostId === each.hostId));
+  return {
+    ...answer,
+    result: { hosts: [...hosts, ...left], removed: [...removed, ...(old.result.removed ?? [])] },
+  };
 }
 
 /**
@@ -1265,15 +1294,31 @@ async function checkRelay(): Promise<RelayCheckResult | string> {
 async function registerRelay(): Promise<string | undefined> {
   const token = await account?.accessToken();
   if (!token) return noToken();
+  const own = await connections.get("local")?.request("relay/id", {});
+  if (waitsToMove(own && "result" in own ? own.result.hostId : undefined)) {
+    await moveAccount();
+    return undefined;
+  }
   const answer = await connections.get("local")?.request("relay/register", { token });
   if (!answer) return t("Parallax isn't connected to this computer's plxd.");
   if ("error" in answer) return answer.error.message;
-  const own = await connections.get("local")?.request("relay/id", {});
   const user = tokenSubject(token);
   if (own && "result" in own && user) keepJoined(own.result.hostId, user);
   // Ends the `notListed` notice now, rather than at the next look.
   void discoverAccounts();
   return undefined;
+}
+
+/**
+ * Whether computer `relayId` is still on the development account after a sign-in to production,
+ * so it moves (`moveAccount`) and never registers: a plain registration would take it from the
+ * development account and make its plxd drop that account's trust (PLX-1465). Every computer is,
+ * an unknown one included, until the development list was read once.
+ */
+function waitsToMove(relayId: string | undefined): boolean {
+  const pending = account?.move.pending();
+  if (!pending?.signedIn) return false;
+  return !relayId || !pending.hosts || pending.hosts.includes(relayId);
 }
 
 /**
@@ -1290,6 +1335,10 @@ async function registerRelay(): Promise<string | undefined> {
  * joined and isn't listed may have been removed before the relay kept marks, or the relay may have
  * lost its data. Nothing here can tell, so it never registers by itself and changes no setting:
  * `notListed` offers the one click that does (`registerRelay`). A key that never joined registers.
+ *
+ * A computer still on the development account after a sign-in to production waits to move
+ * (`moveAccount`) instead, since registering would take it from the development account without
+ * its plxd trusting production (PLX-1465).
  */
 async function joinRelay(hostId: string, signingIn = false): Promise<void> {
   if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
@@ -1300,6 +1349,7 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
     const own = await local.request("relay/id", {});
     const hostId = "result" in own ? own.result.hostId : undefined;
     const user = tokenSubject(token);
+    if (waitsToMove(hostId)) return;
     if (!signingIn && hostId) {
       const answer = await local.request("relay/hosts", { token });
       const list = "result" in answer ? answer.result : undefined;
@@ -1315,11 +1365,13 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
     if ("result" in joined && hostId && user) keepJoined(hostId, user);
     return;
   }
+  if (waitsToMove(tailnetRelayIds.get(hostId))) return;
   const tokenHash = createHash("sha256").update(token).digest("base64url");
   const userId = tokenSubject(token);
+  const issuer = tokenIssuer(token);
   const signed = await connections
     .get(hostId)
-    ?.request("relay/sign", { tokenHash, ...(userId && { userId }) });
+    ?.request("relay/sign", { tokenHash, ...(userId && { userId }), ...(issuer && { issuer }) });
   if (signed && "result" in signed)
     await local.request("relay/register", { token, signed: signed.result });
 }
@@ -1329,6 +1381,8 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
  * list can't drop them, as not being listed proves nothing (PLX-1351).
  */
 function forgetOtherAccount(): void {
+  // Production's account is the same user's while the development one moves (PLX-1465).
+  if (account?.move.pending()) return;
   const token = account?.currentToken();
   const user = token && tokenSubject(token);
   const joined = settings.joinedRelay?.user;
@@ -1816,7 +1870,7 @@ async function removeDevice(hostId: unknown): Promise<string | undefined> {
  * nothing changes. This computer can't remove itself. Resolves to why not, for people.
  */
 async function removeFromAccount(relayId: string): Promise<string | undefined> {
-  const token = await account?.accessToken();
+  const token = await account?.accessToken(relayId);
   if (!token) return noToken();
   const local = connections.get("local");
   if (local?.state.status !== "connected")
@@ -1929,7 +1983,7 @@ function addAccountConnection(saved: SavedAccount): void {
     },
     {
       account: saved.name,
-      env: relayEnv,
+      env: () => relayEnv(saved.hostId),
       onRoute: (route) => {
         routes.route = route;
         broadcast("parallax:devices", deviceHosts());
@@ -2032,7 +2086,7 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
   }
   const local = connections.get("local");
   if (local?.state.status !== "connected") return undefined;
-  const answer = await local.request("relay/hosts", { token });
+  const answer = await listHosts(local, token);
   if ("error" in answer) {
     outageWatch.read(net.isOnline() ? outageOf(answer.error) : undefined);
     return undefined;
@@ -2078,6 +2132,93 @@ const discoverAccounts = coalesced(async () => {
     if (access.step === "needsCode" && access.offline && !offlineAccounts.has(id))
       void askForCode(id);
   broadcast("parallax:devices", deviceHosts());
+  moveSoon();
+});
+
+// The move from the development account to production (PLX-1465). Until the user signs in to
+// production, the development session is the account and nothing moves. Then each computer the
+// development account lists moves when this app reaches it, and the rest wait for a later look.
+
+/** The computers this app moved, by name, and where the move stands, for the windows. */
+let movedNames: string[] = [];
+let accountMove: AccountMove | null = null;
+/** When the move last ran, so a look runs it at most once a minute. */
+let moveRanAt = 0;
+
+/** Where the move stands: a sign-in to production asked for first. */
+function moveState(): AccountMove | null {
+  const pending = account?.move.pending();
+  if (pending && !pending.signedIn)
+    return { signedIn: false, moved: [], moving: [], waiting: [], done: false };
+  return pending || accountMove?.done ? accountMove : null;
+}
+
+function showMove(next: AccountMove | null): void {
+  accountMove = next;
+  broadcast("parallax:accountMove", moveState());
+}
+
+/** Runs the move unless it ran in the last minute. */
+function moveSoon(): void {
+  if (!account?.move.pending() || Date.now() - moveRanAt < 60_000) return;
+  void moveAccount();
+}
+
+/** The connection that reaches computer `relayId`'s plxd, if one is connected. */
+function connectionTo(relayId: string, own: boolean): Connection | undefined {
+  const ids = own
+    ? ["local"]
+    : [
+        accountId(relayId),
+        ...[...tailnetRelayIds].filter(([, id]) => id === relayId).map(([id]) => id),
+      ];
+  return ids.map((id) => connections.get(id)).find((each) => each?.state.status === "connected");
+}
+
+/**
+ * Moves the computers still on the development account to production (PLX-1465): reads which are
+ * left, asks each one this app reaches to move (`relay/move`), and shows where the move stands. The
+ * development session goes once none are left. A sign-in to production runs it at once.
+ */
+const moveAccount = coalesced(async () => {
+  moveRanAt = Date.now();
+  const pending = account?.move.pending();
+  if (!pending?.signedIn) return showMove(null);
+  const local = connections.get("local");
+  const token = await account?.accessToken();
+  const from = await account?.move.developmentToken();
+  if (!token || !from || local?.state.status !== "connected") return;
+  const listed = await local.request("relay/hosts", { token: from });
+  if ("error" in listed) return;
+  const left = listed.result.hosts;
+  account?.move.listed(left.map((each) => each.hostId));
+  if (left.length) {
+    const computers: Movable[] = left.map(({ hostId, name, thisComputer }) => {
+      const host = connectionTo(hostId, thisComputer);
+      const move =
+        host &&
+        ((params: { token: string; from: string }) => host.request("relay/move", params, 60_000));
+      return { hostId, name, ...(move && { move }) };
+    });
+    const moved = await moveComputers(computers, { token, from }, movedNames, showMove);
+    movedNames = [
+      ...movedNames,
+      ...computers.filter((c) => moved.includes(c.hostId)).map((c) => c.name),
+    ];
+    account?.move.listed(
+      left.filter((each) => !moved.includes(each.hostId)).map((each) => each.hostId),
+    );
+    const own = left.find((each) => each.thisComputer)?.hostId;
+    const user = tokenSubject(token);
+    if (own && user && moved.includes(own)) keepJoined(own, user);
+    if (moved.length) void discoverAccounts();
+  }
+  if (account?.move.pending()) return;
+  showMove(
+    movedNames.length
+      ? { signedIn: true, moved: movedNames, moving: [], waiting: [], done: true }
+      : null,
+  );
 });
 
 /** The account's computers as discovery last saw them. */
@@ -2091,6 +2232,7 @@ let lastListed: string | undefined;
  * the sign-in of one the relay refused as offline that the list says is online.
  */
 async function lookForNewComputers(): Promise<void> {
+  moveSoon();
   const list = await readAccountList();
   if (list && listedKey(list) !== lastListed) return void discoverAccounts();
   // Online on the relay can come before its listener answers, and nothing changes in the list when
@@ -2150,7 +2292,7 @@ async function probeRoutes(
   try {
     const order = inOrder ? ["--in-order"] : [];
     const args = ["--probe", `--account=${relayId}`, ...order, "--", ...routes];
-    const { stdout } = await dialPlxd(plxd, args, await account?.accessToken());
+    const { stdout } = await dialPlxd(plxd, args, await account?.accessToken(relayId));
     const { route } = JSON.parse(stdout) as { route?: unknown };
     return typeof route === "string" ? route : undefined;
   } catch {
@@ -2366,13 +2508,13 @@ async function compareCodes(id: string): Promise<void> {
     setAccess(id, { step: "needsCode", ...(error && { error }) });
   setAccess(id, { step: "signingIn" });
   const epoch = keyEpoch;
-  const token = await account?.freshToken();
+  const token = await account?.freshToken(relayId);
   if (!token) {
     // Nothing started, so a later look may still compare, once signed in.
     compared.delete(id);
     return typeInstead();
   }
-  const relayToken = await account?.accessToken();
+  const relayToken = await account?.accessToken(relayId);
   // Starting over replaced the key meanwhile, and decides what this computer needs.
   if (epoch !== keyEpoch) return;
   const child = spawn(
@@ -2626,12 +2768,12 @@ async function signIn(id: string): Promise<number | null | undefined> {
   signedIn.add(id);
   setAccess(id, { step: "signingIn" });
   const epoch = keyEpoch;
-  const token = await account?.freshToken();
+  const token = await account?.freshToken(relayId);
   if (!token) {
     setAccess(id, { step: "ask", why: noToken() });
     return undefined;
   }
-  const relayToken = await account?.accessToken();
+  const relayToken = await account?.accessToken(relayId);
   // Starting over replaced the key meanwhile, and decides what this computer needs.
   if (epoch !== keyEpoch) return undefined;
   const child = spawn(
@@ -2728,7 +2870,11 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   let stdout: string;
   try {
     const args = [`--account=${saved.hostId}`, "--pair", `--name=${localName()}`, "--"];
-    const running = dialPlxd(plxd, [...args, ...routes.dial()], await account?.accessToken());
+    const running = dialPlxd(
+      plxd,
+      [...args, ...routes.dial()],
+      await account?.accessToken(saved.hostId),
+    );
     running.child.stdin?.end(`${digits}\n`);
     ({ stdout } = await running);
   } catch (error) {

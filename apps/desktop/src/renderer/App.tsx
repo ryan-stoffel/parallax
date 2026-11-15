@@ -103,6 +103,7 @@ import { attentionOf } from "./attention";
 import { WorkingMark } from "./AttentionMark";
 import {
   useAccountAlarms,
+  useAccountMoveNotices,
   useConnectNotices,
   useRelayCapNotices,
   useConnectionAlarms,
@@ -817,6 +818,7 @@ export function App() {
   useOutdatedAlarms(listed);
   useHostUpdateAlarms(hosts);
   useAccountAlarms();
+  useAccountMoveNotices();
   useConnectNotices();
   useRelayCapNotices();
   useUpdateAlarms();

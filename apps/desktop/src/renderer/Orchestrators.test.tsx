@@ -133,6 +133,7 @@ beforeEach(() => {
   window.parallax = {
     onHostUpdate: () => () => {},
     onProfile: () => () => {},
+    onAccountMove: () => () => {},
     onConnectNotice: () => () => {},
     onRelayUsage: () => () => {},
     platform: "darwin",

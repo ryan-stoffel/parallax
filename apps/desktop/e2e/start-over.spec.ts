@@ -170,7 +170,8 @@ test("a removed device, then a read-only one, starts over with a new key and get
   const host = mini.page;
   await expect.poll(() => status(host, "local")).toBe("connected");
   const onMini = await attach(mini.dataDir);
-  await onMini("relay/sign", { tokenHash: "hash", userId: USER });
+  // The app that signs it in names the account and its instance, as one since PLX-1465 does.
+  await onMini("relay/sign", { tokenHash: "hash", userId: USER, issuer: fake.issuer });
   await onMini("host/settings/set", { remote: true, relay: true, deviceName: "mini" });
   await expect.poll(() => onMini("remote/sessions", {})).toMatchObject({ listening: true });
   const { hostId: relayId } = await onMini<{ hostId: string }>("relay/id", {});

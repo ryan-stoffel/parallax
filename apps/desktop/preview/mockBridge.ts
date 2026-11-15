@@ -6,6 +6,7 @@ import { pullRequestHandlers } from "./pullRequests";
 import {
   iconFor,
   type AccessPrompt,
+  type AccountMove,
   type ConnectionState,
   type ConnectState,
   type DeviceHost,
@@ -2179,6 +2180,35 @@ let localName = "macbook";
 const localNameListeners = new Set<(name: string) => void>();
 const connectionListeners = new Set<(hostId: string, state: ConnectionState) => void>();
 
+// `#accountmove=<step>` shows the move to production accounts (PLX-1465) at that step: `signin`
+// asks for the sign-in, `moving` has one computer moved and two moving, `waiting` has one waiting
+// for the next try, and `done` is the end.
+const moveDemo = new URLSearchParams(location.hash.slice(1)).get("accountmove");
+const moveSteps: Record<string, AccountMove> = {
+  signin: { signedIn: false, moved: [], moving: [], waiting: [], done: false },
+  moving: {
+    signedIn: true,
+    moved: ["MacBook Pro"],
+    moving: ["Mac mini", "Windows laptop"],
+    waiting: [],
+    done: false,
+  },
+  waiting: {
+    signedIn: true,
+    moved: ["MacBook Pro", "Mac mini"],
+    moving: [],
+    waiting: ["Windows laptop"],
+    done: false,
+  },
+  done: {
+    signedIn: true,
+    moved: ["MacBook Pro", "Mac mini", "Windows laptop"],
+    moving: [],
+    waiting: [],
+    done: true,
+  },
+};
+
 // `#update` makes the app one that updates, for Settings > About's updates card (PLX-1522): a
 // check takes a second and finds nothing. `#update=available` finds a release, which the next
 // press downloads; `#update=failed` fails the check; `#update=unsupported` is a build that can't
@@ -2682,6 +2712,11 @@ export const mockBridge: ParallaxBridge = {
   },
   accountMoved: () => delay(location.hash.includes("moved")),
   // The browser's sign-in, done a moment later.
+  onAccountMove: (listener) => {
+    const step = moveDemo && moveSteps[moveDemo];
+    if (step) setTimeout(() => listener(step), 500);
+    return () => {};
+  },
   onConnectNotice: () => () => {},
   onRelayUsage: () => () => {},
   signIn: async () => {

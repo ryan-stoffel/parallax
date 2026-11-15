@@ -1,7 +1,7 @@
 import { t } from "i18next";
 import { useCallback, useEffect, useRef } from "react";
 
-import type { ConnectNotice, ConnectionState, Profile } from "../preload/bridge";
+import type { AccountMove, ConnectNotice, ConnectionState, Profile } from "../preload/bridge";
 import type { AgentRun, InboxItem, RelayHost, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
 import { onConnectionShown, useShownConnections } from "./ConnectionStatus";
@@ -384,6 +384,73 @@ export function useConnectNotices() {
       }),
     [],
   );
+}
+
+/**
+ * What the move of the user's computers to their production account says (PLX-1465): a sign-in
+ * first, then which computers moved, are moving, and wait for the next try, and once none are
+ * left, that the user's other devices sign in again.
+ */
+export function accountMoveNotice(move: AccountMove): Notice & { key: string } {
+  const key = "accountMove";
+  if (!move.signedIn)
+    return {
+      key,
+      tone: "attention",
+      title: t("Move your computers"),
+      body: t(
+        "Parallax accounts moved. Sign in once, and Parallax moves your computers. They keep working until then.",
+      ),
+      action: { label: t("Sign in"), run: () => void window.parallax.signIn(false) },
+    };
+  const list = new Intl.ListFormat(locale(), { type: "conjunction" });
+  const names = (each: string[]) => ({ names: list.format(each) });
+  const moved = move.moved.length ? [t("Moved: {{names}}.", names(move.moved))] : [];
+  if (move.done)
+    return {
+      key,
+      tone: "success",
+      title: t("Your computers moved"),
+      body: [...moved, t("Sign in again on your phone and your other devices.")].join(" "),
+    };
+  const total = move.moved.length + move.moving.length + move.waiting.length;
+  return {
+    key,
+    tone: "info",
+    sticky: true,
+    title: t("Moving your computers"),
+    body: [
+      ...moved,
+      ...(move.moving.length ? [t("Moving: {{names}}.", names(move.moving))] : []),
+      ...(move.waiting.length
+        ? [
+            t(
+              "Waiting: {{names}}. Each moves the next time Parallax reaches it.",
+              names(move.waiting),
+            ),
+          ]
+        : []),
+    ].join(" "),
+    ...(move.moving.length && {
+      progress: { percent: Math.round((100 * move.moved.length) / total) },
+    }),
+  };
+}
+
+/** Shows the move to production while it lasts, and closes it on sign-out (PLX-1465). */
+export function useAccountMoveNotices() {
+  useEffect(() => {
+    const stopMove = window.parallax.onAccountMove((move) =>
+      move ? notify(accountMoveNotice(move)) : dismiss("accountMove"),
+    );
+    const stopProfile = window.parallax.onProfile((profile) => {
+      if (!profile) dismiss("accountMove");
+    });
+    return () => {
+      stopMove();
+      stopProfile();
+    };
+  }, []);
 }
 
 /** What to say about `host`'s traffic through Parallax Relay today, if anything. */
