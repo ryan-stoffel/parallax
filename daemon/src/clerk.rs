@@ -13,19 +13,22 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::warn;
 
-/// The Clerk instance the desktop app signs in with by default (0067): the development instance,
-/// until the move to production's, `https://clerk.parallax.codes`, ships (PLX-1465).
-/// `PLXD_CLERK_ISSUER` names another.
-pub const DEFAULT_ISSUER: &str = DEVELOPMENT_ISSUER;
+/// The Clerk instance the apps sign in with by default (0067): production's. `PLXD_CLERK_ISSUER`
+/// names another.
+pub const DEFAULT_ISSUER: &str = "https://clerk.parallax.codes";
 
 /// Clerk's development instance, the only one before plxd kept the issuer with its account, so an
-/// account recorded without one is on it (PLX-1049).
+/// account recorded without one is on it (PLX-1049). plxd still takes its tokens, as the legacy
+/// instance's, for the computers that haven't moved to production yet (PLX-1465).
 pub const DEVELOPMENT_ISSUER: &str = "https://adjusted-mastodon-8705.clerk.accounts.dev";
 
-/// The desktop app's OAuth application, whose access tokens count: the development instance's
-/// until PLX-1465 (production's is `mp9Q72aAbB0LC83O`). `PLXD_CLERK_CLIENT_IDS` lists others,
-/// separated by commas.
-pub const DEFAULT_CLIENT_ID: &str = "SXDueyOLOJ2v4Vmq";
+/// The desktop app's OAuth application on production, whose access tokens count.
+/// `PLXD_CLERK_CLIENT_IDS` lists others, separated by commas.
+pub const DEFAULT_CLIENT_ID: &str = "mp9Q72aAbB0LC83O";
+
+/// The desktop app's OAuth application on the development instance.
+/// `PLXD_CLERK_LEGACY_CLIENT_IDS` lists others, separated by commas.
+pub const DEVELOPMENT_CLIENT_ID: &str = "SXDueyOLOJ2v4Vmq";
 
 /// Clock skew allowed on `exp` and `nbf`, as clerk-verify's.
 const SKEW_SECONDS: f64 = 5.0;
@@ -62,6 +65,29 @@ impl Config {
     /// lists), else the desktop app's instance and application, and no browser.
     #[must_use]
     pub fn from_env() -> Self {
+        Self::read(
+            "PLXD_CLERK_ISSUER",
+            "PLXD_CLERK_CLIENT_IDS",
+            DEFAULT_ISSUER,
+            DEFAULT_CLIENT_ID,
+        )
+    }
+
+    /// The legacy instance, whose accounts are moving to the home one (PLX-1465):
+    /// `PLXD_CLERK_LEGACY_ISSUER` and `PLXD_CLERK_LEGACY_CLIENT_IDS`, else the development
+    /// instance and the desktop app's application there. None when it's the home instance.
+    #[must_use]
+    pub fn legacy_from_env() -> Option<Self> {
+        let legacy = Self::read(
+            "PLXD_CLERK_LEGACY_ISSUER",
+            "PLXD_CLERK_LEGACY_CLIENT_IDS",
+            DEVELOPMENT_ISSUER,
+            DEVELOPMENT_CLIENT_ID,
+        );
+        (legacy.issuer != Self::from_env().issuer).then_some(legacy)
+    }
+
+    fn read(issuer: &str, client_ids: &str, default_issuer: &str, default_client: &str) -> Self {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         let list = |value: String| -> Vec<String> {
             value
@@ -72,9 +98,8 @@ impl Config {
                 .collect()
         };
         Self {
-            issuer: var("PLXD_CLERK_ISSUER").unwrap_or_else(|| DEFAULT_ISSUER.to_owned()),
-            client_ids: var("PLXD_CLERK_CLIENT_IDS")
-                .map_or_else(|| vec![DEFAULT_CLIENT_ID.to_owned()], list),
+            issuer: var(issuer).unwrap_or_else(|| default_issuer.to_owned()),
+            client_ids: var(client_ids).map_or_else(|| vec![default_client.to_owned()], list),
             authorized_parties: var("PLXD_CLERK_AUTHORIZED_PARTIES")
                 .map(list)
                 .unwrap_or_default(),
@@ -88,6 +113,8 @@ pub type Keys = HashMap<String, (Vec<u8>, Vec<u8>)>;
 /// Whom a token speaks for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Verified {
+    /// The Clerk instance that issued it, `iss`.
+    pub issuer: String,
     /// The Clerk user id, `sub`.
     pub user_id: String,
     /// When it was issued, in seconds since the epoch, if it says.
@@ -143,6 +170,14 @@ fn object(part: &str) -> Option<Map<String, Value>> {
         Value::Object(map) => Some(map),
         _ => None,
     }
+}
+
+/// The instance a token names, `iss`, without checking it: for a token a trusted caller handed plxd
+/// to register with.
+#[must_use]
+pub fn issuer_of(token: &str) -> Option<String> {
+    let body = token.split('.').nth(1)?;
+    object(body)?.get("iss")?.as_str().map(str::to_owned)
 }
 
 /// The user a token names, `sub`, without checking it: for a token a trusted caller handed plxd
@@ -208,20 +243,28 @@ pub fn check(jwt: &Jwt, keys: &Keys, config: &Config, now: f64) -> Result<Verifi
         }
     }
     Ok(Verified {
+        issuer: config.issuer.clone(),
         user_id: user.to_owned(),
         issued_at: number("iat"),
     })
 }
 
-/// plxd's own checks of a sign-in's token (0091): it is `account`'s, and was issued within
+/// plxd's own checks of a sign-in's token (0091): it is the token of one of `accounts`, each an
+/// instance's issuer and a user id there, and was issued within
 /// [`FRESH_SECONDS`] of `now` by this computer's clock, with [`CLOCK_SKEW`] either way.
 /// Never by the relay's clock, which a compromised relay could use to make an old token look fresh.
 ///
 /// # Errors
 ///
 /// Why it doesn't count, for the log.
-pub fn check_sign_in(verified: &Verified, account: &str, now: f64) -> Result<(), &'static str> {
-    if verified.user_id != account {
+pub fn check_sign_in(
+    verified: &Verified,
+    accounts: &[(String, String)],
+    now: f64,
+) -> Result<(), &'static str> {
+    let mine =
+        |(issuer, user): &(String, String)| *issuer == verified.issuer && *user == verified.user_id;
+    if !accounts.iter().any(mine) {
         return Err("a token for another account");
     }
     let Some(issued) = verified.issued_at else {
@@ -258,43 +301,72 @@ struct Cache {
     failed: Option<Instant>,
 }
 
-/// Checks account tokens against the Clerk instance's JWKS, which it fetches when a check first
-/// needs it and keeps for its `max-age`, at least [`REFETCH`], or [`TTL`] without one, as
-/// `packages/clerk-verify` does. A token naming a key it lacks refetches it, at most once per
-/// [`REFETCH`]. While the JWKS is out of reach, the keys it has still count, and a failed fetch
-/// isn't tried again for [`REFETCH`] even with none, so strangers' tokens can't keep the lock busy.
+/// Checks account tokens against their Clerk instance's JWKS: the home instance's, and while
+/// accounts move from it, the legacy one's (PLX-1465). A token's `iss` picks which.
 pub(crate) struct Clerk {
-    config: Config,
-    /// Held across a fetch, so checks waiting on it share it.
-    keys: Mutex<Cache>,
+    home: Instance,
+    legacy: Option<Instance>,
 }
 
 impl std::fmt::Debug for Clerk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Clerk")
-            .field("config", &self.config)
-            .finish_non_exhaustive()
+            .field("home", &self.home.config)
+            .field("legacy", &self.legacy.as_ref().map(|legacy| &legacy.config))
+            .finish()
     }
 }
 
 impl Clerk {
-    pub(crate) fn new(config: Config) -> Self {
+    pub(crate) fn new(home: Config, legacy: Option<Config>) -> Self {
+        Self {
+            home: Instance::new(home),
+            legacy: legacy.map(Instance::new),
+        }
+    }
+
+    /// The home instance's issuer, which accounts move to.
+    pub(crate) fn issuer(&self) -> &str {
+        &self.home.config.issuer
+    }
+
+    /// The legacy instance's issuer, while plxd still takes its tokens.
+    pub(crate) fn legacy_issuer(&self) -> Option<&str> {
+        self.legacy
+            .as_ref()
+            .map(|legacy| legacy.config.issuer.as_str())
+    }
+
+    /// Whom `token` speaks for, at `now`, after every check of [`check`] by the instance it names.
+    pub(crate) async fn verify(&self, token: &str, now: f64) -> Result<Verified, &'static str> {
+        let jwt = Jwt::parse(token)?;
+        let named = jwt.claims.get("iss").and_then(Value::as_str);
+        let instance = match &self.legacy {
+            Some(legacy) if named == Some(legacy.config.issuer.as_str()) => legacy,
+            _ => &self.home,
+        };
+        let keys = instance.keys(&jwt.kid).await?;
+        check(&jwt, &keys, &instance.config, now)
+    }
+}
+
+/// One Clerk instance: which of its tokens count, and its JWKS, which it fetches when a check
+/// first needs it and keeps for its `max-age`, at least [`REFETCH`], or [`TTL`] without one, as
+/// `packages/clerk-verify` does. A token naming a key it lacks refetches it, at most once per
+/// [`REFETCH`]. While the JWKS is out of reach, the keys it has still count, and a failed fetch
+/// isn't tried again for [`REFETCH`] even with none, so strangers' tokens can't keep the lock busy.
+struct Instance {
+    config: Config,
+    /// Held across a fetch, so checks waiting on it share it.
+    keys: Mutex<Cache>,
+}
+
+impl Instance {
+    fn new(config: Config) -> Self {
         Self {
             config,
             keys: Mutex::default(),
         }
-    }
-
-    /// The issuer whose tokens count, which the host's account is recorded under.
-    pub(crate) fn issuer(&self) -> &str {
-        &self.config.issuer
-    }
-
-    /// Whom `token` speaks for, at `now`, after every check of [`check`].
-    pub(crate) async fn verify(&self, token: &str, now: f64) -> Result<Verified, &'static str> {
-        let jwt = Jwt::parse(token)?;
-        let keys = self.keys(&jwt.kid).await?;
-        check(&jwt, &keys, &self.config, now)
     }
 
     /// The signing keys, fetched again when they're old, or lack `kid` and weren't just fetched.
@@ -520,27 +592,41 @@ mod tests {
     #[test]
     fn a_sign_in_needs_this_accounts_token_issued_lately_by_this_clock() {
         let at = |iat: Option<f64>| Verified {
+            issuer: ISSUER.to_owned(),
             user_id: "user_1".to_owned(),
             issued_at: iat,
         };
-        assert_eq!(check_sign_in(&at(Some(NOW)), "user_1", NOW), Ok(()));
+        let account = |issuer: &str, user: &str| vec![(issuer.to_owned(), user.to_owned())];
+        let mine = account(ISSUER, "user_1");
+        assert_eq!(check_sign_in(&at(Some(NOW)), &mine, NOW), Ok(()));
         assert_eq!(
-            check_sign_in(&at(Some(NOW)), "user_2", NOW),
+            check_sign_in(&at(Some(NOW)), &account(ISSUER, "user_2"), NOW),
             Err("a token for another account")
         );
+        // The same user id on another instance is another account (PLX-1049).
         assert_eq!(
-            check_sign_in(&at(None), "user_1", NOW),
+            check_sign_in(
+                &at(Some(NOW)),
+                &account("https://other.example", "user_1"),
+                NOW
+            ),
+            Err("a token for another account")
+        );
+        let moving = [account("https://other.example", "user_9"), mine.clone()].concat();
+        assert_eq!(check_sign_in(&at(Some(NOW)), &moving, NOW), Ok(()));
+        assert_eq!(
+            check_sign_in(&at(None), &mine, NOW),
             Err("a token without its issue time")
         );
         // 60 s, plus 5 minutes of skew either way.
-        assert_eq!(check_sign_in(&at(Some(NOW - 359.0)), "user_1", NOW), Ok(()));
+        assert_eq!(check_sign_in(&at(Some(NOW - 359.0)), &mine, NOW), Ok(()));
         assert_eq!(
-            check_sign_in(&at(Some(NOW - 361.0)), "user_1", NOW),
+            check_sign_in(&at(Some(NOW - 361.0)), &mine, NOW),
             Err("a token issued too long ago")
         );
-        assert_eq!(check_sign_in(&at(Some(NOW + 299.0)), "user_1", NOW), Ok(()));
+        assert_eq!(check_sign_in(&at(Some(NOW + 299.0)), &mine, NOW), Ok(()));
         assert_eq!(
-            check_sign_in(&at(Some(NOW + 301.0)), "user_1", NOW),
+            check_sign_in(&at(Some(NOW + 301.0)), &mine, NOW),
             Err("a token issued in the future")
         );
     }
@@ -570,6 +656,48 @@ mod tests {
         (url, hits)
     }
 
+    /// While accounts move to production (PLX-1465), a token is checked by the instance it names,
+    /// against that instance's keys and applications, and says which it was.
+    #[tokio::test]
+    async fn a_token_is_checked_by_the_instance_it_names() {
+        const LEGACY: &str = "https://legacy.example";
+        let legacy = Config {
+            issuer: LEGACY.to_owned(),
+            client_ids: vec!["legacy-app".to_owned()],
+            authorized_parties: Vec::new(),
+        };
+        let clerk = Clerk::new(config(), Some(legacy));
+        for instance in [&clerk.home, clerk.legacy.as_ref().unwrap()] {
+            instance.keys.lock().await.set = Some(KeySet {
+                at: Instant::now(),
+                ttl: TTL,
+                keys: keys(),
+            });
+        }
+        let home = clerk.verify(&session(|_| {}), NOW).await.unwrap();
+        assert_eq!(home.issuer, ISSUER);
+        let old = session(|c| drop(c.insert("iss".into(), json!(LEGACY))));
+        let old = clerk.verify(&old, NOW).await.unwrap();
+        assert_eq!(
+            (old.issuer.as_str(), old.user_id.as_str()),
+            (LEGACY, "user_1")
+        );
+        // Each instance takes only its own applications' access tokens.
+        let app = |iss: &str, client: &str| {
+            session(|c| {
+                c.remove("sid");
+                c.insert("iss".into(), json!(iss));
+                c.insert("client_id".into(), json!(client));
+            })
+        };
+        assert!(clerk.verify(&app(LEGACY, "legacy-app"), NOW).await.is_ok());
+        assert!(clerk.verify(&app(LEGACY, "desktop"), NOW).await.is_err());
+        assert!(clerk.verify(&app(ISSUER, "legacy-app"), NOW).await.is_err());
+        // A third instance's token is the home instance's to refuse.
+        let third = session(|c| drop(c.insert("iss".into(), json!("https://evil"))));
+        assert_eq!(clerk.verify(&third, NOW).await, Err("the wrong issuer"));
+    }
+
     #[tokio::test]
     async fn a_failed_key_fetch_waits_before_the_next_even_with_no_keys_and_max_age_counts() {
         use std::sync::atomic::Ordering;
@@ -577,7 +705,7 @@ mod tests {
             "HTTP/1.1 500 Oops\r\nContent-Length: 0\r\n\r\n".to_owned(),
         ));
         let (issuer, hits) = jwks_server(std::sync::Arc::clone(&answer)).await;
-        let clerk = Clerk::new(Config { issuer, ..config() });
+        let clerk = Instance::new(Config { issuer, ..config() });
         for _ in 0..3 {
             assert_eq!(
                 clerk.keys("k1").await.err(),

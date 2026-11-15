@@ -51,6 +51,7 @@ use crate::you_sync::{TABS, body, list, write};
 
 #[cfg(feature = "host-routing-proof")]
 mod host_proof;
+mod moving;
 mod proxied;
 
 async fn set_relay(client: &mut Client, on: bool) {
@@ -75,6 +76,7 @@ async fn sign(client: &mut Client, token: &str) -> parallax_protocol::RelaySignR
         .call::<RelaySign>(RelaySignParams {
             token_hash: hash,
             user_id: None,
+            issuer: None,
         })
         .await
         .unwrap()

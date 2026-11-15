@@ -705,6 +705,12 @@ export type ParallaxRequests = {
 	 */
 	"relay/sign": { params: RelaySignParams, result: RelaySignResult },
 	/**
+	 * `relay/move`: moves this host to the same user's production account, which it trusts
+	 * beside the development one from then on, on the relay too (PLX-1465). An older plxd
+	 * answers it as an unknown method.
+	 */
+	"relay/move": { params: RelayMoveParams, result: RelayMoveResult },
+	/**
 	 * `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
 	 */
 	"relay/hosts": { params: RelayHostsParams, result: RelayHostsResult },
@@ -1320,6 +1326,7 @@ export const REQUEST_METHODS = [
 	"remote/revoke",
 	"relay/register",
 	"relay/sign",
+	"relay/move",
 	"relay/hosts",
 	"relay/check",
 	"relay/remove",
@@ -9094,7 +9101,33 @@ export type RelaySignParams = {
 	 * trusted connection's caller sets it, never the relay.
 	 */
 	userId?: string,
+	/**
+	 * The Clerk instance that user is on, by its issuer (PLX-1465). Absent, as from a caller
+	 * before then, is the development instance.
+	 */
+	issuer?: string,
 };
+
+/**
+ * Params of `relay/move` (PLX-1465): moves this host from the account it's on to the same user's
+ * production account, on the relay and here.
+ */
+export type RelayMoveParams = {
+	/**
+	 * A token of the production account, which plxd checks against production's keys and then
+	 * trusts beside the account it's on. Sent to the relay once and not kept.
+	 */
+	token: string,
+	/**
+	 * A token of the account the host is on now, which the relay checks. Not kept.
+	 */
+	from: string,
+};
+
+/**
+ * Result of `relay/move`.
+ */
+export type RelayMoveResult = Record<symbol, never>;
 
 /**
  * Params of `relay/hosts`: the hosts the signed-in user has on Parallax Relay.

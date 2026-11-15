@@ -74,6 +74,11 @@ const RELAY_ACCOUNT: &str = "relay_account";
 /// The `host_settings` key for the Clerk instance that account is on, by issuer (PLX-1049).
 const RELAY_ACCOUNT_ISSUER: &str = "relay_account_issuer";
 
+/// The `host_settings` keys for a second account this host trusts, its user id and issuer, while
+/// it moves from one Clerk instance to another (PLX-1465).
+const RELAY_ACCOUNT_ALSO: &str = "relay_account_also";
+const RELAY_ACCOUNT_ALSO_ISSUER: &str = "relay_account_also_issuer";
+
 /// The `host_settings` key for the account's approved and removed client keys and approved host
 /// ids, as plxd's JSON (0091).
 const ACCOUNT_ACCESS: &str = "account_access";
@@ -487,23 +492,27 @@ impl Store {
         self.set_text(REMOTE_SESSIONS, sessions)
     }
 
-    /// The Clerk user id this host registered with the relay under, if it has (0091), and on the
-    /// instance `issuer`. One recorded before plxd kept the instance is on `unrecorded`. One on
-    /// another instance is none: its tokens can't be checked here (PLX-1049).
+    /// The accounts this host trusts, each a Clerk instance's issuer and a user id there: the one
+    /// it registered with the relay under, if it has (0091), then, while it moves to another
+    /// instance, the other (PLX-1465). One recorded before plxd kept the instance is on
+    /// `unrecorded` (PLX-1049).
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn relay_account(
-        &self,
-        issuer: &str,
-        unrecorded: &str,
-    ) -> Result<Option<String>, StoreError> {
-        let recorded = self.text(RELAY_ACCOUNT_ISSUER)?;
-        if recorded.as_deref().unwrap_or(unrecorded) != issuer {
-            return Ok(None);
+    pub fn relay_accounts(&self, unrecorded: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let mut accounts = Vec::new();
+        if let Some(user) = self.text(RELAY_ACCOUNT)? {
+            let issuer = self.text(RELAY_ACCOUNT_ISSUER)?;
+            accounts.push((issuer.unwrap_or_else(|| unrecorded.to_owned()), user));
+            if let (Some(user), Some(issuer)) = (
+                self.text(RELAY_ACCOUNT_ALSO)?,
+                self.text(RELAY_ACCOUNT_ALSO_ISSUER)?,
+            ) {
+                accounts.push((issuer, user));
+            }
         }
-        self.text(RELAY_ACCOUNT)
+        Ok(accounts)
     }
 
     /// Marks the usage from the end of the last claim to `until` reported, and returns it with an
@@ -556,14 +565,23 @@ impl Store {
         Ok(())
     }
 
-    /// Records the Clerk user id this host registered under, on the instance `issuer`.
+    /// Records the accounts this host trusts, as [`Store::relay_accounts`] answers them: the one
+    /// it registered under, then at most one more. None forgets them.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn set_relay_account(&self, user: &str, issuer: &str) -> Result<(), StoreError> {
-        self.set_text(RELAY_ACCOUNT, Some(user))?;
-        self.set_text(RELAY_ACCOUNT_ISSUER, Some(issuer))
+    pub fn set_relay_accounts(&self, accounts: &[(String, String)]) -> Result<(), StoreError> {
+        let mut each = accounts.iter();
+        for (user, issuer) in [
+            (RELAY_ACCOUNT, RELAY_ACCOUNT_ISSUER),
+            (RELAY_ACCOUNT_ALSO, RELAY_ACCOUNT_ALSO_ISSUER),
+        ] {
+            let account = each.next();
+            self.set_text(user, account.map(|(_, u)| u.as_str()))?;
+            self.set_text(issuer, account.map(|(i, _)| i.as_str()))?;
+        }
+        Ok(())
     }
 
     /// Who may sign in with the account, as plxd's JSON, if anyone was approved or removed (0091).
@@ -806,27 +824,33 @@ mod tests {
         assert!(store.remote().unwrap());
     }
 
-    /// The account counts only on the Clerk instance it was recorded on (PLX-1049), and one from
-    /// before plxd kept the instance is on the one named for it: the development instance.
+    /// One account recorded before plxd kept the instance is on the one named for it, the
+    /// development instance (PLX-1049), and a second is kept beside it while it moves (PLX-1465).
     #[test]
-    fn the_relay_account_is_none_on_another_clerk_instance() {
+    fn the_relay_accounts_keep_their_instances() {
         const DEV: &str = "https://adjusted-mastodon-8705.clerk.accounts.dev";
         const PROD: &str = "https://clerk.parallax.codes";
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        let account = |issuer| store.relay_account(issuer, DEV).unwrap();
+        let account = |issuer: &str, user: &str| (issuer.to_owned(), user.to_owned());
+        assert_eq!(store.relay_accounts(DEV).unwrap(), []);
         store
             .set_text(super::RELAY_ACCOUNT, Some("user_old"))
             .unwrap();
-        assert_eq!(account(DEV).as_deref(), Some("user_old"));
-        assert_eq!(account(PROD), None);
+        assert_eq!(
+            store.relay_accounts(DEV).unwrap(),
+            [account(DEV, "user_old")]
+        );
 
-        store.set_relay_account("user_dev", DEV).unwrap();
-        assert_eq!(account(DEV).as_deref(), Some("user_dev"));
-        assert_eq!(account(PROD), None);
-
-        store.set_relay_account("user_prod", PROD).unwrap();
-        assert_eq!(account(PROD).as_deref(), Some("user_prod"));
-        assert_eq!(account(DEV), None);
+        let moving = [account(DEV, "user_dev"), account(PROD, "user_prod")];
+        store.set_relay_accounts(&moving).unwrap();
+        assert_eq!(store.relay_accounts(DEV).unwrap(), moving);
+        store.set_relay_accounts(&moving[1..]).unwrap();
+        assert_eq!(
+            store.relay_accounts(DEV).unwrap(),
+            [account(PROD, "user_prod")]
+        );
+        store.set_relay_accounts(&[]).unwrap();
+        assert_eq!(store.relay_accounts(DEV).unwrap(), []);
     }
 }

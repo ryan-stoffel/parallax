@@ -101,6 +101,7 @@ beforeEach(() => {
   };
   window.parallax = {
     onProfile: () => () => {},
+    onAccountMove: () => () => {},
     onConnectNotice: () => () => {},
     onRelayUsage: () => () => {},
     platform: "darwin",

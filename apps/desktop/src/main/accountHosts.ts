@@ -54,12 +54,18 @@ export const isRelayId = (value: unknown): value is string =>
  * token from Clerk itself, and only passes the id to a plxd it trusts (`relay/sign`). Undefined
  * for anything that isn't a JWT with one.
  */
-export function tokenSubject(token: string): string | undefined {
+export const tokenSubject = (token: string) => claim(token, "sub");
+
+/** A Clerk token's instance, its JWT's `iss`, read as [`tokenSubject`] reads `sub` (PLX-1465). */
+export const tokenIssuer = (token: string) => claim(token, "iss");
+
+function claim(token: string, name: string): string | undefined {
   try {
-    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString()) as {
-      sub?: unknown;
-    };
-    return typeof payload.sub === "string" && payload.sub ? payload.sub : undefined;
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1] ?? "", "base64url").toString(),
+    ) as Record<string, unknown>;
+    const value = payload[name];
+    return typeof value === "string" && value ? value : undefined;
   } catch {
     return undefined;
   }

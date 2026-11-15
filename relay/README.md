@@ -75,7 +75,7 @@ Production is Ryan's to deploy, by hand. No workflow deploys it, and agents don'
    - `CLERK_CLIENT_IDS`: the desktop OAuth application's client id on each, in the same order: `mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq`.
    - `CLERK_AUTHORIZED_PARTIES` isn't set: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
 
-   A token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. The apps sign in to the development instance until the account move ships (PLX-1465). Remove it from `wrangler.toml` only once the move has shipped, the probe's account is on production (PLX-1457), and a stable release carries both.
+   A token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. The apps sign in to production, and the development instance stays for computers that haven't moved to it yet (PLX-1465). Remove it from `wrangler.toml` only once they have, the probe's account is on production (PLX-1457), and a stable release carries both.
 
 ### When to deploy
 

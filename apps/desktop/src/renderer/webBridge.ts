@@ -835,6 +835,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
 
     onProfile: (listener) => (listener(null), () => {}),
     accountMoved: async () => false,
+    onAccountMove: () => () => {},
     onConnectNotice: () => () => {},
     onRelayUsage: () => () => {},
     signIn: async () => notHere(),

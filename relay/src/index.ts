@@ -18,6 +18,8 @@
  * - `/v1/hooks/<id>/<hookId>/<token>` goes to plxd over its WebSocket, or is held while it's away.
  * - A plxd's statement that a device is removed goes, unread and unkept, to its user's other online
  *   plxds over their WebSockets, and they check its signature (0091).
+ * - A host moves to another account of its user, on another Clerk instance, with
+ *   `POST /v1/hosts/<id>/move`, proven by both accounts' tokens and the host key (PLX-1465).
  * - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, which frees its slot and lists it
  *   as `removed` in `GET /v1/hosts` until it registers under them again (PLX-1351).
  * - Mobile devices register for push at `/v1/devices`.
@@ -38,6 +40,7 @@ import {
   TIME_HEADER,
 } from "./host";
 import { logged, scrub, short } from "./log";
+import { moveHost } from "./move";
 import { streamObject, StreamRelay } from "./stream";
 import { UserAccount } from "./user";
 
@@ -317,6 +320,9 @@ const routes = {
         await account.joined(hostId);
         return json(200, result);
       }
+      case "POST /hosts/:id/move":
+        if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
+        return moveHost(env, request, id, user, token);
       case "GET /hosts":
         return listHosts(env, user);
       case "DELETE /hosts/:id": {

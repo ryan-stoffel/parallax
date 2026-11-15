@@ -47,3 +47,7 @@ Clerk offers three ways in for a desktop app:
 - An access token can't be revoked before it expires (a day). The relay, which must cut off a user sooner, can verify with Clerk's API instead.
 - Signing out is local, as in 0037. Password reset, email changes, and pictures now come with Clerk's pages. Account deletion isn't built.
 - `@supabase/auth-js` and the app's own sign-in page are gone.
+
+## Amended 2026-11-14 (PLX-1465)
+
+Production is the default for the desktop app, the phone, `plx`, and plxd, and existing computers move to it without being set up again. The desktop app keeps a development session it finds as a second session, and stays signed in with it. It asks the user to sign in to production once, then moves each computer the development account still lists that it can reach ([0091](0091-connect-over-relay.md)), and tries the rest again later. Until a computer moves, the development session keeps reaching it. The development session goes once none are left. plxd takes production's tokens and, as the legacy instance, development's (`PLXD_CLERK_LEGACY_ISSUER` and `PLXD_CLERK_LEGACY_CLIENT_IDS`), each checked by the instance its `iss` names. The phone signs out of a development session and asks the user to sign in again.

@@ -62,6 +62,7 @@ use tracing::{debug, info, warn};
 pub(crate) mod check;
 #[cfg(feature = "host-routing-proof")]
 mod host_proof;
+pub(crate) mod moving;
 mod proxy;
 #[cfg(all(feature = "host-routing-proof", not(debug_assertions)))]
 compile_error!("host-routing-proof is for disposable debug builds only");
@@ -1243,18 +1244,25 @@ async fn on_unless_chosen(daemon: &Daemon) {
 /// `relay/sign`: this host's registration with the relay, signed with its key over `token_hash`,
 /// the SHA-256 of a Clerk session token that stays on another computer, which posts it with
 /// [`register`] (PLX-1146). Records `user`, the token's Clerk user that the caller names, as this
-/// host's account (0091). Turns `relay` on unless its user chose.
+/// host's account (0091), on the instance `issuer`, which a caller from before PLX-1465 doesn't
+/// name: its user is the development instance's. Turns `relay` on unless its user chose.
 pub(crate) async fn sign(
     daemon: &Daemon,
     token_hash: &str,
     user: Option<&str>,
+    issuer: Option<&str>,
 ) -> Result<RelaySignResult, String> {
     let key = signer(daemon).await.map_err(|e| e.to_string())?;
     let host_id = key.thumbprint();
     let (x, y) = key.coordinates();
     let signature = key.sign(register_message(&host_id, token_hash).as_bytes());
     if let Some(user) = user {
-        crate::server::remote::access::record_account(daemon, user).await?;
+        let legacy = daemon
+            .clerk
+            .legacy_issuer()
+            .unwrap_or(daemon.clerk.issuer());
+        let issuer = crate::server::remote::access::issuer_for(daemon, issuer, legacy);
+        crate::server::remote::access::record_account(daemon, user, &issuer).await?;
     }
     on_unless_chosen(daemon).await;
     Ok(RelaySignResult {
@@ -1291,6 +1299,7 @@ pub(crate) async fn register(
                 daemon,
                 &remote::base64url(&remote::sha256(token.as_bytes())),
                 None,
+                None,
             )
             .await?
         }
@@ -1315,7 +1324,13 @@ pub(crate) async fn register(
             info!(%host_id, own, "registered with the relay");
             if own {
                 if let Some(user) = crate::clerk::subject(token) {
-                    crate::server::remote::access::record_account(daemon, &user).await?;
+                    let named = crate::clerk::issuer_of(token);
+                    let issuer = crate::server::remote::access::issuer_for(
+                        daemon,
+                        named.as_deref(),
+                        daemon.clerk.issuer(),
+                    );
+                    crate::server::remote::access::record_account(daemon, &user, &issuer).await?;
                 }
                 relay.changed.notify_one();
             }
@@ -3308,7 +3323,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
         let stop = CancellationToken::new();
-        access::record_account(&daemon, "user").await.unwrap();
+        let issuer = daemon.clerk.issuer().to_owned();
+        access::record_account(&daemon, "user", &issuer)
+            .await
+            .unwrap();
         let computer = DpopKey::generate();
         let phone = DpopKey::generate().thumbprint();
         let tablet = DpopKey::generate().thumbprint();

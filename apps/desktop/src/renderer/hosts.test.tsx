@@ -52,6 +52,7 @@ beforeEach(() => {
   states = { local: connected, [mini.id]: untrusted };
   window.parallax = {
     onProfile: () => () => {},
+    onAccountMove: () => () => {},
     onConnectNotice: () => () => {},
     onKeyStanding: () => () => {},
     onRelayUsage: () => () => {},

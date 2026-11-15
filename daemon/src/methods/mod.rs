@@ -266,6 +266,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RemoteSessions => |p| remote::sessions(context, p),
         RelayRegister => |p| remote::register_relay(context, p),
         RelaySign => |p| remote::relay_sign(context, p),
+        RelayMove => |p| remote::relay_move(context, p),
         RelayHosts => |p| remote::relay_hosts(context, p),
         RelayCheck => |p| remote::relay_check(context, p),
         PeerComputers => |_| crate::linked::computers(context),

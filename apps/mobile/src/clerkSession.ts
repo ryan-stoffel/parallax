@@ -28,7 +28,7 @@ export async function refreshOrSignOut<T>(
 }
 
 /** What the sign-in screen says after a session from another Clerk instance is dropped. Shown with `t`. */
-export const MOVED = msg("Parallax accounts moved. Sign in again, then set up each computer again.");
+export const MOVED = msg("Parallax accounts moved. Sign in again.");
 
 /** The development instance's Frontend API, which issued every session saved before the phone kept one. */
 const DEVELOPMENT_API = "https://adjusted-mastodon-8705.clerk.accounts.dev";

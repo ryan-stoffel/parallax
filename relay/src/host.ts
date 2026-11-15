@@ -489,6 +489,20 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /**
+   * Moves this host from `from` to `user` (PLX-1465), whose tokens and the host key's signature
+   * `moveHost` checked. Its connections, streams, held webhooks, and counters stay. A host already
+   * `user`'s answers as moved, and one the relay doesn't know registers under `user`.
+   */
+  async move(from: string, user: string, hostId: string, jwk: HostJwk, name: string): Promise<Refusal | { hostId: string; name: string }> {
+    const owner = await this.owner();
+    if (owner && owner.user !== from && owner.user !== user) return { status: 409, error: "not_owner" };
+    this.tickets.clear();
+    const kept = owner?.name ?? name.replace(/\p{Cc}/gu, "").trim().slice(0, 64);
+    await this.ctx.storage.put<Owner>("owner", { user, hostId, jwk, name: kept });
+    return { hostId, name: kept };
+  }
+
+  /**
    * Removes this host, when it is `user`'s: closes its connections and forgets its registration,
    * webhook list, held webhooks, and traffic. Its key can register again. False when it isn't
    * theirs.

@@ -9,16 +9,16 @@ import { serveCallback, type Callback } from "./loopback";
 import { broadcast } from "./windows";
 
 // The Clerk instance that holds Parallax accounts (0067), named by its publishable key, and the
-// app's OAuth application there: the development instance's, until the move to production's
-// (`pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk`, `mp9Q72aAbB0LC83O`) ships (PLX-1465). Both are public.
-// PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID point a dev build at another instance.
+// app's OAuth application there: production's. Both are public. PLX_CLERK_PUBLISHABLE_KEY and
+// PLX_CLERK_CLIENT_ID point a dev build at another instance.
 const PUBLISHABLE_KEY =
-  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ??
-  "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
-const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "SXDueyOLOJ2v4Vmq";
+  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ?? "pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk";
+const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "mp9Q72aAbB0LC83O";
 
 /** The development instance's Frontend API, which issued every session saved before the app kept one. */
 const DEVELOPMENT_API = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+/** The app's OAuth application on the development instance. */
+const DEVELOPMENT_CLIENT_ID = "SXDueyOLOJ2v4Vmq";
 
 /** The Frontend API that issued a saved session (PLX-1049). */
 export const issuedBy = (saved: { api?: unknown }) =>
@@ -52,7 +52,8 @@ type User = {
 /**
  * What the app keeps, encrypted: the refresh token, the user, to show before Clerk answers, and
  * the Frontend API that issued them. One saved before the app kept it is the development
- * instance's, and kept. A session from another instance is signed out (PLX-1049).
+ * instance's (PLX-1049), which is kept beside production's until its computers move (PLX-1465).
+ * A session from any other instance is signed out.
  */
 type Session = { refreshToken: string; user: User; api: string };
 
@@ -104,19 +105,41 @@ export function passwordStore(
   return /kde|plasma/i.test(desktop) ? undefined : "gnome-libsecret";
 }
 
-/** The account's access token, for Parallax Relay (PLX-652). Main only: it never reaches a renderer. */
+/**
+ * The account's access token, for Parallax Relay (PLX-652). Main only: it never reaches a renderer.
+ * Each call takes the relay id of the computer it's for, if any: one still on the development
+ * account gets the development session's token while the account moves to production (PLX-1465).
+ */
 export type Account = {
-  accessToken(): Promise<string | undefined>;
-  currentToken(): string | undefined;
+  accessToken(hostId?: string): Promise<string | undefined>;
+  currentToken(hostId?: string): string | undefined;
   /**
    * A token just issued, for one sign-in to a computer on the account (0091), which takes one
    * issued in the last minute. It's never the one the relay gets, nor kept.
    */
-  freshToken(): Promise<string | undefined>;
+  freshToken(hostId?: string): Promise<string | undefined>;
   /** Calls `listener` each time someone signs in here. */
   onSignIn(listener: () => void): void;
   /** Whether the last refresh failed because Clerk didn't answer, rather than being signed out. */
   clerkUnreachable(): boolean;
+  /** The move from the development account to production, while there's one (PLX-1465). */
+  move: AccountMove;
+};
+
+/**
+ * The development session saved before the app moved to production (PLX-1465), kept until the
+ * computers on that account have moved. Until the user signs in to production, it's the account.
+ */
+export type AccountMove = {
+  /** Undefined with no development session. `hosts` are the computers it last listed. */
+  pending(): { hosts: string[]; signedIn: boolean } | undefined;
+  /** The development session's access token. */
+  developmentToken(): Promise<string | undefined>;
+  /**
+   * The computers the development account lists now. With production signed in and none left, the
+   * move is done and the development session goes.
+   */
+  listed(hosts: string[]): void;
 };
 
 /**
@@ -135,26 +158,44 @@ export function startAccount(): Account {
     safeStorage.isEncryptionAvailable() &&
     (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
 
+  const read = (from: string) => {
+    try {
+      const saved = persist && JSON.parse(safeStorage.decryptString(fs.readFileSync(from)));
+      return typeof saved?.refreshToken === "string" && saved.user ? saved : undefined;
+    } catch {
+      // None yet, or unreadable: signed out.
+      return undefined;
+    }
+  };
+  const write = (to: string, next: object | undefined) => {
+    if (next && persist)
+      fs.writeFileSync(to, safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
+    else if (!next) fs.rmSync(to, { force: true });
+  };
+
+  // The development session through the move to production (PLX-1465), with the computers its
+  // account last listed, in a file of its own.
+  const legacyFile = path.join(app.getPath("userData"), "account-development");
+  let legacy: (Session & { hosts: string[] }) | undefined = read(legacyFile);
+  const saveLegacy = (next: typeof legacy) => {
+    legacy = next;
+    write(legacyFile, next);
+  };
+
   let session: Session | undefined;
   // Whether launch dropped a session from another instance, so the app can say why it's signed
   // out. A sign-in clears it.
   let moved = false;
-  try {
-    const saved = persist && JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
-    if (typeof saved?.refreshToken === "string" && saved.user) {
-      if (issuedBy(saved) === api) session = { ...saved, api };
-      else moved = true;
-    }
-  } catch {
-    // None yet, or unreadable: signed out.
-  }
+  const saved = read(file);
+  if (saved && issuedBy(saved) === api) session = { ...saved, api };
+  else if (saved && issuedBy(saved) === DEVELOPMENT_API)
+    saveLegacy({ ...saved, api: DEVELOPMENT_API, hosts: [] });
+  else if (saved) moved = true;
   const save = (next: Session | undefined) => {
     session = next;
-    if (next && persist)
-      fs.writeFileSync(file, safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
     // Also clears a Supabase session left by an older build (0037), or one an older build saved
     // with `basic_text`.
-    else if (!next) fs.rmSync(file, { force: true });
+    write(file, next);
   };
   if (!session) save(undefined);
 
@@ -164,10 +205,10 @@ export function startAccount(): Account {
   let epoch = 0;
 
   /** Calls Clerk's token endpoint as the app's public client: an access token, maybe a refresh one. */
-  async function token(params: Record<string, string>) {
-    const res = await fetch(`${api}/oauth/token`, {
+  async function token(params: Record<string, string>, base = api, clientId = CLIENT_ID) {
+    const res = await fetch(`${base}/oauth/token`, {
       method: "POST",
-      body: new URLSearchParams({ client_id: CLIENT_ID, ...params }),
+      body: new URLSearchParams({ client_id: clientId, ...params }),
       signal: AbortSignal.timeout(15_000),
     });
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -211,7 +252,7 @@ export function startAccount(): Account {
         if (error instanceof ClerkError && error.revoked && epoch === held) {
           epoch++;
           save(undefined);
-          publish(null);
+          showAccount();
         }
         return undefined;
       }
@@ -231,6 +272,54 @@ export function startAccount(): Account {
       return access.token;
     })().finally(() => (refreshing = undefined));
     return refreshing;
+  }
+
+  // The development session's tokens, as the session's above, from its own instance.
+  let legacyAccess: { token: string; expiresAt: number } | undefined;
+  let legacyUnreachable = false;
+  let legacyTurn: Promise<unknown> = Promise.resolve();
+  function legacyRefresh(): Promise<{ token: string; expiresAt: number } | undefined> {
+    const next = legacyTurn.then(async () => {
+      const held = legacy;
+      legacyUnreachable = false;
+      if (!held) return undefined;
+      try {
+        const params = { grant_type: "refresh_token", refresh_token: held.refreshToken };
+        const fresh = await token(params, DEVELOPMENT_API, DEVELOPMENT_CLIENT_ID);
+        if (legacy !== held) return undefined;
+        if (fresh.refreshToken) saveLegacy({ ...held, refreshToken: fresh.refreshToken });
+        return fresh.access;
+      } catch (error) {
+        legacyUnreachable = !(error instanceof ClerkError) || error.down;
+        if (error instanceof ClerkError && error.revoked && legacy === held) {
+          saveLegacy(undefined);
+          showAccount();
+        }
+        return undefined;
+      }
+    });
+    legacyTurn = next;
+    return next;
+  }
+  async function legacyToken(): Promise<string | undefined> {
+    if (legacyAccess && legacyAccess.expiresAt - 60_000 > Date.now()) return legacyAccess.token;
+    legacyAccess = await legacyRefresh();
+    return legacyAccess?.token;
+  }
+  /** Whether a call for computer `hostId` takes the development session's token. */
+  const onDevelopment = (hostId?: string) =>
+    !!legacy && (!session || (hostId !== undefined && legacy.hosts.includes(hostId)));
+  /** Drops the development session once nothing needs it, and revokes it. */
+  function dropLegacy() {
+    const held = legacy;
+    saveLegacy(undefined);
+    legacyAccess = undefined;
+    if (held)
+      void fetch(`${DEVELOPMENT_API}/oauth/token/revoke`, {
+        method: "POST",
+        body: new URLSearchParams({ client_id: DEVELOPMENT_CLIENT_ID, token: held.refreshToken }),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => undefined);
   }
 
   async function userinfo(bearer: string): Promise<User> {
@@ -286,10 +375,14 @@ export function startAccount(): Account {
       // Offline, or Clerk is down: the saved profile stays.
     }
   }
-  if (session) {
-    show(session.user);
-    void refreshProfile();
+  /** Shows the signed-in account: production's, else the development one still kept, else none. */
+  function showAccount() {
+    const user = session?.user ?? legacy?.user;
+    if (user) show(user);
+    else publish(null);
   }
+  if (session) void refreshProfile();
+  if (session ?? legacy) showAccount();
   app.on("browser-window-focus", () => {
     if (session && Date.now() - fetchedAt > 60_000) void refreshProfile();
   });
@@ -366,6 +459,8 @@ export function startAccount(): Account {
     epoch++;
     save(undefined);
     access = undefined;
+    // Signing out signs out of the development session too.
+    dropLegacy();
     publish(null);
     // Revokes this computer's refresh token only: other devices stay signed in.
     if (held)
@@ -377,15 +472,28 @@ export function startAccount(): Account {
   });
 
   return {
-    accessToken,
+    accessToken: (hostId) => (onDevelopment(hostId) ? legacyToken() : accessToken()),
     /** The access token while it's fresh, for a call that can't wait; else starts a refresh. */
-    currentToken(): string | undefined {
-      if (access && access.expiresAt - 60_000 > Date.now()) return access.token;
-      void accessToken();
+    currentToken(hostId): string | undefined {
+      const [held, renew] = onDevelopment(hostId)
+        ? [legacyAccess, legacyToken]
+        : [access, accessToken];
+      if (held && held.expiresAt - 60_000 > Date.now()) return held.token;
+      void renew();
       return undefined;
     },
-    freshToken: async () => (await refresh())?.token,
+    freshToken: async (hostId) =>
+      (await (onDevelopment(hostId) ? legacyRefresh() : refresh()))?.token,
     onSignIn: (listener) => void signedIn.push(listener),
-    clerkUnreachable: () => unreachable && !!session,
+    clerkUnreachable: () => (session ? unreachable : !!legacy && legacyUnreachable),
+    move: {
+      pending: () => legacy && { hosts: legacy.hosts, signedIn: !!session },
+      developmentToken: legacyToken,
+      listed(hosts) {
+        if (!legacy) return;
+        if (session && !hosts.length) return dropLegacy();
+        if (hosts.join() !== legacy.hosts.join()) saveLegacy({ ...legacy, hosts });
+      },
+    },
   };
 }

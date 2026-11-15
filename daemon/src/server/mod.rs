@@ -152,6 +152,9 @@ pub struct Config {
     /// The Clerk instance whose tokens account sign-in takes (0091). From `PLXD_CLERK_*` when set,
     /// else the desktop app's.
     pub clerk: crate::clerk::Config,
+    /// The Clerk instance accounts are moving from, whose tokens it takes too (PLX-1465). From
+    /// `PLXD_CLERK_LEGACY_*` when set, else the development instance.
+    pub clerk_legacy: Option<crate::clerk::Config>,
     /// Whether `orchestrator/update` takes `computer` and plxd advertises `orchestratorComputer`
     /// (0057). Off until an orchestrator's child can start, be followed, and land on another
     /// computer; tests turn it on.
@@ -207,6 +210,7 @@ impl Config {
             keys: None,
             relay_url: crate::relay::url(),
             clerk: crate::clerk::Config::from_env(),
+            clerk_legacy: crate::clerk::Config::legacy_from_env(),
             orchestrator_computer: false,
             max_bundle_bytes: crate::methods::bundle::MAX_BYTES,
             you_sync_interval: Duration::from_secs(60),
@@ -530,7 +534,7 @@ impl Server {
             relay: crate::relay::Relay::new(config.relay_url.clone()),
             relay_peers: crate::peer::RelayPeers::default(),
             load: crate::load::Load::default(),
-            clerk: crate::clerk::Clerk::new(config.clerk.clone()),
+            clerk: crate::clerk::Clerk::new(config.clerk.clone(), config.clerk_legacy.clone()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             pr_guides: crate::pr_guide::Guides::default(),
@@ -952,7 +956,10 @@ impl Daemon {
             relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
             relay_peers: crate::peer::RelayPeers::default(),
             load: crate::load::Load::default(),
-            clerk: crate::clerk::Clerk::new(crate::clerk::Config::from_env()),
+            clerk: crate::clerk::Clerk::new(
+                crate::clerk::Config::from_env(),
+                crate::clerk::Config::legacy_from_env(),
+            ),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             pr_guides: crate::pr_guide::Guides::default(),

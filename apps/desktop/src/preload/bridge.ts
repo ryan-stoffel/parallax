@@ -618,6 +618,11 @@ export interface ParallaxBridge {
    */
   accountMoved(): Promise<boolean>;
   /**
+   * Calls `listener` with the move of the user's computers to their production account, or null
+   * with none, now and on every change (PLX-1465). Returns the unsubscribe function.
+   */
+  onAccountMove(listener: (move: AccountMove | null) => void): () => void;
+  /**
    * Calls `listener` with what the app says about Parallax Connect, or null, now and on every change
    * (PLX-1351). Returns the unsubscribe function.
    */
@@ -662,6 +667,19 @@ export type StorageItem = { id: StorageItemId; name: string; folder: string; byt
 export type Outage = "relay" | "clerk";
 /** What the app says about Parallax Connect: an outage, or that the relay lacks this computer. */
 export type ConnectNotice = Outage | "notListed";
+
+/**
+ * The move from the development account to production (PLX-1465): whether the user signed in to
+ * production yet, and the computers by name, moved, moving now, and waiting for the next try.
+ * `done` once none are left.
+ */
+export type AccountMove = {
+  signedIn: boolean;
+  moved: string[];
+  moving: string[];
+  waiting: string[];
+  done: boolean;
+};
 
 /** Why this computer's account key needs replacing: a verified computer says so (0091). */
 export type KeyStanding = "removed" | "readOnly";
@@ -906,6 +924,7 @@ export const withheldMethods = [
   // main signs in a computer with `relay/sign` too (PLX-1146).
   "relay/register",
   "relay/sign",
+  "relay/move",
   "relay/hosts",
   "relay/check",
   "relay/remove",

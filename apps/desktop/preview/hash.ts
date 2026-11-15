@@ -10,6 +10,7 @@
 //   #connect                              with Parallax Connect set up on three computers
 //   #signedout                            signed out of Parallax, without onboarding
 //   #moved                                signed out at launch by the move to production Clerk
+//   #accountmove=moving                   the move to production accounts at a step (mockBridge.ts)
 
 import { t } from "i18next";
 

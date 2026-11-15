@@ -477,38 +477,107 @@ async fn lists(daemon: &Daemon) -> Result<Lists, ErrorObject> {
         .await
 }
 
-/// The Clerk user id this host registered under (0091), if it's on the Clerk instance plxd checks
-/// tokens against. One recorded before plxd kept the instance is on the development instance, the
-/// only one then. One recorded on another instance is none (PLX-1049).
-pub(crate) async fn account(daemon: &Daemon) -> Option<String> {
-    let issuer = daemon.clerk.issuer().to_owned();
+/// An account: a Clerk instance's issuer, and a user id there.
+pub(crate) type Account = (String, String);
+
+/// The accounts this host trusts: the one it registered under (0091) first, then, while it moves
+/// from Clerk's development instance to production, the other (PLX-1465). Only accounts on an
+/// instance plxd checks tokens of count (PLX-1049). One recorded before plxd kept the instance is
+/// on the development instance, the only one then.
+pub(crate) async fn accounts(daemon: &Daemon) -> Vec<Account> {
+    let checked: Vec<String> = [Some(daemon.clerk.issuer()), daemon.clerk.legacy_issuer()]
+        .into_iter()
+        .flatten()
+        .map(str::to_owned)
+        .collect();
     daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
-            db.relay_account(&issuer, crate::clerk::DEVELOPMENT_ISSUER)
+            db.relay_accounts(crate::clerk::DEVELOPMENT_ISSUER)
                 .map_err(|e| store_error(&e))
         })
         .await
-        .ok()
-        .flatten()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(issuer, _)| checked.contains(issuer))
+        .collect()
 }
 
-/// Records `user`, a Clerk user id, as the account this host registered under (0091), on the Clerk
-/// instance plxd checks tokens against. Only a trusted caller names it, never the relay.
-pub(crate) async fn record_account(daemon: &Daemon, user: &str) -> Result<(), String> {
-    let owned = user.to_owned();
-    let issuer = daemon.clerk.issuer().to_owned();
+/// The Clerk user id this host registered under, the first of [`accounts`], if any.
+pub(crate) async fn account(daemon: &Daemon) -> Option<String> {
+    accounts(daemon)
+        .await
+        .into_iter()
+        .next()
+        .map(|(_, user)| user)
+}
+
+/// Changes the accounts this host trusts, as [`accounts`] lists them, with `change`.
+async fn change_accounts(
+    daemon: &Daemon,
+    change: impl FnOnce(&mut Vec<Account>) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
-            db.set_relay_account(&owned, &issuer)
+            let mut accounts = db
+                .relay_accounts(crate::clerk::DEVELOPMENT_ISSUER)
+                .map_err(|e| store_error(&e))?;
+            change(&mut accounts).map_err(ErrorObject::invalid_params)?;
+            db.set_relay_accounts(&accounts)
                 .map_err(|e| store_error(&e))
         })
         .await
         .map_err(|e| e.message)?;
-    info!(%user, "recorded this computer's account");
     daemon.remote.access.changed();
     Ok(())
+}
+
+/// Records `user`, a Clerk user id on the instance `issuer`, as the account this host registered
+/// under (0091). Only a trusted caller names it, never the relay. The account a move trusts beside
+/// the first becomes the first, and the first stays trusted (PLX-1465). Any other replaces both.
+pub(crate) async fn record_account(
+    daemon: &Daemon,
+    user: &str,
+    issuer: &str,
+) -> Result<(), String> {
+    let account = (issuer.to_owned(), user.to_owned());
+    change_accounts(daemon, move |accounts| {
+        if accounts.get(1) == Some(&account) {
+            accounts.swap(0, 1);
+        } else if accounts.first() != Some(&account) {
+            *accounts = vec![account];
+        }
+        Ok(())
+    })
+    .await?;
+    info!(%user, %issuer, "recorded this computer's account");
+    Ok(())
+}
+
+/// Trusts `account` beside the one this host registered under, which stays first, for the move
+/// to production (PLX-1465): its devices' sign-ins count here from now on.
+pub(crate) async fn trust_account(daemon: &Daemon, account: Account) -> Result<(), String> {
+    change_accounts(daemon, move |accounts| {
+        let Some(first) = accounts.first().cloned() else {
+            return Err("This computer isn't on an account yet.".to_owned());
+        };
+        if first != account {
+            *accounts = vec![first, account];
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// The issuer to record an account under for a token a trusted caller handed plxd: the one it
+/// names, when plxd checks that instance's tokens, else `fallback`.
+pub(crate) fn issuer_for(daemon: &Daemon, named: Option<&str>, fallback: &str) -> String {
+    let checked = [Some(daemon.clerk.issuer()), daemon.clerk.legacy_issuer()];
+    named
+        .filter(|named| checked.contains(&Some(*named)))
+        .unwrap_or(fallback)
+        .to_owned()
 }
 
 /// Whether the account approved the computer with relay id `host_id` (0091).
@@ -703,11 +772,17 @@ pub(crate) async fn remove(
 /// signer. The relay holds no approved host's key, so it can't make one, and replaying a real one
 /// changes nothing. A computer added with Allow alone may be a fake one the user clicked through,
 /// so it gives no removals, even with its id in `approved_hosts` too, which merges can leave.
+/// While this host moves to production, a statement signed for either of its accounts counts
+/// (PLX-1465).
 pub(crate) async fn receive_removal(daemon: &Daemon, statement: &str) {
-    let Some(account) = account(daemon).await else {
-        return;
-    };
-    let (signer, removed) = match remote::open_removal(statement, &account) {
+    let mut opened = Err("this computer isn't on an account");
+    for (_, user) in accounts(daemon).await {
+        opened = remote::open_removal(statement, &user);
+        if opened.is_ok() {
+            break;
+        }
+    }
+    let (signer, removed) = match opened {
         Ok(opened) => opened,
         Err(why) => {
             debug!(why, "ignored a device's removal from the relay");
@@ -866,9 +941,10 @@ pub(super) async fn sign_in(
         Ok(proven) => proven,
         Err(why) => return refused(why),
     };
-    let Some(account) = account(daemon).await else {
+    let accounts = accounts(daemon).await;
+    if accounts.is_empty() {
         return removed("this computer isn't signed in to an account");
-    };
+    }
     let offset = daemon.relay.clock_offset_ms();
     if Duration::from_millis(offset.unsigned_abs()) > clerk::CLOCK_SKEW {
         warn!(
@@ -882,7 +958,7 @@ pub(super) async fn sign_in(
         Ok(verified) => verified,
         Err(why) => return refused(why),
     };
-    if let Err(why) = clerk::check_sign_in(&verified, &account, now) {
+    if let Err(why) = clerk::check_sign_in(&verified, &accounts, now) {
         return refused(why);
     }
     // Only a good token gets its proof remembered, so strangers can't grow the map.

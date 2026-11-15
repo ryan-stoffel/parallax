@@ -169,6 +169,7 @@ beforeEach(() => {
     version: async () => "0.4.0",
     discoverAccount: async () => {},
     onKeyStanding: () => () => {},
+    onAccountMove: () => () => {},
     onConnectNotice: () => () => {},
     onRelayUsage: () => () => {},
     connectionState: async () => connected,

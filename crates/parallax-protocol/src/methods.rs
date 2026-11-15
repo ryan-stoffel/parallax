@@ -88,15 +88,15 @@ use crate::{
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RelayCheckParams, RelayCheckResult,
-    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams,
-    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
-    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
-    RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
-    RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult, RepoFilesParams,
-    RepoFilesResult, RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoLogoParams,
-    RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
-    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
-    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ReviewCommitsParams,
+    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayMoveParams,
+    RelayMoveResult, RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams,
+    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
+    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
+    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoFetchBaseParams,
+    RepoFetchBaseResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
+    RepoGrepResult, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult,
+    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams,
+    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ReviewCommitsParams,
     ReviewCommitsResult, ReviewDiffParams, ScheduleDeleteResult, ScheduleIdParams,
     ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
     SecretAnswerResult, SecretDeleteParams, SecretListParams, SecretListResult,
@@ -655,6 +655,10 @@ method_table! {
         /// computer that holds the token to post with `relay/register` (PLX-1146). Turns `relay`
         /// on unless it was ever set.
         RelaySign = "relay/sign": RelaySignParams => RelaySignResult;
+        /// `relay/move`: moves this host to the same user's production account, which it trusts
+        /// beside the development one from then on, on the relay too (PLX-1465). An older plxd
+        /// answers it as an unknown method.
+        RelayMove = "relay/move": RelayMoveParams => RelayMoveResult;
         /// `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
         RelayHosts = "relay/hosts": RelayHostsParams => RelayHostsResult;
         /// `relay/check`: opens a real stream through the relay back to this host's listener, and

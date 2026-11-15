@@ -12,8 +12,8 @@ workers_dev = false
 
 # Clerk's production and development instances (0067), in that order, each with its JWKS and the
 # desktop app's OAuth application, whose access tokens the relay accepts. All public. The apps use
-# development until the account move ships (PLX-1465), and it leaves only after that, PLX-1457,
-# and a stable release carrying both (README.md).
+# production, and development stays for computers that haven't moved yet (PLX-1465). It leaves only
+# once they have, after PLX-1457, and a stable release carrying both (README.md).
 [vars]
 CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
 CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"

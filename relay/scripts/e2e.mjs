@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Runs plxd's relay test (daemon/tests/server/relay.rs) against this Worker under `wrangler dev`,
 // with a local Clerk: a fresh RSA key whose JWKS the relay trusts, and session tokens it signed.
+// A second instance on loopback stands in for production in the move from development (PLX-1465):
+// it serves the same JWKS over HTTP, since plxd reads production's keys itself.
 // Arguments replace the cargo command, such as `node scripts/e2e.mjs cargo test --release ...`.
 import { spawn, spawnSync } from "node:child_process";
 import { createSign, generateKeyPairSync, X509Certificate } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect } from "node:net";
-import { request as httpRequest } from "node:http";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,11 +27,11 @@ const jwks = { keys: [{ ...publicKey.export({ format: "jwk" }), kid: "e2e", alg:
 
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const now = Math.floor(Date.now() / 1000);
-const sessionToken = (sub) => {
+const sessionToken = (sub, iss = issuer) => {
   const input = `${encode({ alg: "RS256", kid: "e2e", typ: "JWT" })}.${encode({
     sub,
     sid: "sess_e2e",
-    iss: issuer,
+    iss,
     iat: now,
     nbf: now,
     exp: now + 3600,
@@ -43,9 +45,16 @@ const port = await new Promise((resolve) => {
     server.close(() => resolve(port));
   });
 });
+const keys = createHttpServer((_, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify(jwks));
+});
+await new Promise((resolve) => keys.listen(0, "127.0.0.1", resolve));
+keys.unref();
+const production = `http://127.0.0.1:${keys.address().port}`;
 const scratch = mkdtempSync(join(tmpdir(), "plx-relay-e2e-"));
 const envFile = join(scratch, ".env");
-writeFileSync(envFile, `CLERK_ISSUER=${issuer}\nCLERK_JWKS='${JSON.stringify(jwks)}'\n`);
+writeFileSync(envFile, `CLERK_ISSUER=${issuer},${production}\nCLERK_JWKS='${JSON.stringify(jwks)}'\n`);
 
 const wrangler = spawn(
   join(relayDir, "node_modules", ".bin", "wrangler"),
@@ -158,6 +167,9 @@ const test = spawn(command, args, {
     PLXD_TEST_RELAY_CHECK_TOKEN: sessionToken("user_e2e_check"),
     PLXD_TEST_RELAY_PEERS_TOKEN: sessionToken("user_e2e_peers"),
     PLXD_TEST_RELAY_SYNC_TOKEN: sessionToken("user_e2e_sync"),
+    // The move to production (PLX-1465): the user's development account, then their production one.
+    PLXD_TEST_RELAY_MOVE_FROM_TOKEN: sessionToken("user_e2e_move"),
+    PLXD_TEST_RELAY_MOVE_TOKEN: sessionToken("user_e2e_moved", production),
   },
 });
 test.on("exit", (code) => {

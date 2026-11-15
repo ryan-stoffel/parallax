@@ -178,6 +178,11 @@ function signedIn() {
       freshToken: async () => freshToken,
       onSignIn: (listener: () => void) => void listeners.push(listener),
       clerkUnreachable: () => fake.clerkDown,
+      move: {
+        pending: (): { hosts: string[]; signedIn: boolean } | undefined => undefined,
+        developmentToken: async (): Promise<string | undefined> => undefined,
+        listed: (_hosts: string[]) => {},
+      },
     },
     signIn: () => listeners.forEach((listener) => listener()),
   };
@@ -1557,6 +1562,108 @@ test("a tailnet device matched to its account computer by relay/id is approved o
     const saved = JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8"));
     expect(saved.devices[0]).toMatchObject({ id: "n1", migrated: studio });
   } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a sign-in to production moves each computer this app reaches, and one it can't moves once it can (PLX-1465)", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const devToken = clerkToken("development");
+    let pending: { hosts: string[]; signedIn: boolean } | undefined = {
+      hosts: [],
+      signedIn: false,
+    };
+    const { account: base, signIn } = signedIn();
+    const account = {
+      ...base,
+      move: {
+        pending: () => pending,
+        developmentToken: async () => devToken,
+        listed: (hosts: string[]) => {
+          if (pending)
+            pending = pending.signedIn && !hosts.length ? undefined : { ...pending, hosts };
+        },
+      },
+    };
+    const accounts = [
+      { hostId: studio, name: "studio", routes: [] },
+      { hostId: buildBox, name: "build box", routes: [] },
+    ];
+    const local = await start({ accounts }, account);
+    // The development account lists all three until each moves.
+    const onDevelopment = new Set([newBox, studio, buildBox]);
+    const host = (hostId: string, name: string) => ({
+      hostId,
+      name,
+      online: true,
+      thisComputer: hostId === newBox,
+    });
+    const names = new Map([
+      [newBox, "this Mac"],
+      [studio, "studio"],
+      [buildBox, "build box"],
+    ]);
+    fake.answers.set("relay/id", { result: { hostId: newBox } });
+    fake.answers.set("relay/hosts", ({ token }: { token: string }) => ({
+      result: {
+        hosts: [...names]
+          .filter(([id]) => onDevelopment.has(id) === (token === devToken))
+          .map(([id, name]) => host(id, name)),
+        removed: [],
+      },
+    }));
+    const moves: [unknown, unknown][] = [];
+    fake.answers.set("relay/move", (params: unknown, c: unknown) => {
+      moves.push([c, params]);
+      const id = c === local ? newBox : c === accountConnection(studio) ? studio : buildBox;
+      onDevelopment.delete(id);
+      return { result: {} };
+    });
+    fake.answers.set("relay/register", { result: {} });
+    const shown = () => fake.sent.get("parallax:accountMove");
+    expect(await fake.handlers.get("parallax:accountMove")!()).toMatchObject({ signedIn: false });
+
+    local.set(connected());
+    accountConnection(studio)!.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(moves).toEqual([]);
+
+    // build box isn't reached: it waits, and keeps the development account's token.
+    pending = { hosts: [], signedIn: true };
+    signIn();
+    await vi.advanceTimersByTimeAsync(0);
+    const both = { token: relayToken, from: devToken };
+    expect(moves).toEqual([
+      [local, both],
+      [accountConnection(studio), both],
+    ]);
+    expect(shown()).toEqual({
+      signedIn: true,
+      moved: ["this Mac", "studio"],
+      moving: [],
+      waiting: ["build box"],
+      done: false,
+    });
+    expect(pending).toEqual({ hosts: [buildBox], signedIn: true });
+
+    // Once it's reached, a look a minute on moves it, and the move is done.
+    fake.visible = true;
+    accountConnection(buildBox)!.set(connected());
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(moves.at(-1)).toEqual([accountConnection(buildBox), both]);
+    expect(pending).toBeUndefined();
+    expect(shown()).toEqual({
+      signedIn: true,
+      moved: ["this Mac", "studio", "build box"],
+      moving: [],
+      waiting: [],
+      done: true,
+    });
+  } finally {
+    fake.visible = false;
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
   }
