@@ -30,6 +30,7 @@ export class ProofHost extends HostRelay {
       arm: async () => {},
       close: async (code: number, reason: string) => { await this.finish(id, code, reason); },
       hostJoined: async () => this.slots.get(id)?.joined === true,
+      clientJoined: async () => this.slots.get(id)?.client !== undefined,
       taken: async () => {},
       hostGone: async () => { await this.finish(id); },
     };
