@@ -81,9 +81,11 @@ const MAX_CLOCK_OFFSET_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How often plxd pings the relay over its control socket, with the text the relay's object answers
 /// without waking. Unanswered until the next one ends the connection, so a silent link is noticed
-/// within two of these, and a false alarm costs only a reconnect. Cloudflare closes a WebSocket
-/// idle for 100 s.
-const PING: Duration = Duration::from_secs(15);
+/// within two of these, 8 s. With the reconnect after it, that's inside the 10 s a client's dial
+/// waits for a stream the relay asked plxd to join over the dead link (PLX-1547). A false alarm
+/// costs only a reconnect. Each ping is a twentieth of a billed Durable Object request: 1,080 a day
+/// per host. Cloudflare closes a WebSocket idle for 100 s.
+const PING: Duration = Duration::from_secs(4);
 /// How often plxd's end of a client's stream sends a protocol ping, which Cloudflare's runtime
 /// answers without waking the stream's object or charging for it. Slower than [`PING`], since ending
 /// a working stream is what a client would see, and its answer can queue behind a transfer.
@@ -106,8 +108,10 @@ const HOLD: Duration = Duration::from_secs(30);
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_mins(5);
 
-/// A connection that lasted this long starts the backoff over.
-const STEADY: Duration = Duration::from_mins(1);
+/// A connection that lasted this long, past two pings, starts the backoff over, so a link that
+/// worked and then dropped is back within about 1 s, while a client may be waiting (PLX-1547). One
+/// that keeps dying sooner, such as two plxds with one key replacing each other, still backs off.
+const STEADY: Duration = Duration::from_secs(10);
 
 /// What plxd's ES256 signature opening its control socket covers, with the time in milliseconds,
 /// as relay/src/host.ts has it.
@@ -720,6 +724,34 @@ async fn upgrade(
         crate::connect_timing::server(value);
     }
     Ok(socket)
+}
+
+/// When plxd pings the relay over its control socket, every [`PING`], and whether the relay has
+/// sent anything since the last ping. Any frame counts as an answer.
+struct ControlPing {
+    tick: time::Interval,
+    heard: bool,
+}
+
+impl ControlPing {
+    fn new() -> Self {
+        let mut tick = time::interval_at(Instant::now() + PING, PING);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Self { tick, heard: true }
+    }
+
+    /// Waits until the next ping should go. Fails if the last one went unanswered, so a silent
+    /// link ends within two pings of the last frame heard. Cancel safe.
+    async fn due(&mut self) -> Result<(), Lost> {
+        self.tick.tick().await;
+        if !std::mem::replace(&mut self.heard, false) {
+            return Err(Lost::new(
+                "ping_timeout",
+                "the relay stopped answering".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// When plxd's end of a stream pings, and whether the stream has answered. The stream's own socket
@@ -1908,9 +1940,7 @@ async fn serve(
     if streams.spare.as_ref().is_some_and(|spare| !spare.opened) {
         streams.spare = None;
     }
-    let mut ping = time::interval_at(Instant::now() + PING, PING);
-    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut heard = true;
+    let mut ping = ControlPing::new();
     let failed = |error: tungstenite::Error| Lost::from_socket(&error);
     // The webhook URLs this plxd serves, so the relay refuses the rest for free.
     let hooks = || async {
@@ -1992,7 +2022,7 @@ async fn serve(
                 }
             }
             frame = frames.next() => {
-                heard = true;
+                ping.heard = true;
                 match frame {
                     Some(Ok(Message::Text(text))) => {
                         // No frame the relay sends plxd is this long, so none costs a parse.
@@ -2049,11 +2079,8 @@ async fn serve(
                     Some(Err(error)) => return Err(failed(error)),
                 }
             }
-            _ = ping.tick() => {
-                if !heard {
-                    return Err(Lost::new("ping_timeout", "the relay stopped answering".to_owned()));
-                }
-                heard = false;
+            due = ping.due() => {
+                due?;
                 sink.send(Message::text("ping")).await.map_err(failed)?;
             }
         }
@@ -3170,6 +3197,33 @@ mod tests {
             }
         );
         assert!(matches!(ended, Ok(Ended::Stopped)));
+    }
+
+    /// A link that goes silent with no close, as when Cloudflare's edge or a router drops it, ends
+    /// within 10 s of the last frame the relay sent (PLX-1547). The worst case: the last answer
+    /// comes just after a ping went. Only the pings' timer runs here, since `serve` also reads the
+    /// store on another thread, and paused time jumps ahead while it waits.
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_relay_is_noticed_within_10_s() {
+        let mut ping = ControlPing::new();
+        // Answered for a while, then nothing more, though the socket stays open.
+        for _ in 0..3 {
+            ping.due().await.unwrap();
+            ping.heard = true;
+        }
+        let last_heard = Instant::now();
+        let lost = loop {
+            if let Err(lost) = ping.due().await {
+                break lost;
+            }
+        };
+        assert_eq!(lost.cause, "ping_timeout");
+        let noticed = last_heard.elapsed();
+        assert!(
+            noticed <= Duration::from_secs(10),
+            "noticed after {noticed:?}"
+        );
+        assert!(noticed > PING, "noticed after {noticed:?}");
     }
 
     /// `select!` picks among ready arms at random, so a few rounds, each with a hold's deadline

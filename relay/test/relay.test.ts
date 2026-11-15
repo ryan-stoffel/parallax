@@ -914,7 +914,7 @@ describe("streams", () => {
     expect(await second!.next()).toBe("ready");
     expect(await side.next()).toBe("ready");
     expect(await other.next()).toBe("ready");
-    expect(await openStreams(host)).toEqual({ [spare.stream]: {}, [open.stream]: {} });
+    expect(await openStreams(host)).toEqual({ [spare.stream]: {}, [open.stream]: { at: expect.any(Number) } });
     const clients = (stream: string) =>
       runInDurableObject(streamObject(stream), (_: StreamRelay, state) => state.getWebSockets("client").length);
     expect([await clients(spare.stream), await clients(open.stream)]).toEqual([1, 1]);
