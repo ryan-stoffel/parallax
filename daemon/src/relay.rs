@@ -3875,6 +3875,44 @@ mod tests {
         assert_eq!(*early.lock().unwrap(), [true, false]);
     }
 
+    #[tokio::test]
+    async fn a_caller_that_writes_nothing_in_time_gets_the_old_order() {
+        let (url, early) = early_frame_relay(EarlyFrame::Passes).await;
+        let stream = stream_at(&url, "tok", "h");
+        time::sleep(FIRST_BYTES * 2).await;
+        echoes(stream).await;
+        assert_eq!(*early.lock().unwrap(), [false]);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_stream_stops_its_open() {
+        // A relay that reads the request and never answers, and says when the client hangs up.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (asked, mut heard) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut read = Vec::new();
+            while !read.windows(4).any(|w| w == b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let got = tcp.read(&mut chunk).await.unwrap();
+                assert!(got > 0, "the client closed mid-request");
+                read.extend_from_slice(&chunk[..got]);
+            }
+            asked.send("asked").unwrap();
+            let _ = tcp.read_to_end(&mut Vec::new()).await;
+            asked.send("hung up").unwrap();
+        });
+        let mut stream = stream_at(&url, "tok", "h");
+        stream.write_all(b"client hello").await.unwrap();
+        let within = Duration::from_secs(5);
+        let asked = time::timeout(within, heard.recv()).await.ok().flatten();
+        assert_eq!(asked, Some("asked"));
+        drop(stream);
+        let hung_up = time::timeout(within, heard.recv()).await.ok().flatten();
+        assert_eq!(hung_up, Some("hung up"));
+    }
+
     #[test]
     fn an_early_frame_reads_back_at_each_length_form() {
         // A short length, a ClientHello's with 16 bits, and one past 16 bits.
