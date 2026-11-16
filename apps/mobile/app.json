@@ -52,7 +52,13 @@
           "faceIDPermission": false
         }
       ],
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#2B5CFF"
+        }
+      ],
       "./plugins/withNotificationService",
       "./plugins/withThreadWidget",
       [

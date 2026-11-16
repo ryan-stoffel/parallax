@@ -16,6 +16,7 @@ Built from the design-system mark: blue #2B5CFF, coral #FF4A1F, overlap white on
 | `icns/Parallax-dark-legacy.icns`, `icns/Parallax-light-legacy.icns` | Pre-masked 824 pt squircle with margin and drop shadow, the macOS 15 and earlier convention. | Builds that must look right on macOS 15 and earlier. On macOS 26 and later the system re-masks these and they appear slightly inset, so prefer the full-bleed files there. |
 | `iconsets/*.iconset/` | The PNG sets behind each `.icns`, named the way `iconutil` expects (`icon_16x16.png` through `icon_512x512@2x.png`). | Rebuild on a Mac with `iconutil -c icns Parallax-dark-full.iconset` if you change anything. |
 | `xcode/AppIcon.appiconset/` | Legacy asset catalog set with `Contents.json` for the `mac` idiom, using the full-bleed dark PNGs. | Xcode targets that still need a classic app icon set alongside the `.icon` bundle. |
+| `masters/Parallax-notification.svg` | The mark in white on transparent, the two circles with their overlap cut out, inside Android's 2 dp status bar margin. | Android's notification icon, which Android draws from the alpha channel only. `apps/mobile/assets/notification-icon.png` is its 96 px render: `uv run --with resvg-py==0.2.6 --with pillow==12.0.0 python` with `resvg_py.svg_to_bytes(svg_string=..., width=96, height=96)`. |
 | `masters/` | 1024 px PNG and SVG masters for all four variants. | Marketing, README, App Store Connect (use the full-bleed PNG; it has no alpha). |
 
 ## What is required for macOS 27
