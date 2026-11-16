@@ -3011,6 +3011,14 @@ mod tests {
         ]
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn this_computers_networks_include_loopback_with_its_netmask() {
+        let networks = own_networks().expect("getifaddrs");
+        let loopback = ("127.0.0.1".parse().unwrap(), "255.0.0.0".parse().unwrap());
+        assert!(networks.contains(&loopback), "{networks:?}");
+    }
+
     #[test]
     fn only_routes_that_can_be_reached_from_here_may_answer() {
         let (home, cafe) = (home(), cafe());

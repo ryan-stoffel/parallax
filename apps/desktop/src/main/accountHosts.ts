@@ -249,8 +249,9 @@ export const BENCH_MS = 5 * 60_000;
 /**
  * One account computer's routes: what its dial tries, and moving to a better one. A dial tries the
  * routes not waiting out a failure: `plxd dial` races the direct ones with the relay 200 ms after
- * them, or at once when none is on this computer's networks, as away from home (PLX-1553), or
- * takes the user's order, once they've set one (`--in-order`). While the connection is on
+ * them, or at once on macOS and Linux when none is on this computer's networks, as away from home
+ * (PLX-1553; Windows still waits the 200 ms), or takes the user's order, once they've set one
+ * (`--in-order`). While the connection is on
  * a route with better ones, `recheck` probes those, every `RECHECK_MS` and when hosts.ts calls it
  * on a network change or focus, and `move` reconnects, over that route alone, once one answers with
  * the pinned key.
