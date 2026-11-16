@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- In English only, as the iOS widget's are. The rows' words come from the app, in its language. -->
+<resources>
+  <string name="thread_widget_label">Threads</string>
+  <string name="thread_widget_description">What your threads are doing.</string>
+  <string name="thread_widget_empty">No recent threads</string>
+</resources>

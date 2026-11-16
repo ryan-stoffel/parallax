@@ -4,8 +4,8 @@
 // fixed text under the id the app's own notification for that event has, and runs this task, even
 // while the app is closed. The task opens `sealed` with the computer's key and posts the thread's
 // title and text under the same id, which replaces the fixed text, as iOS's notification service
-// extension does. Anything that fails leaves the fixed text. index.ts imports this first, since a
-// closed app runs only the task.
+// extension does, and keeps the thread's state for the widget (androidThreads.ts). Anything that
+// fails leaves the fixed text. index.ts imports this first, since a closed app runs only the task.
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
@@ -13,6 +13,7 @@ import i18next, { t } from "i18next";
 import { Platform } from "react-native";
 
 import { startLanguage } from "./language";
+import { keepPush } from "./androidThreads";
 import { openSealed, type PushBody } from "./sealed";
 
 const TASK = "parallax-sealed-push";
@@ -49,12 +50,15 @@ export function forgetAndroidPushKeys(): Promise<void> {
   return change(() => SecureStore.deleteItemAsync(KEYS));
 }
 
+/** The states a push names (relay/src/push.ts). One naming another is ignored, as ThreadStatus.swift does. */
+const STATES: readonly string[] = ["needsYou", "done", "failed"] satisfies PushBody["state"][];
+
 /** The push a task payload carries, if it's one from the relay. */
-function pushIn(payload: Notifications.NotificationTaskPayload | undefined): PushBody | undefined {
+export function pushIn(payload: Notifications.NotificationTaskPayload | undefined): PushBody | undefined {
   if (!payload || "actionIdentifier" in payload) return undefined;
   try {
     const body = JSON.parse(String(payload.data?.dataString)) as Partial<PushBody>;
-    return typeof body.hostId === "string" && typeof body.run === "string" && typeof body.state === "string"
+    return typeof body.hostId === "string" && typeof body.run === "string" && STATES.includes(String(body.state))
       ? (body as PushBody)
       : undefined;
   } catch {
@@ -86,6 +90,8 @@ if (Platform.OS === "android") {
       content: { title: opened.title, body: opened.text, data: push },
       trigger: { channelId: OPENED },
     });
+    // The widget and the ongoing notification, as iOS's extension keeps what opens.
+    await keepPush(push, opened.title);
   });
   void Notifications.registerTaskAsync(TASK).catch(() => {});
 }

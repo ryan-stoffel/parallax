@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The home screen only: a lock screen that takes widgets would show thread names (0100). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:description="@string/thread_widget_description"
+  android:initialLayout="@layout/thread_widget"
+  android:previewLayout="@layout/thread_widget"
+  android:minWidth="250dp"
+  android:minHeight="110dp"
+  android:targetCellWidth="4"
+  android:targetCellHeight="2"
+  android:resizeMode="horizontal|vertical"
+  android:updatePeriodMillis="0"
+  android:widgetCategory="home_screen" />
