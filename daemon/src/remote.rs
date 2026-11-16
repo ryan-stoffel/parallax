@@ -24,7 +24,8 @@
 //!   pairs with its setup code ([`pair_account`]).
 //!
 //! [`dial`] races a host's routes ([`race`], 0091): the direct ones (LAN, Tailscale, any the user
-//! added) at once and the relay [`RELAY_HEAD_START`] later, or each in the user's order, and only
+//! added) at once and the relay [`RELAY_HEAD_START`] later, or at once when none of them is on
+//! this computer's networks ([`may_answer`]), or each in the user's order, and only
 //! the first to present the pinned certificate gets the credential. [`bridge`] joins the WebSocket
 //! to `plxd dial`'s stdio. Its credential stays in its data folder, readable only by this user.
 
@@ -1944,19 +1945,28 @@ pub type Opened = (String, TlsStream<crate::relay::Stream>, String);
 /// Opens TLS to the first of `routes` that presents a certificate `pin` accepts (0091): the direct
 /// ones (LAN, Tailscale, any the user added) at once, `relay:` ones [`RELAY_HEAD_START`] later, or
 /// as soon as every direct one failed. With `in_order`, the user's order: each route starts
-/// [`RELAY_HEAD_START`] after the one above it, or as soon as those above it failed. Nothing is sent
-/// over any of them before its certificate checks out, and the others are dropped once one does.
-/// When a `relay:` route waits for others, the relay's connection opens from the start, and that
-/// route sends its first request over it ([`crate::relay::warm`], PLX-1549).
+/// [`RELAY_HEAD_START`] after the one above it, or as soon as those above it failed. Only routes
+/// that [`may_answer`] from this computer's networks hold the next ones back, so away from home
+/// the relay starts at once (PLX-1553). Nothing is sent over any of them before its certificate
+/// checks out, and the others are dropped once one does. When a `relay:` route waits for others,
+/// the relay's connection opens from the start, and that route sends its first request over it
+/// ([`crate::relay::warm`], PLX-1549).
 ///
 /// # Errors
 ///
 /// The last route's error when none answered with the pinned certificate.
 pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened, Error> {
-    let racing = first(routes, in_order, |route| async move {
+    let networks = own_networks();
+    // Without this computer's networks, every route may answer, as before PLX-1553.
+    let holds = |route: &str| {
+        networks
+            .as_deref()
+            .is_none_or(|networks| may_answer(route, networks))
+    };
+    let racing = first(routes, in_order, holds, |route| async move {
         open_pinned(&route, pin).await
     });
-    let opened = if relay_waits(routes, in_order) {
+    let opened = if relay_waits(routes, in_order, holds) {
         crate::relay::warm::ahead(racing).await
     } else {
         racing.await
@@ -1965,21 +1975,85 @@ pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened
     Ok((route, tls, fingerprint))
 }
 
-/// Whether [`race`] starts a `relay:` route in `routes` after other routes had a head start.
-fn relay_waits(routes: &[String], in_order: bool) -> bool {
-    let relay = |route: &String| route.starts_with(RELAY_ROUTE);
-    let first_waits = if in_order {
-        routes.first().is_some_and(|route| !relay(route))
-    } else {
-        !routes.iter().all(relay)
+/// An address one of this computer's interfaces holds, and its netmask.
+type Network = (IpAddr, IpAddr);
+
+/// The networks of this computer's interfaces that are up and running, or `None` when it can't
+/// tell.
+#[cfg(unix)]
+fn own_networks() -> Option<Vec<Network>> {
+    use nix::net::if_::InterfaceFlags;
+    let ip = |address: &nix::sys::socket::SockaddrStorage| {
+        address
+            .as_sockaddr_in()
+            .map(|v4| IpAddr::V4(v4.ip()))
+            .or_else(|| address.as_sockaddr_in6().map(|v6| IpAddr::V6(v6.ip())))
     };
-    first_waits && routes.iter().any(relay)
+    let up = InterfaceFlags::IFF_UP | InterfaceFlags::IFF_RUNNING;
+    let interfaces = nix::ifaddrs::getifaddrs().ok()?;
+    Some(
+        interfaces
+            .filter(|interface| interface.flags.contains(up))
+            .filter_map(|interface| Some((ip(&interface.address?)?, ip(&interface.netmask?)?)))
+            .collect(),
+    )
 }
 
-/// The first of `routes` that `open` opens, in [`race`]'s order, with the route.
+/// Windows reads no interfaces here, so every route there may answer.
+#[cfg(not(unix))]
+fn own_networks() -> Option<Vec<Network>> {
+    None
+}
+
+/// Whether `route` may answer from a computer on `networks`, so it gets a head start: a host name,
+/// a public or loopback address, a private or link-local one on one of `networks`, or a Tailscale
+/// one while this computer has a Tailscale address too, since Tailscale's interface holds only its
+/// own address. A home LAN address seen from elsewhere is none of these.
+fn may_answer(route: &str, networks: &[Network]) -> bool {
+    let Ok(address) = with_port(route).parse::<SocketAddr>() else {
+        return true;
+    };
+    let ip = address.ip().to_canonical();
+    if !is_local_network(ip) || ip.is_loopback() {
+        return true;
+    }
+    // Carrier-grade NAT, 100.64.0.0/10, where Tailscale's addresses are.
+    let tailnet = |ip: IpAddr| match ip {
+        IpAddr::V4(v4) => v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64,
+        IpAddr::V6(_) => false,
+    };
+    networks.iter().any(|&(own, mask)| {
+        let same = match (ip, own, mask) {
+            (IpAddr::V4(ip), IpAddr::V4(own), IpAddr::V4(mask)) => {
+                (u32::from(ip) ^ u32::from(own)) & u32::from(mask) == 0
+            }
+            (IpAddr::V6(ip), IpAddr::V6(own), IpAddr::V6(mask)) => {
+                (u128::from(ip) ^ u128::from(own)) & u128::from(mask) == 0
+            }
+            _ => false,
+        };
+        same || (tailnet(ip) && tailnet(own))
+    })
+}
+
+/// Whether [`race`] starts a `relay:` route in `routes` after routes that `holds` had a head start.
+fn relay_waits(routes: &[String], in_order: bool, holds: impl Fn(&str) -> bool) -> bool {
+    let relay = |route: &&String| route.starts_with(RELAY_ROUTE);
+    // The routes that start before the first relay one: in order, those above it, or else every
+    // direct one.
+    let mut ahead = routes
+        .iter()
+        .take_while(|route| !in_order || !relay(route))
+        .filter(|route| !relay(route));
+    routes.iter().any(|route| relay(&route)) && ahead.any(|route| holds(route))
+}
+
+/// The first of `routes` that `open` opens, in [`race`]'s order, with the route. A group of routes
+/// holds the next one back only when one of its routes `holds`.
 async fn first<T, F, Opening>(
     routes: &[String],
     in_order: bool,
+    holds: impl Fn(&str) -> bool,
     open: F,
 ) -> Result<(String, T), Error>
 where
@@ -2010,6 +2084,15 @@ where
             .filter(|group| !group.is_empty())
             .collect()
     };
+    // When the group after `group` starts: after its head start, or at once when none of it holds.
+    let next_at = |group: &[String]| {
+        let wait = if group.iter().any(|route| holds(route)) {
+            RELAY_HEAD_START
+        } else {
+            Duration::ZERO
+        };
+        tokio::time::Instant::now() + wait
+    };
     let mut running = FuturesUnordered::new();
     let head_start = tokio::time::sleep(Duration::ZERO);
     tokio::pin!(head_start);
@@ -2019,17 +2102,14 @@ where
             let Some(group) = groups.pop_front() else {
                 return Err(last);
             };
+            head_start.as_mut().reset(next_at(&group));
             running.extend(group.into_iter().map(&attempt));
-            head_start
-                .as_mut()
-                .reset(tokio::time::Instant::now() + RELAY_HEAD_START);
         }
         tokio::select! {
             () = &mut head_start, if !groups.is_empty() => {
-                running.extend(groups.pop_front().into_iter().flatten().map(&attempt));
-                head_start
-                    .as_mut()
-                    .reset(tokio::time::Instant::now() + RELAY_HEAD_START);
+                let group = groups.pop_front().unwrap_or_default();
+                head_start.as_mut().reset(next_at(&group));
+                running.extend(group.into_iter().map(&attempt));
             }
             Some((route, opened)) = running.next() => match opened {
                 Ok(opened) => return Ok((route, opened)),
@@ -2772,10 +2852,20 @@ mod tests {
         in_order: bool,
         answers: &[(&str, u64, bool)],
     ) -> (Result<String, String>, Vec<(String, u64)>) {
+        race_on(in_order, None, answers).await
+    }
+
+    /// [`race_in`] on a computer on `networks`, or one that can't tell with `None`.
+    async fn race_on(
+        in_order: bool,
+        networks: Option<&[Network]>,
+        answers: &[(&str, u64, bool)],
+    ) -> (Result<String, String>, Vec<(String, u64)>) {
         let started = Arc::new(Mutex::new(Vec::new()));
         let t0 = tokio::time::Instant::now();
         let routes: Vec<String> = answers.iter().map(|(r, ..)| (*r).to_owned()).collect();
-        let won = first(&routes, in_order, |route| {
+        let holds = |route: &str| networks.is_none_or(|networks| may_answer(route, networks));
+        let won = first(&routes, in_order, holds, |route| {
             let (_, after, ok) = *answers.iter().find(|(r, ..)| *r == route).unwrap();
             let at = u64::try_from(t0.elapsed().as_millis()).unwrap();
             started.lock().unwrap().push((route.clone(), at));
@@ -2874,13 +2964,128 @@ mod tests {
 
     #[test]
     fn the_relay_connects_early_only_when_its_route_waits_for_others() {
-        let routes = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
-        assert!(relay_waits(&routes(&["192.168.1.5", "relay:h"]), false));
-        assert!(relay_waits(&routes(&["relay:h", "192.168.1.5"]), false));
-        assert!(!relay_waits(&routes(&["relay:h"]), false));
-        assert!(!relay_waits(&routes(&["192.168.1.5"]), false));
-        assert!(relay_waits(&routes(&["192.168.1.5", "relay:h"]), true));
-        assert!(!relay_waits(&routes(&["relay:h", "192.168.1.5"]), true));
+        // Whether the relay waits, with every route holding, or only Tailscale's with `away`.
+        let waits = |list: &[&str], in_order: bool, away: bool| {
+            let routes: Vec<String> = list.iter().map(|r| (*r).to_owned()).collect();
+            relay_waits(&routes, in_order, |route| {
+                !away || route.starts_with("100.")
+            })
+        };
+        assert!(waits(&["192.168.1.5", "relay:h"], false, false));
+        assert!(waits(&["relay:h", "192.168.1.5"], false, false));
+        assert!(!waits(&["relay:h"], false, false));
+        assert!(!waits(&["192.168.1.5"], false, false));
+        assert!(waits(&["192.168.1.5", "relay:h"], true, false));
+        assert!(!waits(&["relay:h", "192.168.1.5"], true, false));
+        // Away from home, a LAN route holds nothing back, and a Tailscale one still does.
+        assert!(!waits(&["192.168.1.5", "relay:h"], false, true));
+        assert!(waits(
+            &["192.168.1.5", "100.64.0.7", "relay:h"],
+            false,
+            true
+        ));
+        assert!(!waits(
+            &["192.168.1.5", "relay:h", "100.64.0.7"],
+            true,
+            true
+        ));
+    }
+
+    /// A Mac at home: Wi-Fi on 192.168.1.0/24, loopback, and Tailscale's one address.
+    fn home() -> Vec<Network> {
+        let net = |ip: &str, mask: &str| (ip.parse().unwrap(), mask.parse().unwrap());
+        vec![
+            net("127.0.0.1", "255.0.0.0"),
+            net("192.168.1.50", "255.255.255.0"),
+            net("fe80::1", "ffff:ffff:ffff:ffff::"),
+            net("100.74.190.83", "255.255.255.255"),
+        ]
+    }
+
+    /// The same Mac at a café on 10.0.0.0/24, with Tailscale off.
+    fn cafe() -> Vec<Network> {
+        let net = |ip: &str, mask: &str| (ip.parse().unwrap(), mask.parse().unwrap());
+        vec![
+            net("127.0.0.1", "255.0.0.0"),
+            net("10.0.0.23", "255.255.255.0"),
+        ]
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn this_computers_networks_include_loopback_with_its_netmask() {
+        let networks = own_networks().expect("getifaddrs");
+        let loopback = ("127.0.0.1".parse().unwrap(), "255.0.0.0".parse().unwrap());
+        assert!(networks.contains(&loopback), "{networks:?}");
+    }
+
+    #[test]
+    fn only_routes_that_can_be_reached_from_here_may_answer() {
+        let (home, cafe) = (home(), cafe());
+        for route in ["192.168.1.5", "192.168.1.5:7400", "100.64.0.7", "fe80::2"] {
+            assert!(may_answer(route, &home), "{route} at home");
+            assert!(!may_answer(route, &cafe), "{route} at the café");
+        }
+        // Names, public addresses, and loopback may answer anywhere.
+        for route in [
+            "home.example.com:7400",
+            "203.0.113.9",
+            "127.0.0.1:7400",
+            "[::1]:7400",
+        ] {
+            assert!(
+                may_answer(route, &home) && may_answer(route, &cafe),
+                "{route}"
+            );
+        }
+        assert!(!may_answer("192.168.2.5", &home), "another subnet");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn away_from_home_the_relay_starts_at_once_and_at_home_the_lan_still_wins() {
+        let starts = |list: &[(&str, u64)]| -> Vec<(String, u64)> {
+            list.iter().map(|(r, at)| ((*r).to_owned(), *at)).collect()
+        };
+        let (home, cafe) = (home(), cafe());
+        // Away: the home LAN and Tailscale addresses hang, and the relay starts with them.
+        let away = [
+            ("192.168.1.5", 5_000, true),
+            ("100.64.0.7", 5_000, true),
+            ("relay:h", 40, true),
+        ];
+        let (won, started) = race_on(false, Some(&cafe), &away).await;
+        assert_eq!(won.as_deref(), Ok("relay:h"));
+        assert_eq!(
+            started,
+            starts(&[("192.168.1.5", 0), ("100.64.0.7", 0), ("relay:h", 0)])
+        );
+        // In the user's order too.
+        let (won, started) = race_on(true, Some(&cafe), &away).await;
+        assert_eq!(won.as_deref(), Ok("relay:h"));
+        assert_eq!(
+            started,
+            starts(&[("192.168.1.5", 0), ("100.64.0.7", 0), ("relay:h", 0)])
+        );
+
+        // At home: the LAN answers within its head start and wins, and the relay never starts.
+        let (won, started) = race_on(
+            false,
+            Some(&home),
+            &[("192.168.1.5", 30, true), ("relay:h", 0, true)],
+        )
+        .await;
+        assert_eq!(won.as_deref(), Ok("192.168.1.5"));
+        assert_eq!(started, starts(&[("192.168.1.5", 0)]));
+
+        // A reachable Tailscale route still holds the relay back, beside an unreachable LAN one.
+        let mut tailnet = cafe.clone();
+        tailnet.push((
+            "100.74.190.83".parse().unwrap(),
+            "255.255.255.255".parse().unwrap(),
+        ));
+        let (won, started) = race_on(false, Some(&tailnet), &away).await;
+        assert_eq!(won.as_deref(), Ok("relay:h"));
+        assert_eq!(started.last(), Some(&("relay:h".to_owned(), 200)));
     }
 
     /// What a stand-in relay saw on one connection, in milliseconds since `t0`.
