@@ -9,7 +9,7 @@
 import * as SecureStore from "expo-secure-store";
 import { t } from "i18next";
 
-import { openRelay, PinnedSocket, randomBytes, request } from "../modules/pinned-tls";
+import { openRelay, PinnedSocket, randomBytes, request, warmRelay } from "../modules/pinned-tls";
 import {
   approvalCode,
   commitment,
@@ -480,6 +480,14 @@ export class AccountHosts {
    * gets nothing unless it holds the host's key. Only the winner is kept; the caller closes it.
    */
   private async first(hostId: string, routes: string[], byOrder = false) {
+    // A relay route after another waits its head start, during which its connections open
+    // (PLX-1552). It's listed last unless the user ordered the routes. A warm that fails costs
+    // nothing: the relay's streams then open their own connections.
+    if (routes.some(isRelay) && !isRelay(routes[0]!)) {
+      try {
+        warmRelay(RELAY_URL);
+      } catch {}
+    }
     const { value } = await race(
       routes,
       async (route) => {

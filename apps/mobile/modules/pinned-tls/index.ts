@@ -28,6 +28,7 @@ const native = requireNativeModule<{
   relayRefused(id: string): number | null;
   relayClosedWith(id: string): { relay_code?: number; relay_reason?: string } | null;
   relayClose(id: string): void;
+  relayWarm(url: string): void;
   authorize(url: string): Promise<string>;
   appVersion(): { version: string; build: string };
   preview(url: string): Promise<void>;
@@ -94,6 +95,12 @@ export interface RelayBridge {
   closedWith(): RelayEnd | undefined;
   close(): void;
 }
+
+/**
+ * Opens connections to the relay at `url` (`https://…`) for the next bridges' streams to take
+ * (PLX-1552), on Android. A stream without one opens its own.
+ */
+export const warmRelay = (url: string) => native.relayWarm(url);
 
 let nextBridge = 0;
 

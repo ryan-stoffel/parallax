@@ -109,6 +109,7 @@ class RelayBridgeTest {
       val hostKey = parts.getOrNull(3)
       val action = parts.getOrNull(4)
       val auth = request.getHeader("Authorization")
+      if (url.encodedPath == "/cdn-cgi/trace") return MockResponse().setBody("h=relay\n")
       if (hostKey == "offline") {
         if (action == "tickets") offlineTicketAsks.incrementAndGet()
         return refuse(503)
@@ -219,6 +220,34 @@ class RelayBridgeTest {
     assertEquals(2, ticketsIssued.get())
     assertEquals(2, streams.get())
     assertTrue(issued.isEmpty())
+  }
+
+  @Test
+  fun warmedConnectionsCarryTheNextStreams() {
+    relayClient.connectionPool.evictAll()
+    warmRelay(relay.url("/").toString())
+    val deadline = System.currentTimeMillis() + 15_000
+    while (relayClient.connectionPool.idleConnectionCount() < 2) {
+      check(System.currentTimeMillis() < deadline) { "the warm opened no connections" }
+      Thread.sleep(10)
+    }
+    val good = bridge(connect)
+    for (attempt in 1..2) assertEquals(200, get(good).status)
+
+    // Two warming requests, each on a connection of its own, then each stream on one of those.
+    val requests = List(relay.requestCount) { relay.takeRequest() }
+    assertEquals(listOf("/cdn-cgi/trace", "/cdn-cgi/trace"), requests.take(2).map { it.path })
+    assertEquals(listOf(0, 0), requests.take(2).map { it.sequenceNumber })
+    assertEquals(listOf(connect, connect), requests.drop(2).map { it.path })
+    assertEquals(listOf(1, 1), requests.drop(2).map { it.sequenceNumber })
+  }
+
+  @Test
+  fun warmThatFailsCostsNothing() {
+    val closed = java.net.ServerSocket(0).use { it.localPort }
+    warmRelay("http://127.0.0.1:$closed")
+    warmRelay("not a url")
+    assertEquals(200, get(bridge(connect)).status)
   }
 
   @Test

@@ -188,6 +188,12 @@ class PinnedTlsModule : Module() {
       Unit
     }
 
+    /** Opens connections to the relay at `url` for the next bridges' streams (`warmRelay`). */
+    Function("relayWarm") { url: String ->
+      warmRelay(url)
+      Unit
+    }
+
     /**
      * Signs in as the desktop app does (0067): Clerk's authorize URL `url` opens in a Custom Tab,
      * which shares the browser's cookies, and Clerk sends it back to `parallax://oauth/callback`,
