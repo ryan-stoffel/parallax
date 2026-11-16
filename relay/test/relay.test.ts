@@ -18,7 +18,7 @@ import {
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
-import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay, TRACE_URL } from "../src/stream";
+import { EARLY_BYTES, EARLY_FRAMES, MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay, TRACE_URL } from "../src/stream";
 import { apnsPayload, MAX_SEALED, sendApns, sendFcm } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
@@ -733,6 +733,66 @@ describe("streams", () => {
     const open = JSON.parse((await control.next()) as string) as Open;
     expect(await runDurableObjectAlarm(streamObject(open.stream))).toBe(true);
     expect(await client.closed).toBe(4408);
+    await expect.poll(() => openStreams(host)).toEqual({});
+  });
+
+  /** A client's stream with no spare, and frames it sent before plxd joined, held by its object. */
+  async function sentEarly(frames: Uint8Array[]) {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    for (const frame of frames) client.ws.send(frame);
+    const early = () => runInDurableObject(streamObject(open.stream), (_: StreamRelay, state) => state.storage.get("early"));
+    await expect.poll(early).toBe(frames.length);
+    return { host, client, open };
+  }
+
+  it("passes a client's frames that came before plxd joined after ready, once and counted (PLX-1579)", async () => {
+    const hello = new Uint8Array([0x16, 0x03, 0x01, 0, 2, 1, 2]);
+    const { host, client, open } = await sentEarly([hello, hello.slice().reverse()]);
+    const side = opened(await join(host, open));
+    expect(await side.next()).toBe("ready");
+    expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(hello);
+    expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(hello.slice().reverse());
+    expect(await client.next()).toBe("ready");
+    // Each counts as a frame does, on both ends' count, and a report is due.
+    const counted = () => runInDurableObject(streamObject(open.stream), async (_: StreamRelay, state) => ({
+      kept: state.getWebSockets().map((ws) => ws.deserializeAttachment()),
+      alarm: await state.storage.getAlarm(),
+    }));
+    const held = await counted();
+    expect(held.kept).toEqual([2 * MIN_FRAME_BYTES, 2 * MIN_FRAME_BYTES]);
+    expect(held.alarm).toBeGreaterThan(Date.now());
+    // Sent once: plxd's next frame is the client's next, not a held one again.
+    client.ws.send(new Uint8Array([7]));
+    expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([7]));
+    side.ws.send(new Uint8Array([9]));
+    expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(new Uint8Array([9]));
+    expect((await counted()).kept).toEqual([4 * MIN_FRAME_BYTES, 4 * MIN_FRAME_BYTES]);
+  });
+
+  it("closes a client that sends more than it may before plxd joins, or text", async () => {
+    const { host, token, control } = await online();
+    const many = opened(await connect(host, token));
+    await control.next();
+    for (let frame = 0; frame <= EARLY_FRAMES; frame++) many.ws.send(new Uint8Array([frame]));
+    expect(await many.closed).toBe(4400);
+    const big = opened(await connect(host, token));
+    await control.next();
+    big.ws.send(new Uint8Array(EARLY_BYTES + 1));
+    expect(await big.closed).toBe(4400);
+    const text = opened(await connect(host, token));
+    await control.next();
+    text.ws.send("hello");
+    expect(await text.closed).toBe(4400);
+  });
+
+  it("ends a stream before ready when an eviction lost its early frames", async () => {
+    const { host, client, open } = await sentEarly([new Uint8Array([1])]);
+    await evictDurableObject(streamObject(open.stream));
+    const side = await join(host, open);
+    expect(side instanceof Response && side.status).toBe(404);
+    expect(await client.closed).toBe(4400);
     await expect.poll(() => openStreams(host)).toEqual({});
   });
 

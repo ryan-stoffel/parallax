@@ -15,6 +15,10 @@ export const REPORT_AFTER = 5 * 60_000;
 /** How long a client waits for plxd to join its stream, or a spare a client took waits for that
  *  client, before the stream closes. */
 export const JOIN_TIMEOUT = 30_000;
+/** The most frames, and bytes, a client may send before plxd joins its stream, which wait for plxd
+ *  in memory: its TLS ClientHello right behind its upgrade request, with room (PLX-1579, for PLX-1568). */
+export const EARLY_FRAMES = 4;
+export const EARLY_BYTES = 64 * 1024;
 
 /**
  * How this object writes an alarm on a path a client waits on: a spare's claim, a join, and a
@@ -74,7 +78,8 @@ const tail = (id: string) => id.slice(-8);
  * doesn't queue another's frames behind it in the host's object. The host's object arms it with
  * the hash of the one-time token it sent plxd, then the Worker brings it the client's WebSocket,
  * after the host's object admitted it, and plxd's, with that token, in either order. Once both are
- * here it tells each `ready` and passes binary frames between them, unread.
+ * here it tells each `ready` and passes binary frames between them, unread. A client's first
+ * frames may come before plxd does, and wait for it in memory (PLX-1579).
  *
  * It counts each frame as at least [`MIN_FRAME_BYTES`] and reports its count to the host's object
  * every [`REPORT_BYTES`], within [`REPORT_AFTER`] of a frame, and when it closes; the host's object
@@ -93,6 +98,9 @@ export class StreamRelay extends DurableObject<Env> {
   private ending = false;
   // One claim per uniquely armed stream. Volatile and never awaited by join; eviction loses it.
   private takenTiming?: Record<string, number>;
+  /** The client's frames that came before plxd's end, for plxd once it joins (PLX-1579). In memory
+   *  only: storage's `early` counts them, so an object that lost them to eviction can tell. */
+  private early?: ArrayBuffer[];
 
   private armed() {
     return this.ctx.storage.get<Armed>("armed");
@@ -226,6 +234,7 @@ export class StreamRelay extends DurableObject<Env> {
     const armed = await this.armed();
     if (timed) timing.join_read = performance.now() - start;
     if (!armed) return json(404, { error: "not_found" });
+    let held: ArrayBuffer[] = [];
     let side: Side;
     if (url.pathname === "/client") {
       // Only the Worker reaches this, after the host's object admitted the client.
@@ -241,6 +250,18 @@ export class StreamRelay extends DurableObject<Env> {
       )
         return json(404, { error: "not_found" });
       side = "host";
+      const client = this.side("client");
+      if (client) {
+        // The frames the client sent before plxd came. Lost ones end the stream before `ready`,
+        // and the client asks again with nothing early.
+        const counted = (await this.ctx.storage.get<number>("early")) ?? 0;
+        held = this.early ?? [];
+        this.early = undefined;
+        if (held.length !== counted) {
+          this.shut(client, 4400, "the early frames were lost");
+          return json(404, { error: "not_found" });
+        }
+      }
     }
     const [theirs, ours] = Object.values(new WebSocketPair());
     // The second tag names the stream in this socket's log lines, with no storage read to fail.
@@ -250,10 +271,15 @@ export class StreamRelay extends DurableObject<Env> {
       // Both ends are here: each learns it, plxd's side then dials its own listener.
       ours!.send("ready");
       other.send("ready");
+      // Then plxd gets the client's early frames, counted as any frame is.
+      for (const frame of held) ours!.send(frame);
+      if (held.length)
+        this.keep(this.pending() + held.reduce((sum, frame) => sum + Math.max(frame.byteLength, MIN_FRAME_BYTES), 0));
       if (timed) timing.join_ready = performance.now() - start;
       const alarmStart = timed ? performance.now() : 0;
       await this.ctx.storage.deleteAlarm(UNCONFIRMED);
       if (timed) timing.join_delete_alarm = performance.now() - alarmStart;
+      if (held.length) await this.reportSoon();
     } else if (side === "client") {
       await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT, UNCONFIRMED);
     }
@@ -274,8 +300,23 @@ export class StreamRelay extends DurableObject<Env> {
       () => this.context(ws),
       async () => {
         const peer = this.side(this.sideOf(ws) === "client" ? "host" : "client");
-        // Only TLS records, and only once both ends are here.
-        if (typeof message === "string" || !peer) return this.shut(ws, 4400, "bad frame");
+        // Only TLS records.
+        if (typeof message === "string") return this.shut(ws, 4400, "bad frame");
+        if (!peer) {
+          // A client's records before plxd joins, such as its ClientHello right behind its upgrade
+          // request, wait for plxd, up to EARLY_FRAMES and EARLY_BYTES (PLX-1579).
+          const held = [...(this.early ?? []), message];
+          const bytes = held.reduce((sum, frame) => sum + frame.byteLength, 0);
+          if (this.sideOf(ws) !== "client" || this.ctx.getWebSockets("host").length ||
+            held.length > EARLY_FRAMES || bytes > EARLY_BYTES)
+            return this.shut(ws, 4400, "bad frame");
+          // Counted frames with none in memory went with an eviction.
+          if (!this.early && (await this.ctx.storage.get<number>("early")))
+            return this.shut(ws, 4400, "the early frames were lost");
+          this.early = held;
+          await this.ctx.storage.put("early", held.length, UNCONFIRMED);
+          return;
+        }
         // Sent before any report is awaited, since another frame may be handled during the wait
         // and must not pass this one.
         peer.send(message);
