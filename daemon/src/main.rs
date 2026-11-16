@@ -179,7 +179,8 @@ struct DialArgs {
 
     /// With `--account`, try the ADDRs in the user's order: each starts 200 ms after the one
     /// before it, or as soon as those before it failed, instead of the direct ones together and
-    /// the relay 200 ms later (0091)
+    /// the relay 200 ms later (0091). Either way, a LAN address off this computer's networks
+    /// holds nothing back (PLX-1553)
     #[arg(long, requires = "account", conflicts_with_all = ["pair", "sign_in", "discover"])]
     in_order: bool,
 
