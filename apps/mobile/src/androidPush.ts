@@ -50,12 +50,15 @@ export function forgetAndroidPushKeys(): Promise<void> {
   return change(() => SecureStore.deleteItemAsync(KEYS));
 }
 
+/** The states a push names (relay/src/push.ts). One naming another is ignored, as ThreadStatus.swift does. */
+const STATES: readonly string[] = ["needsYou", "done", "failed"] satisfies PushBody["state"][];
+
 /** The push a task payload carries, if it's one from the relay. */
-function pushIn(payload: Notifications.NotificationTaskPayload | undefined): PushBody | undefined {
+export function pushIn(payload: Notifications.NotificationTaskPayload | undefined): PushBody | undefined {
   if (!payload || "actionIdentifier" in payload) return undefined;
   try {
     const body = JSON.parse(String(payload.data?.dataString)) as Partial<PushBody>;
-    return typeof body.hostId === "string" && typeof body.run === "string" && typeof body.state === "string"
+    return typeof body.hostId === "string" && typeof body.run === "string" && STATES.includes(String(body.state))
       ? (body as PushBody)
       : undefined;
   } catch {
