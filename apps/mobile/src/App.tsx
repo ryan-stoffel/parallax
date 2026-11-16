@@ -158,6 +158,10 @@ const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeSta
 /** Whether `m`'s threads are known now. A list still loading would look like every run starting over. */
 const current = (m: Computer) => m.connectedNow && !m.view.loading;
 
+/** How long a tapped notification's thread may wait for its computer to connect before it's dropped,
+ *  so a computer that comes back later doesn't pull the user away from what they've opened since. */
+const OPEN_WAIT = 30_000;
+
 /**
  * Posts `alert` for a thread, unless its switch is off or it's out of sight now, such as on a
  * computer that dropped during the hold, whose thread may have gone on since: plxd's push covers it.
@@ -215,14 +219,27 @@ function Alerts() {
     return () => setNotifiesFor(() => false);
   }, []);
   useEffect(() => void registerWithRelay(accessToken), []);
+  // The thread a tapped notification is about, until it opens. A push names no computer the app
+  // knows, so one that launched the app waits for a computer that has its run to connect.
+  const opening = useRef<{ hostId?: string; runId: string; until: number }>(undefined);
+  const openTapped = () => {
+    const tapped = opening.current;
+    if (!tapped) return;
+    if (Date.now() > tapped.until) return void (opening.current = undefined);
+    const { runId } = tapped;
+    const owner =
+      tapped.hostId ?? latest.current.find((m) => m.view.state.threads.some((t) => t.id === runId))?.machine.id;
+    if (!owner || !nav.isReady()) return;
+    opening.current = undefined;
+    nav.reset({ index: 0, routes: [{ name: "Thread", params: { hostId: owner, runId } }] });
+  };
+  // Each change to the computers, such as one connecting, may bring the run.
+  useEffect(openTapped);
   useEffect(
     () =>
       onOpened(({ hostId, runId }) => {
-        const owner =
-          hostId ??
-          latest.current.find((m) => m.view.state.threads.some((t) => t.id === runId))?.machine.id;
-        if (owner && nav.isReady())
-          nav.reset({ index: 0, routes: [{ name: "Thread", params: { hostId: owner, runId } }] });
+        opening.current = { hostId, runId, until: Date.now() + OPEN_WAIT };
+        openTapped();
       }),
     [],
   );
