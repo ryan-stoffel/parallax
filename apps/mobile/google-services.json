@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "996106167144",
+    "project_id": "parallax-codes",
+    "storage_bucket": "parallax-codes.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:996106167144:android:efc3d5adbc5ff533d32cdd",
+        "android_client_info": {
+          "package_name": "dev.parallax.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA89JIxCQhCekd0F2wMErRYI4Yg8nZ_0Q0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

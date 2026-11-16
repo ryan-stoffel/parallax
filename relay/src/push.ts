@@ -104,3 +104,98 @@ export async function sendApns(
   }
   return "gone";
 }
+
+/** How the relay keeps an Android device: `fcm:` and its FCM registration token, in the same list
+ *  as iOS's bare APNs tokens. */
+export const FCM = "fcm:";
+
+/**
+ * The FCM v1 message for `notification` to the Android device with token `device`. It's data
+ * only, so FCM never shows it itself and the app's background task gets it even while the app is
+ * closed. expo-notifications shows `title` and `message` (the fixed text) under `tag`, the id the
+ * app's own notification for this event has, and gives `body` to the app as the notification's
+ * data, as on iOS. The task then opens `sealed` and replaces it under the same id (0100).
+ */
+export function fcmMessage(device: string, notification: Notification) {
+  return {
+    message: {
+      token: device,
+      android: { priority: "HIGH" },
+      data: {
+        title: "Parallax",
+        message: TEXT[notification.state],
+        tag: `${notification.run}:${notification.state}`,
+        body: JSON.stringify(notification),
+      },
+    },
+  };
+}
+
+/** The fields of a Google service account key (its JSON) that sending needs. */
+type ServiceAccount = { project_id: string; client_email: string; private_key: string; token_uri?: string };
+
+let access: { account: string; token: string; made: number } | undefined;
+
+/** An OAuth access token for FCM, from a JWT signed with the service account's key, reused for
+ *  [`TOKEN_AGE`]. Google's last an hour. */
+async function accessToken(account: ServiceAccount, send: typeof fetch): Promise<string | undefined> {
+  const now = Date.now();
+  if (access?.account === account.client_email && now - access.made < TOKEN_AGE) return access.token;
+  const der = Uint8Array.from(atob(account.private_key.replace(/-----[^-]+-----|\s/g, "")), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const part = (value: object) => base64url(new TextEncoder().encode(JSON.stringify(value)));
+  const uri = account.token_uri ?? "https://oauth2.googleapis.com/token";
+  const iat = Math.floor(now / 1000);
+  const claims = { iss: account.client_email, scope: "https://www.googleapis.com/auth/firebase.messaging", aud: uri, iat, exp: iat + 3600 };
+  const signed = `${part({ alg: "RS256", typ: "JWT" })}.${part(claims)}`;
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signed));
+  const answer = await send(uri, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${signed}.${base64url(signature)}` }),
+  });
+  const { access_token: token } = await answer.json<{ access_token?: string }>().catch(() => ({ access_token: undefined }));
+  if (!answer.ok || !token) {
+    console.log("fcm token", answer.status);
+    return undefined;
+  }
+  access = { account: account.client_email, token, made: now };
+  return token;
+}
+
+/**
+ * Sends `notification` to the Android device with FCM token `device`. "gone" when FCM no longer
+ * knows the token, so the caller drops it. Without `FCM_SERVICE_ACCOUNT`, as in tests and `wrangler
+ * dev`, it only logs and answers "stubbed".
+ */
+export async function sendFcm(
+  env: Env,
+  device: string,
+  notification: Notification,
+  send: typeof fetch = fetch,
+): Promise<"sent" | "gone" | "failed" | "stubbed"> {
+  if (!env.FCM_SERVICE_ACCOUNT) {
+    console.log("fcm (stub)", device.slice(0, 8), notification.run, notification.state);
+    return "stubbed";
+  }
+  const account = JSON.parse(env.FCM_SERVICE_ACCOUNT) as ServiceAccount;
+  const token = await accessToken(account, send);
+  if (!token) return "failed";
+  const answer = await send(`https://fcm.googleapis.com/v1/projects/${account.project_id}/messages:send`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(fcmMessage(device, notification)),
+  });
+  if (answer.ok) return "sent";
+  const { error } = await answer
+    .json<{ error?: { status?: string; details?: { errorCode?: string }[] } }>()
+    .catch(() => ({ error: undefined }));
+  const code = error?.details?.find((d) => d.errorCode)?.errorCode;
+  // UNREGISTERED is a token an uninstall or a reset retired. A 404 without it, such as for a wrong
+  // project, says nothing about the token.
+  if (code === "UNREGISTERED") return "gone";
+  // Google refused the access token, so the next push makes another.
+  if (answer.status === 401) access = undefined;
+  console.log("fcm", answer.status, error?.status, code);
+  return "failed";
+}

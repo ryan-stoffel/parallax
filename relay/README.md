@@ -105,4 +105,10 @@ corepack pnpm exec wrangler secret put APNS_KEY_ID --env=""
 corepack pnpm exec wrangler secret put APNS_TEAM_ID --env=""
 ```
 
+Android push needs the JSON key of a service account in the Firebase project `parallax-codes` that has only the role Firebase Cloud Messaging API Admin, `relay-fcm` (PLX-1556). Without it Android pushes only log:
+
+```sh
+corepack pnpm exec wrangler secret put FCM_SERVICE_ACCOUNT --env="" < relay-fcm.json
+```
+
 Workers reach APNs over HTTP/2 in production, but not under `wrangler dev` on macOS (cloudflare/workerd#4841), so test a real push against the deployed relay.

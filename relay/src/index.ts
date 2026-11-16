@@ -84,6 +84,9 @@ export interface Env {
   APNS_KEY?: string;
   APNS_KEY_ID?: string;
   APNS_TEAM_ID?: string;
+  /** The JSON key of a Google service account that may send through FCM in the Firebase project
+   *  `dev.parallax.mobile` is in, as a secret. Unset, Android pushes only log. */
+  FCM_SERVICE_ACCOUNT?: string;
 }
 
 /** A host's id: its key's JWK thumbprint, 32 bytes in base64url. */
@@ -350,8 +353,9 @@ const routes = {
         return json(200, result);
       }
       case "POST /devices": {
-        const body = (await request.json().catch(() => null)) as { token?: unknown } | null;
-        const added = typeof body?.token === "string" && (await account.addDevice(body.token));
+        const body = (await request.json().catch(() => null)) as { token?: unknown; platform?: unknown } | null;
+        const added =
+          typeof body?.token === "string" && (await account.addDevice(body.token, body.platform === "android"));
         return added ? json(200, { ok: true }) : json(400, { error: "invalid_request" });
       }
       case "DELETE /devices/:id":

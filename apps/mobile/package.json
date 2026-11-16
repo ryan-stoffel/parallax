@@ -11,6 +11,7 @@
     "test:native": "node modules/pinned-tls/test/relay.mjs && node modules/thread-status/test/store.mjs"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@react-navigation/elements": "2.9.45",
@@ -30,6 +31,7 @@
     "expo-notifications": "~57.0.22",
     "expo-secure-store": "~57.0.4",
     "expo-speech-recognition": "~57.1.1",
+    "expo-task-manager": "~57.0.23",
     "i18next": "^27.1.1",
     "lucide-react-native": "^1.62.0",
     "react": "19.2.3",

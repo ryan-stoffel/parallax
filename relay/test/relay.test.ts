@@ -19,7 +19,7 @@ import {
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
 import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay, TRACE_URL } from "../src/stream";
-import { apnsPayload, MAX_SEALED, sendApns } from "../src/push";
+import { apnsPayload, MAX_SEALED, sendApns, sendFcm } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
   BASE,
@@ -2096,6 +2096,83 @@ describe("push", () => {
     // A token both servers refuse is gone.
     const neither = async () => Response.json({ reason: "BadDeviceToken" }, { status: 400 });
     expect(await sendApns(env, device, notification, neither as typeof fetch)).toBe("gone");
+  });
+});
+
+describe("android push", () => {
+  const fcmToken = `cAbC-123_x:${"APA91b".repeat(25)}`;
+
+  it("keeps an Android device's FCM token as given, beside iOS's, and sends it the same notification", async () => {
+    const { control } = await online("user_android");
+    const token = await session("user_android");
+    const add = (body: object) => call("/v1/devices", { method: "POST", token, body: JSON.stringify(body) });
+    expect((await add({ token: fcmToken, platform: "android" })).status).toBe(200);
+    expect((await add({ token: "short", platform: "android" })).status).toBe(400);
+    expect((await add({ token: "e".repeat(64) })).status).toBe(200);
+    control.ws.send(JSON.stringify({ t: "push", run: "run-1", state: "needsYou", sealed: "abc" }));
+    const outbox = () => runInDurableObject(users.get(users.idFromName(account("user_android"))), (it: UserAccount) => it.outbox);
+    await expect.poll(outbox).toHaveLength(2);
+    expect((await outbox()).map((s) => s.device)).toEqual([`fcm:${fcmToken}`, "e".repeat(64)]);
+    expect((await outbox())[0]!.notification).toMatchObject({ run: "run-1", state: "needsYou", sealed: "abc" });
+  });
+
+  it("signs in to Google with the service account, sends data only, and drops a token FCM retired", async () => {
+    const pair = (await crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const der = (await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer;
+    const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...new Uint8Array(der)))}\n-----END PRIVATE KEY-----\n`;
+    const env = {
+      FCM_SERVICE_ACCOUNT: JSON.stringify({
+        project_id: "parallax-test",
+        client_email: `relay-fcm-${crypto.randomUUID()}@parallax-test.iam.gserviceaccount.com`,
+        private_key: pem,
+        token_uri: "https://oauth2.googleapis.com/token",
+      }),
+    } as Env;
+    const notification = { hostId: "host-1", run: "run-1", state: "done", sealed: "c2VhbGVk" } as const;
+
+    const seen: Request[] = [];
+    let retired = false;
+    const google = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(url, init);
+      seen.push(request.clone());
+      if (request.url === "https://oauth2.googleapis.com/token") return Response.json({ access_token: "ya29.test" });
+      return retired
+        ? Response.json({ error: { status: "NOT_FOUND", details: [{ errorCode: "UNREGISTERED" }] } }, { status: 404 })
+        : Response.json({ name: "projects/parallax-test/messages/1" });
+    };
+    expect(await sendFcm(env, fcmToken, notification, google as typeof fetch)).toBe("sent");
+    const [exchange, message] = seen;
+
+    const assertion = (await exchange!.formData()).get("assertion") as string;
+    const [head, claims, signature] = assertion.split(".");
+    const decode = (part: string) => Uint8Array.from(atob(part.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+    expect(JSON.parse(atob(head!))).toEqual({ alg: "RS256", typ: "JWT" });
+    expect(JSON.parse(atob(claims!))).toMatchObject({ scope: "https://www.googleapis.com/auth/firebase.messaging" });
+    expect(
+      await crypto.subtle.verify("RSASSA-PKCS1-v1_5", pair.publicKey, decode(signature!), new TextEncoder().encode(`${head}.${claims}`)),
+    ).toBe(true);
+
+    expect(message!.url).toBe("https://fcm.googleapis.com/v1/projects/parallax-test/messages:send");
+    expect(message!.headers.get("authorization")).toBe("Bearer ya29.test");
+    const sent = await message!.json<{ message: Record<string, unknown> & { data: Record<string, string> } }>();
+    // No `notification`, so Android hands it to the app even while it's closed.
+    expect(sent.message).not.toHaveProperty("notification");
+    expect(sent.message.token).toBe(fcmToken);
+    expect(sent.message.data).toEqual({
+      title: "Parallax",
+      message: "A thread finished.",
+      tag: "run-1:done",
+      body: JSON.stringify(notification),
+    });
+
+    // The access token is reused, and a retired device token is gone.
+    retired = true;
+    expect(await sendFcm(env, fcmToken, notification, google as typeof fetch)).toBe("gone");
+    expect(seen.filter((r) => r.url.includes("oauth2"))).toHaveLength(1);
   });
 });
 
