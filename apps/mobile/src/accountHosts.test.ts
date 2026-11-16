@@ -16,6 +16,9 @@ const net = vi.hoisted(() => ({
   sent: [] as { hostname: string; pathname: string; pin: string; credential: boolean }[],
   /** Hosts whose TLS presents a key the pin refuses, as `pinned-tls` reports it. */
   wrongKey: new Set<string>(),
+  /** The relay each warm was for, and what the next warm does. */
+  warmed: [] as string[],
+  warm: (url: string) => void url,
 }));
 
 vi.mock("expo-secure-store", () => ({
@@ -33,6 +36,10 @@ vi.mock("./host", async (original) => ({
 vi.mock("../modules/pinned-tls", () => ({
   PinnedSocket: class {},
   randomBytes: (count: number) => crypto.getRandomValues(new Uint8Array(count)),
+  warmRelay: (url: string) => {
+    net.warmed.push(url);
+    net.warm(url);
+  },
   openRelay: async (url: string) => {
     const hostId = url.split("/").at(-2)!;
     net.ports.push(hostId);
@@ -372,6 +379,8 @@ beforeEach(() => {
   net.answers = {};
   net.sent.length = 0;
   net.wrongKey.clear();
+  net.warmed.length = 0;
+  net.warm = () => {};
   vi.useRealTimers();
 });
 
@@ -686,6 +695,26 @@ test("an added route is pinned to the host, and one with another key gets no cre
   net.sent.length = 0;
   await accounts.ask("a", { ...added, routeOrder: ["stale.example.com:7400", "relay:a"] }, () => {});
   expect(net.sent.filter((call) => call.hostname === "stale.example.com" && call.credential)).toEqual([]);
+});
+
+test("a relay route behind another warms the relay first, and a warm that fails costs nothing", async () => {
+  net.wrongKey.add("stale.example.com");
+  net.answers["a"] = holding(() => session);
+  net.warm = () => {
+    throw new Error("no network");
+  };
+  const accounts = await load();
+  const added = { routes: [], addedRoutes: ["stale.example.com:7400"] };
+  await accounts.ask("a", added, () => {});
+  expect(accounts.sessions).toEqual(["a"]);
+  expect(net.warmed.length).toBeGreaterThan(0);
+  expect(net.warmed.every((url) => url === "https://relay.test")).toBe(true);
+
+  // The relay alone, or first in the user's order, starts at once: nothing to warm.
+  net.warmed.length = 0;
+  await accounts.ask("a", { routes: [] }, () => {});
+  await accounts.ask("a", { ...added, routeOrder: ["relay:a", "stale.example.com:7400"] }, () => {});
+  expect(net.warmed).toEqual([]);
 });
 
 test("a re-check looks only at the routes ahead and sends no credential", async () => {

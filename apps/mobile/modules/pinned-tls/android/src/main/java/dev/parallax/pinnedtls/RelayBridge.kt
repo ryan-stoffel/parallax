@@ -15,6 +15,10 @@
 //
 // The stream's own connection to the relay uses the system's trust, as the Swift does: it reaches
 // Parallax Relay, not the host, and the host's pinned TLS runs inside it.
+//
+// Every bridge's streams share one pool of HTTP/1.1 connections to the relay, which `warmRelay`
+// fills while the direct routes have their head start (PLX-1552). OkHttp gives a WebSocket an idle
+// HTTP/1.1 connection from its pool, so a stream then skips the relay's TCP and TLS handshakes.
 package dev.parallax.pinnedtls
 
 import java.io.IOException
@@ -30,8 +34,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -40,6 +46,42 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
+
+/**
+ * Every bridge's connections to the relay. HTTP/1.1 only: a WebSocket takes only an HTTP/1.1
+ * connection from the pool, and with HTTP/2 allowed a warming request would get an HTTP/2 one.
+ */
+internal val relayClient = OkHttpClient.Builder().protocols(listOf(Protocol.HTTP_1_1)).build()
+
+/** One connection for the route check's stream, and one for `/ws`'s. */
+private const val WARM_CONNECTIONS = 2
+
+/**
+ * Opens connections to the relay at `relay` (its `https://` URL) for the next streams to take, with
+ * `GET /cdn-cgi/trace`, which Cloudflare answers without the Worker. One a stream doesn't take
+ * closes after OkHttp's five idle minutes, before Cloudflare's 400 s. Any failure is ignored: a
+ * stream then opens its own connection, as it would have.
+ */
+fun warmRelay(relay: String) {
+  val trace = try {
+    relay.toHttpUrl().newBuilder().encodedPath("/cdn-cgi/trace").query(null).build()
+  } catch (_: IllegalArgumentException) {
+    return
+  }
+  repeat(WARM_CONNECTIONS) {
+    relayClient.newCall(Request.Builder().url(trace).build()).enqueue(object : Callback {
+      override fun onFailure(call: Call, e: IOException) {}
+
+      // Read to the end, so the connection goes back to the pool.
+      override fun onResponse(call: Call, response: Response) {
+        try {
+          response.use { it.body?.source()?.readByteString() }
+        } catch (_: IOException) {
+        }
+      }
+    })
+  }
+}
 
 class RelayBridge(url: String, private val token: String) {
   private val listener = ServerSocket(0, 50, InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)))
@@ -51,7 +93,11 @@ class RelayBridge(url: String, private val token: String) {
   private val tickets = connect.newBuilder()
     .encodedPath(connect.encodedPath.replace("/connect", "/tickets"))
     .build()
-  private val client = OkHttpClient.Builder().readTimeout(STREAM_TIMEOUT_S, TimeUnit.SECONDS).build()
+  /** The shared pool, with a dispatcher of its own, so `close` cancels only this bridge's calls. */
+  private val client = relayClient.newBuilder()
+    .dispatcher(Dispatcher())
+    .readTimeout(STREAM_TIMEOUT_S, TimeUnit.SECONDS)
+    .build()
   private val pipes = ConcurrentHashMap.newKeySet<Pipe>()
 
   val port: Int get() = listener.localPort
@@ -94,7 +140,7 @@ class RelayBridge(url: String, private val token: String) {
     pipes.forEach { it.end() }
     pipes.clear()
     client.dispatcher.cancelAll()
-    release(client)
+    client.dispatcher.executorService.shutdown()
   }
 
   /** Carries `connection` over a stream once it proved it's this app. */

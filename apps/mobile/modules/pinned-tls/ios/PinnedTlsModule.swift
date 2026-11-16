@@ -202,6 +202,11 @@ public class PinnedTlsModule: Module {
       lock.withLock { bridges.removeValue(forKey: id) }?.close()
     }
 
+    /// Does nothing on iOS. Android's bridges take connections a request opened early (PLX-1552),
+    /// but a `URLSessionWebSocketTask` always opens its own: a request on the same session uses
+    /// HTTP/2 or HTTP/3 with the relay, and a WebSocket needs HTTP/1.1.
+    Function("relayWarm") { (_: String) in }
+
     /// Signs in as the desktop app does (0067): Clerk's authorize URL `url` opens in a sign-in
     /// sheet that shares Safari's cookies, and Clerk sends it back to `parallax://oauth/callback`,
     /// which the sheet hands here without loading anything. Resolves to that callback URL, with
