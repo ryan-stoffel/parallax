@@ -10,6 +10,7 @@ vi.mock("expo-notifications", () => ({}));
 vi.mock("expo-task-manager", () => ({}));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 vi.mock("./language", () => ({ startLanguage: async () => {} }));
+vi.mock("./androidThreads", () => ({ keepPush: async () => {} }));
 
 const { forgetAndroidPushKeys, saveAndroidPushKey } = await import("./androidPush");
 

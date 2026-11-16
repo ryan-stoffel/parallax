@@ -10,7 +10,9 @@
 // fixed text if it can't (0100). Both name one event alike, so iOS
 // shows one of them, and a push doesn't show in front for a thread the app notifies about itself.
 // Tapping either opens the thread. The extension also keeps what opens for the widget and the Live
-// Activity, and the app does that here for the threads it sees and for a push it gets in front.
+// Activity, and the app does that here for the threads it sees and for a push it gets in front. On
+// Android the push task keeps what opens, and androidThreads.ts shows the widget and an ongoing
+// notification.
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
@@ -23,6 +25,7 @@ import type { RelayPushKeyResult } from "../../desktop/src/protocol/generated/pr
 import { ThreadStatus } from "../modules/thread-status";
 import { lastReplyIn, type Alert } from "./alerts";
 import { forgetAndroidPushKeys, saveAndroidPushKey } from "./androidPush";
+import { forgetThreads, keepSeen, RUNNING } from "./androidThreads";
 import type { ThreadStatusUpdate } from "./threadStatus";
 
 /** Parallax Relay (0068), or the local one a test's bundle names. */
@@ -38,6 +41,9 @@ export const setNotifiesFor = (check: typeof notifiesFor) => void (notifiesFor =
 
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
+    // The ongoing notification for running threads updates quietly.
+    if (n.request.identifier === RUNNING)
+      return { shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false };
     // Only a push has `run`. This runs only in front, where the app notifies for itself.
     const data = n.request.content.data as { runId?: string; run?: string };
     const shown = (data.runId ?? data.run) !== viewing && !(data.run && notifiesFor(data.run));
@@ -99,17 +105,19 @@ function sharedGroup(): string | undefined {
   return appleTeamId && bundleIdentifier ? `${appleTeamId}.${bundleIdentifier}.pushKeys` : undefined;
 }
 
-/** Tells the widget and the Live Activity what the app sees (`threadStatus` in threadStatus.ts). */
+/** Tells the widget and the Live Activity, or Android's widget and ongoing notification, what the app sees (`threadStatus` in threadStatus.ts). */
 export function showThreadStatus({ seen, connected }: ThreadStatusUpdate) {
-  const group = sharedGroup();
   // With no computer known now there's no news, and a sync would mark the Live Activity as current.
-  if (group && connected.length > 0)
+  if (connected.length === 0) return;
+  if (Platform.OS === "android") return void keepSeen({ seen, connected });
+  const group = sharedGroup();
+  if (group)
     void ThreadStatus?.sync(JSON.stringify(seen), connected, group).catch(() => {});
 }
 
-/** Takes thread names and push keys off this phone, for signing out, and ends the Live Activity. */
+/** Takes thread names and push keys off this phone, for signing out, and ends the Live Activity or Android's ongoing notification. */
 export async function forgetThreadStatus(): Promise<void> {
-  if (Platform.OS === "android") return forgetAndroidPushKeys();
+  if (Platform.OS === "android") return void (await Promise.all([forgetAndroidPushKeys(), forgetThreads()]));
   const group = sharedGroup();
   if (group) await ThreadStatus?.signOut(group).catch(() => {});
 }

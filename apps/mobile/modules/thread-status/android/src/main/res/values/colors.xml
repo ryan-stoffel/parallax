@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's light palette (src/theme.ts). values-night has the dark one. -->
+<resources>
+  <color name="thread_widget_background">#FFFFFF</color>
+  <color name="thread_widget_foreground">#1E1B4B</color>
+  <color name="thread_widget_muted">#4A4868</color>
+  <color name="thread_widget_needs_you">#B45309</color>
+  <color name="thread_widget_working">#2B5CFF</color>
+  <color name="thread_widget_failed">#D4330F</color>
+</resources>

@@ -4,8 +4,8 @@
 // fixed text under the id the app's own notification for that event has, and runs this task, even
 // while the app is closed. The task opens `sealed` with the computer's key and posts the thread's
 // title and text under the same id, which replaces the fixed text, as iOS's notification service
-// extension does. Anything that fails leaves the fixed text. index.ts imports this first, since a
-// closed app runs only the task.
+// extension does, and keeps the thread's state for the widget (androidThreads.ts). Anything that
+// fails leaves the fixed text. index.ts imports this first, since a closed app runs only the task.
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
@@ -13,6 +13,7 @@ import i18next, { t } from "i18next";
 import { Platform } from "react-native";
 
 import { startLanguage } from "./language";
+import { keepPush } from "./androidThreads";
 import { openSealed, type PushBody } from "./sealed";
 
 const TASK = "parallax-sealed-push";
@@ -86,6 +87,8 @@ if (Platform.OS === "android") {
       content: { title: opened.title, body: opened.text, data: push },
       trigger: { channelId: OPENED },
     });
+    // The widget and the ongoing notification, as iOS's extension keeps what opens.
+    await keepPush(push, opened.title);
   });
   void Notifications.registerTaskAsync(TASK).catch(() => {});
 }

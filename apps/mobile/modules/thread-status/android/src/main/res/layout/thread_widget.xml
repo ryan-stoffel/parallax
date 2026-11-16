@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Up to three threads, each a row that opens it, or a line saying there are none. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/thread_widget"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/thread_widget_background"
+  android:orientation="vertical"
+  android:padding="16dp">
+  <TextView
+    android:id="@+id/empty"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="@string/thread_widget_empty"
+    android:textColor="@color/thread_widget_muted"
+    android:textSize="14sp" />
+  <LinearLayout
+    android:id="@+id/row0"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="10dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:visibility="gone">
+    <TextView
+      android:id="@+id/mark0"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_marginEnd="8dp"
+      android:text="●"
+      android:textSize="12sp" />
+    <TextView
+      android:id="@+id/title0"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_weight="1"
+      android:ellipsize="end"
+      android:maxLines="1"
+      android:textColor="@color/thread_widget_foreground"
+      android:textSize="14sp"
+      android:textStyle="bold" />
+    <TextView
+      android:id="@+id/state0"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_marginStart="8dp"
+      android:maxLines="1"
+      android:textColor="@color/thread_widget_muted"
+      android:textSize="12sp" />
+  </LinearLayout>
+
+  <LinearLayout
+    android:id="@+id/row1"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="10dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:visibility="gone">
+    <TextView
+      android:id="@+id/mark1"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_marginEnd="8dp"
+      android:text="●"
+      android:textSize="12sp" />
+    <TextView
+      android:id="@+id/title1"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_weight="1"
+      android:ellipsize="end"
+      android:maxLines="1"
+      android:textColor="@color/thread_widget_foreground"
+      android:textSize="14sp"
+      android:textStyle="bold" />
+    <TextView
+      android:id="@+id/state1"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_marginStart="8dp"
+      android:maxLines="1"
+      android:textColor="@color/thread_widget_muted"
+      android:textSize="12sp" />
+  </LinearLayout>
+
+  <LinearLayout
+    android:id="@+id/row2"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="10dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:visibility="gone">
+    <TextView
+      android:id="@+id/mark2"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_marginEnd="8dp"
+      android:text="●"
+      android:textSize="12sp" />
+    <TextView
+      android:id="@+id/title2"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_weight="1"
+      android:ellipsize="end"
+      android:maxLines="1"
+      android:textColor="@color/thread_widget_foreground"
+      android:textSize="14sp"
+      android:textStyle="bold" />
+    <TextView
+      android:id="@+id/state2"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_marginStart="8dp"
+      android:maxLines="1"
+      android:textColor="@color/thread_widget_muted"
+      android:textSize="12sp" />
+  </LinearLayout>
+</LinearLayout>
