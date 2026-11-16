@@ -669,23 +669,39 @@ async fn upgrade(
     path: &str,
     headers: &[(&'static str, &str)],
 ) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
+    upgrade_with(url, path, headers, &[]).await
+}
+
+/// [`upgrade`], with `first`, unless it's empty, sent as a binary frame right behind the request.
+async fn upgrade_with(
+    url: &str,
+    path: &str,
+    headers: &[(&'static str, &str)],
+    first: &[u8],
+) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     let base = Base::parse(url).map_err(|e| (None, e.into()))?;
     let stream = base
         .connect(Roots::WithOs)
         .await
         .map_err(|e| (None, e.into()))?;
-    upgrade_over(&base, stream, path, headers).await
+    upgrade_over(&base, stream, path, headers, first).await
 }
 
-/// [`upgrade`] over `stream`, a connection to `base` that's already open.
+/// [`upgrade_with`] over `stream`, a connection to `base` that's already open.
 async fn upgrade_over(
     base: &Base,
     stream: Stream,
     path: &str,
     headers: &[(&'static str, &str)],
+    first: &[u8],
 ) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     crate::connect_timing::mark("outer_tls_ready");
+    let stream: Stream = if first.is_empty() {
+        stream
+    } else {
+        Box::new(Behind::new(stream, masked_binary(first)))
+    };
     let scheme = if base.tls { "wss" } else { "ws" };
     #[cfg(feature = "host-routing-proof")]
     let path = if PROOF_CLIENT.load(Ordering::Relaxed) {
@@ -850,11 +866,21 @@ const MAX_STREAM_FRAME: usize = 64 * 1024;
 /// the socket's last frames went and, at plxd's end, the relay answered its close or didn't in time.
 fn pipe(
     socket: WebSocketStream<Stream>,
-    mut keepalive: Option<Keepalive>,
+    keepalive: Option<Keepalive>,
     end: EndSlot,
 ) -> (DuplexStream, tokio::task::JoinHandle<()>) {
     let (ours, theirs) = tokio::io::duplex(MAX_STREAM_FRAME);
-    let piping = tokio::spawn(async move {
+    (ours, pipe_into(socket, keepalive, end, theirs))
+}
+
+/// [`pipe`], to `theirs`, one end of a byte stream whose other end the caller already handed out.
+fn pipe_into(
+    socket: WebSocketStream<Stream>,
+    mut keepalive: Option<Keepalive>,
+    end: EndSlot,
+    theirs: DuplexStream,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         let (mut sink, mut frames) = socket.split();
         let (mut reader, mut writer) = tokio::io::split(theirs);
         let heard = keepalive.as_ref().map(|k| Arc::clone(&k.heard));
@@ -939,8 +965,7 @@ fn pipe(
         if let Err(error) = ended {
             debug!(%error, "a relay stream ended");
         }
-    });
-    (ours, piping)
+    })
 }
 
 /// How this process's last client stream through the relay ended, for `plxd dial` to report.
@@ -960,49 +985,293 @@ pub fn client_stream_end() -> Option<StreamEnd> {
         .clone()
 }
 
+/// How long a client's stream waits for its caller's first bytes, the pinned TLS's `ClientHello`,
+/// which the caller writes as soon as it has the stream. Without them by then, the stream opens as
+/// before PLX-1568 and sends them once the host joined.
+const FIRST_BYTES: Duration = Duration::from_millis(100);
+
 /// A byte stream to the host with relay id `host_id`, through the relay [`sign_in`] named, opened
 /// with the Clerk token in the `Authorization` header and no ticket first (0091). The relay can't
 /// read it: the caller runs TLS to the host's pinned certificate over it.
 ///
 /// # Errors
 ///
-/// When there's no sign-in, the relay refuses it or isn't reachable, or the host is offline or
-/// isn't this user's. None of them is [`Error::Refused`], which only the host itself says.
-pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
+/// When there's no sign-in. The relay refusing the stream or being out of reach, or the host being
+/// offline or not this user's, fail the stream's reads and writes instead ([`ClientStream`]).
+#[expect(
+    clippy::unused_async,
+    reason = "callers await it, and the stream opens behind the one it answers (PLX-1568)"
+)]
+pub async fn open_stream(host_id: &str) -> Result<ClientStream, Error> {
     let Some((url, token)) = CLIENT.get() else {
         return Err(Error::Protocol(
             "the relay route needs a sign-in (PLXD_RELAY_TOKEN)".to_owned(),
         ));
     };
-    stream_at(url, token, host_id).await
+    Ok(stream_at(url, token, host_id))
 }
 
-/// [`open_stream`] through the relay at `url`, signed in with `token`. A relay from before 0091
-/// refuses the header with 401, 404, or 426 before any stream opens. Then this asks it for a
-/// ticket and opens `/connect?ticket=`, as such a relay expects. Once a stream opened, nothing is
-/// tried again. The first request goes over the connection the race opened early ([`warm`]), when
-/// it has one.
-async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream, Error> {
+/// [`open_stream`] through the relay at `url`, signed in with `token`. It answers at once and opens
+/// the stream behind it ([`open_client`]), so the caller's `ClientHello` can go behind the upgrade
+/// request (PLX-1568).
+fn stream_at(url: &str, token: &str, host_id: &str) -> ClientStream {
     crate::connect_timing::mark("relay_route_start");
+    // Taken here, since the race keeps its early connection in a task local (PLX-1549).
+    let early = warm::take(url);
+    let (mut ours, theirs) = tokio::io::duplex(MAX_STREAM_FRAME);
+    let failure = Arc::new(Mutex::new(None));
+    let stop = CancellationToken::new();
+    let (url, token, host_id) = (url.to_owned(), token.to_owned(), host_id.to_owned());
+    let failed = Arc::clone(&failure);
+    let stopped = stop.clone();
+    tokio::spawn(async move {
+        let opened = tokio::select! {
+            // The caller dropped the stream, as a race does to a route that lost.
+            () = stopped.cancelled() => return,
+            opened = open_client(&url, &token, &host_id, early, &mut ours) => opened,
+        };
+        match opened {
+            Ok(socket) => {
+                let end = client_slot();
+                *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                pipe_into(socket, None, end, ours);
+            }
+            // Kept before `ours` drops, so the caller reads why the stream ended.
+            Err(error) => {
+                *failed.lock().unwrap_or_else(PoisonError::into_inner) = Some(error.to_string());
+            }
+        }
+    });
+    ClientStream {
+        inner: theirs,
+        failure,
+        _stop: stop.drop_guard(),
+    }
+}
+
+/// Opens a client's stream to `host_id` through the relay at `url`, and answers its WebSocket once
+/// the host joined and the first bytes the caller wrote to `ours` went.
+///
+/// Those bytes, the pinned TLS's `ClientHello`, go as a binary frame right behind the upgrade
+/// request, so they don't wait a round trip for the relay's 101 (PLX-1568). The relay passes them
+/// to plxd's end after `ready`. Two kinds of relay get one more stream in the old order (upgrade,
+/// `ready`, then the bytes): one that closes the stream before `ready`, as a relay from before
+/// PLX-1568 does when plxd hadn't joined yet, and one whose connection broke with no answer, as a
+/// server or proxy that refuses bytes behind a request does, though Cloudflare passes them. A relay
+/// from before 0091 refuses the header with 401, 404, or 426, and reads nothing behind it. Then
+/// this asks it for a ticket and opens `/connect?ticket=`, as such a relay expects. The first
+/// request goes over `early`, the connection the race opened during the direct routes' head start
+/// ([`warm`]), when it has one.
+async fn open_client(
+    url: &str,
+    token: &str,
+    host_id: &str,
+    early: Option<warm::Connecting>,
+    ours: &mut DuplexStream,
+) -> Result<WebSocketStream<Stream>, Error> {
     let path = format!("/v1/hosts/{host_id}/connect");
     let authorization = format!("Bearer {token}");
     let headers = [("authorization", authorization.as_str())];
-    // Over the connection the dial opened during the direct routes' head start, if it did (PLX-1549).
-    let upgraded = match warm::take(url) {
-        Some(early) => warm::upgrade(early, url, &path, &headers).await,
-        None => upgrade(url, &path, &headers).await,
+    let mut first = vec![0; MAX_STREAM_FRAME];
+    let read = time::timeout(FIRST_BYTES, ours.read(&mut first))
+        .await
+        .unwrap_or(Ok(0))?;
+    first.truncate(read);
+    let mut went_early = !first.is_empty();
+    let mut upgraded = match early {
+        Some(early) => warm::upgrade(early, url, &path, &headers, &first).await,
+        None => upgrade_with(url, &path, &headers, &first).await,
     };
+    if went_early && matches!(upgraded, Err((None, _))) {
+        debug!("the relay's connection broke with an early frame, so one opens in the old order");
+        went_early = false;
+        upgraded = upgrade(url, &path, &headers).await;
+    }
     let mut socket = match upgraded {
         Ok(socket) => socket,
-        Err((Some(401 | 404 | 426), _)) => ticketed(url, token, host_id).await?,
+        Err((Some(401 | 404 | 426), _)) => {
+            went_early = false;
+            ticketed(url, token, host_id).await?
+        }
         Err((_, error)) => return Err(error),
     };
     crate::connect_timing::mark("relay_upgrade_ready");
-    joined(&mut socket).await?;
+    if let Err(error) = joined(&mut socket).await {
+        if !went_early {
+            return Err(error);
+        }
+        debug!(%error, "the relay closed a stream that had an early frame, so one opens in the old order");
+        went_early = false;
+        socket = upgrade(url, &path, &headers)
+            .await
+            .map_err(|(_, error)| error)?;
+        joined(&mut socket).await?;
+    }
     crate::connect_timing::mark("stream_ready");
-    let end = client_slot();
-    *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
-    Ok(pipe(socket, None, end).0)
+    if !went_early && !first.is_empty() {
+        socket
+            .send(Message::binary(first))
+            .await
+            .map_err(|error| Error::Protocol(format!("the relay's WebSocket failed: {error}")))?;
+    }
+    Ok(socket)
+}
+
+/// A client's byte stream through the relay, from [`open_stream`]. It takes writes at once, while
+/// the stream opens behind it. If the stream fails to open, its reads and writes fail with why.
+/// Dropping it stops a stream that's still opening.
+#[derive(Debug)]
+pub struct ClientStream {
+    inner: DuplexStream,
+    failure: Arc<Mutex<Option<String>>>,
+    _stop: tokio_util::sync::DropGuard,
+}
+
+impl ClientStream {
+    /// Why the stream failed to open, if it did.
+    fn failed(&self) -> Option<io::Error> {
+        let failure = self.failure.lock().unwrap_or_else(PoisonError::into_inner);
+        failure.clone().map(io::Error::other)
+    }
+}
+
+impl AsyncRead for ClientStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let read = std::task::ready!(std::pin::Pin::new(&mut self.inner).poll_read(cx, buf));
+        // The end of a stream that failed to open is its failure.
+        if read.is_ok() && buf.filled().len() == before && buf.remaining() > 0 {
+            return std::task::Poll::Ready(self.failed().map_or(Ok(()), Err));
+        }
+        std::task::Poll::Ready(read)
+    }
+}
+
+impl AsyncWrite for ClientStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let wrote = std::task::ready!(std::pin::Pin::new(&mut self.inner).poll_write(cx, buf));
+        std::task::Poll::Ready(wrote.map_err(|error| self.failed().unwrap_or(error)))
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// A connection that sends `pending` before its first read, so a frame queued behind a request
+/// goes right after it, before the answer comes. A WebSocket client writes nothing else before it
+/// reads the answer, so nothing passes the frame.
+#[derive(Debug)]
+struct Behind {
+    inner: Stream,
+    pending: Vec<u8>,
+    sent: usize,
+    flushed: bool,
+}
+
+impl Behind {
+    fn new(inner: Stream, pending: Vec<u8>) -> Self {
+        Self {
+            inner,
+            pending,
+            sent: 0,
+            flushed: false,
+        }
+    }
+}
+
+impl AsyncRead for Behind {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let this = &mut *self;
+        while this.sent < this.pending.len() {
+            let rest = &this.pending[this.sent..];
+            let wrote =
+                std::task::ready!(std::pin::Pin::new(&mut this.inner).poll_write(cx, rest))?;
+            if wrote == 0 {
+                return std::task::Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+            }
+            this.sent += wrote;
+        }
+        if !this.flushed {
+            std::task::ready!(std::pin::Pin::new(&mut this.inner).poll_flush(cx))?;
+            this.flushed = true;
+            this.pending = Vec::new();
+        }
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Behind {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// `payload` as one binary WebSocket frame from a client, masked as RFC 6455 requires.
+fn masked_binary(payload: &[u8]) -> Vec<u8> {
+    let mut mask = [0; 4];
+    getrandom::fill(&mut mask).expect("the OS's random numbers");
+    // FIN and binary, then the mask bit with the length, or with 126 or 127 for a longer one next.
+    let mut frame = vec![0x82];
+    if let Ok(len) = u8::try_from(payload.len())
+        && len < 0x7e
+    {
+        frame.push(0x80 | len);
+    } else if let Ok(len) = u16::try_from(payload.len()) {
+        frame.push(0x80 | 0x7e);
+        frame.extend_from_slice(&len.to_be_bytes());
+    } else {
+        frame.push(0x80 | 0x7f);
+        frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+    frame.extend_from_slice(&mask);
+    frame.extend(
+        payload
+            .iter()
+            .zip(mask.iter().cycle())
+            .map(|(byte, key)| byte ^ key),
+    );
+    frame
 }
 
 /// Waits for the relay to say the host joined a client's stream.
@@ -3461,7 +3730,7 @@ mod tests {
     async fn a_relay_that_only_knows_tickets_gets_one_after_refusing_the_header() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let url = ticket_only_relay(Arc::clone(&seen)).await;
-        let mut stream = stream_at(&url, "tok", "h").await.unwrap();
+        let mut stream = stream_at(&url, "tok", "h");
         stream.write_all(b"ping").await.unwrap();
         let mut echoed = [0; 4];
         stream.read_exact(&mut echoed).await.unwrap();
@@ -3474,6 +3743,174 @@ mod tests {
                 "GET /v1/hosts/h/connect?ticket=t1 HTTP/1.1",
             ]
         );
+    }
+
+    /// Accepts a WebSocket as Cloudflare does, keeping the frames a client sent right behind its
+    /// request, before the 101 (PLX-1568). Tungstenite's own handshake refuses them.
+    pub(super) async fn accept(mut tcp: TcpStream) -> WebSocketStream<TcpStream> {
+        let mut read = Vec::new();
+        let end = loop {
+            if let Some(end) = read.windows(4).position(|w| w == b"\r\n\r\n") {
+                break end + 4;
+            }
+            let mut chunk = [0; 4096];
+            let got = tcp.read(&mut chunk).await.unwrap();
+            assert!(got > 0, "the client closed mid-request");
+            read.extend_from_slice(&chunk[..got]);
+        };
+        let head = String::from_utf8_lossy(&read[..end]).into_owned();
+        let key = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("sec-websocket-key")
+                    .then(|| value.trim().to_owned())
+            })
+            .unwrap();
+        let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
+        let answer = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        tcp.write_all(answer.as_bytes()).await.unwrap();
+        let rest = read[end..].to_vec();
+        WebSocketStream::from_partially_read(tcp, rest, tungstenite::protocol::Role::Server, None)
+            .await
+    }
+
+    /// What [`early_frame_relay`] does with a frame that came behind the request.
+    #[derive(Clone, Copy, PartialEq)]
+    enum EarlyFrame {
+        /// Passes it on after `ready`, as the relay does from PLX-1568 on.
+        Passes,
+        /// Closes the stream with 4400 before `ready`, as a relay from before PLX-1568 does when
+        /// plxd hasn't joined yet.
+        ClosesStream,
+        /// Refuses the request, as tungstenite's handshake does.
+        RefusesRequest,
+    }
+
+    /// A relay on loopback whose `/connect` says `ready` and echoes binary frames. For each
+    /// connection, `early` gets whether a frame came behind the request before the 101, and
+    /// `frames` says what it does with one.
+    async fn early_frame_relay(frames: EarlyFrame) -> (String, Arc<Mutex<Vec<bool>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let early = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&early);
+        tokio::spawn(async move {
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let seen = Arc::clone(&seen);
+                tokio::spawn(async move {
+                    // Peeked, not read, so the WebSocket handshake can still read it.
+                    let mut buffer = vec![0; 8192];
+                    let deadline = Instant::now() + Duration::from_millis(300);
+                    let came_early = loop {
+                        let peeked = tcp.peek(&mut buffer).await.unwrap();
+                        let head = buffer[..peeked].windows(4).position(|w| w == b"\r\n\r\n");
+                        if head.is_some_and(|end| peeked > end + 4) {
+                            break true;
+                        }
+                        if Instant::now() > deadline {
+                            break false;
+                        }
+                        time::sleep(Duration::from_millis(1)).await;
+                    };
+                    seen.lock().unwrap().push(came_early);
+                    let mut socket = if frames == EarlyFrame::RefusesRequest {
+                        let Ok(socket) = tokio_tungstenite::accept_async(tcp).await else {
+                            return;
+                        };
+                        socket
+                    } else {
+                        accept(tcp).await
+                    };
+                    if frames == EarlyFrame::ClosesStream && came_early {
+                        let _ = socket.next().await;
+                        let close = tungstenite::protocol::CloseFrame {
+                            code: 4400.into(),
+                            reason: "bad frame".into(),
+                        };
+                        let _ = socket.close(Some(close)).await;
+                        return;
+                    }
+                    socket.send(Message::text("ready")).await.unwrap();
+                    while let Some(Ok(frame)) = socket.next().await {
+                        if frame.is_binary() {
+                            socket.send(frame).await.unwrap();
+                        }
+                    }
+                });
+            }
+        });
+        (url, early)
+    }
+
+    /// Writes to `stream` and reads the echo.
+    async fn echoes(mut stream: ClientStream) {
+        stream.write_all(b"client hello").await.unwrap();
+        let mut echoed = [0; 12];
+        stream.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"client hello");
+    }
+
+    #[tokio::test]
+    async fn the_first_bytes_go_behind_the_upgrade_request() {
+        let (url, early) = early_frame_relay(EarlyFrame::Passes).await;
+        echoes(stream_at(&url, "tok", "h")).await;
+        assert_eq!(*early.lock().unwrap(), [true]);
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_closes_on_an_early_frame_gets_them_after_ready() {
+        let (url, early) = early_frame_relay(EarlyFrame::ClosesStream).await;
+        echoes(stream_at(&url, "tok", "h")).await;
+        assert_eq!(*early.lock().unwrap(), [true, false]);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_refuses_an_early_frame_gets_them_after_ready() {
+        let (url, early) = early_frame_relay(EarlyFrame::RefusesRequest).await;
+        echoes(stream_at(&url, "tok", "h")).await;
+        assert_eq!(*early.lock().unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn an_early_frame_reads_back_at_each_length_form() {
+        // A short length, a ClientHello's with 16 bits, and one past 16 bits.
+        for len in [5_usize, 1800, 70_000] {
+            let payload: Vec<u8> = (0..len).map(|i| u8::try_from(i % 251).unwrap()).collect();
+            let bytes = io::Cursor::new(masked_binary(&payload));
+            let mut socket = tungstenite::WebSocket::from_raw_socket(
+                bytes,
+                tungstenite::protocol::Role::Server,
+                None,
+            );
+            assert_eq!(socket.read().unwrap(), Message::binary(payload));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_fails_to_open_says_why() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let mut byte = [0; 1];
+                tcp.read_exact(&mut byte).await.unwrap();
+                head.push(byte[0]);
+            }
+            let answer = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n";
+            tcp.write_all(answer).await.unwrap();
+            // Until the client closes its side.
+            let _ = tcp.read_to_end(&mut Vec::new()).await;
+        });
+        let mut stream = stream_at(&url, "tok", "h");
+        stream.write_all(b"client hello").await.unwrap();
+        let error = stream.read(&mut [0; 16]).await.unwrap_err();
+        assert!(error.to_string().contains("HTTP 503"), "{error}");
     }
 
     #[test]

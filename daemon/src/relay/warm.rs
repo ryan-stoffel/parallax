@@ -118,27 +118,28 @@ pub(super) fn take(url: &str) -> Option<Connecting> {
 /// also asks again when `early` fails before the relay answered the upgrade, as a connection the
 /// relay closed for being idle would, or gives no answer within [`EARLY_ANSWER`], as one left on a
 /// network the computer moved off would. Then the relay saw no request, or answered none this
-/// route will read.
+/// route will read. `first` goes behind each request, as [`super::upgrade_with`] sends it.
 pub(super) async fn upgrade(
     early: Connecting,
     url: &str,
     path: &str,
     headers: &[(&'static str, &str)],
+    first: &[u8],
 ) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     let base = Base::parse(url).map_err(|e| (None, e.into()))?;
     let (stream, was_early) = open(early, &base).await.map_err(|e| (None, e.into()))?;
-    let upgrading = super::upgrade_over(&base, stream, path, headers);
+    let upgrading = super::upgrade_over(&base, stream, path, headers, first);
     if !was_early {
         return upgrading.await;
     }
     match tokio::time::timeout(EARLY_ANSWER, upgrading).await {
         Ok(Err((None, error))) => {
             debug!(%error, "the early relay connection failed, so a new one asks");
-            super::upgrade(url, path, headers).await
+            super::upgrade_with(url, path, headers, first).await
         }
         Err(_) => {
             debug!("the relay didn't answer over the early connection, so a new one asks");
-            super::upgrade(url, path, headers).await
+            super::upgrade_with(url, path, headers, first).await
         }
         Ok(upgraded) => upgraded,
     }
@@ -211,9 +212,7 @@ mod tests {
     }
 
     async fn answer(tcp: TcpStream) {
-        let Ok(mut socket) = tokio_tungstenite::accept_async(tcp).await else {
-            return;
-        };
+        let mut socket = super::super::tests::accept(tcp).await;
         socket.send(Message::text("ready")).await.unwrap();
         while let Some(Ok(frame)) = socket.next().await {
             if frame.is_binary() {
@@ -236,13 +235,17 @@ mod tests {
         EARLY
             .scope(early, async {
                 tokio::time::sleep(wait).await;
-                let mut stream = super::super::stream_at(url, "tok", "h").await.unwrap();
-                stream.write_all(b"ping").await.unwrap();
-                let mut echoed = [0; 4];
-                stream.read_exact(&mut echoed).await.unwrap();
-                assert_eq!(&echoed, b"ping");
+                echoes(super::super::stream_at(url, "tok", "h")).await;
             })
             .await;
+    }
+
+    /// Writes to `stream` and reads the stand-in relay's echo, which needs the stream open.
+    async fn echoes(mut stream: super::super::ClientStream) {
+        stream.write_all(b"ping").await.unwrap();
+        let mut echoed = [0; 4];
+        stream.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"ping");
     }
 
     #[tokio::test]
@@ -282,7 +285,7 @@ mod tests {
         EARLY
             .scope(early, async {
                 tokio::time::sleep(Duration::from_millis(20)).await;
-                super::super::stream_at(&url, "tok", "h").await.unwrap();
+                echoes(super::super::stream_at(&url, "tok", "h")).await;
             })
             .await;
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
@@ -298,11 +301,12 @@ mod tests {
                 std::future::pending(),
             ))))),
         };
-        let connected = EARLY.scope(early, super::super::stream_at(&url, "tok", "h"));
+        let connected = EARLY.scope(early, async {
+            echoes(super::super::stream_at(&url, "tok", "h")).await;
+        });
         tokio::time::timeout(Duration::from_secs(5), connected)
             .await
-            .expect("the new connection won")
-            .unwrap();
+            .expect("the new connection won");
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
     }
 
