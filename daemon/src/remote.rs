@@ -1158,16 +1158,32 @@ pub fn keep_tickets() {
     KEEPS_TICKETS.store(true, Ordering::Relaxed);
 }
 
-/// The client configuration for each pinned key, each holding only that pin's tickets, so a ticket
-/// is never offered to another host. rustls resumes a session only with the configuration that
-/// made it, so it's kept for the process.
-static RESUMING: LazyLock<Mutex<HashMap<Pin, Arc<rustls::ClientConfig>>>> =
-    LazyLock::new(Mutex::default);
+/// A pinned key's client configurations, which hold only that pin's tickets, so a ticket is never
+/// offered to another host: `offers` resumes with one, and `keeps` only keeps the new ones, for a
+/// route that isn't the dial's pick. They share their verifier, which rustls resumes only with.
+struct Resuming {
+    offers: Arc<rustls::ClientConfig>,
+    keeps: Arc<rustls::ClientConfig>,
+}
+
+/// [`Resuming`] for each pinned key, kept for the process.
+static RESUMING: LazyLock<Mutex<HashMap<Pin, Resuming>>> = LazyLock::new(Mutex::default);
 
 /// The configuration [`open_dial`] resumes with for `pin`, made the first time.
+#[cfg(test)]
 pub(crate) fn resuming_config(pin: &Pin) -> io::Result<Arc<rustls::ClientConfig>> {
+    resuming(pin, true)
+}
+
+/// `pin`'s [`Resuming`] configuration that offers a ticket, or only keeps new ones.
+fn resuming(pin: &Pin, offers: bool) -> io::Result<Arc<rustls::ClientConfig>> {
     let mut configs = RESUMING.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(config) = configs.get(pin) {
+    if let Some(configs) = configs.get(pin) {
+        let config = if offers {
+            &configs.offers
+        } else {
+            &configs.keeps
+        };
         return Ok(Arc::clone(config));
     }
     let provider = provider();
@@ -1183,11 +1199,37 @@ pub(crate) fn resuming_config(pin: &Pin) -> io::Result<Arc<rustls::ClientConfig>
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
     config.alpn_protocols = alpn_protocols();
-    config.resumption = rustls::client::Resumption::store(Arc::new(tickets::Held::default()));
     config.enable_early_data = true;
-    let config = Arc::new(config);
-    configs.insert(pin.clone(), Arc::clone(&config));
+    let held = Arc::new(tickets::Held::default());
+    let mut keeps = config.clone();
+    config.resumption = rustls::client::Resumption::store(Arc::clone(&held) as _);
+    keeps.resumption = rustls::client::Resumption::store(Arc::new(tickets::KeepOnly(held)));
+    let made = Resuming {
+        offers: Arc::new(config),
+        keeps: Arc::new(keeps),
+    };
+    let config = Arc::clone(if offers { &made.offers } else { &made.keeps });
+    configs.insert(pin.clone(), made);
     Ok(config)
+}
+
+/// The route a dial offers its ticket on (PLX-1585): the first, in the order the race starts
+/// them, that holds the next ones back, since it starts first and usually wins. Away from home
+/// that's the relay route, the only one that can answer. A ticket is spent once a `ClientHello`
+/// carries it, so the routes racing beside it offer none.
+fn ticket_route(routes: &[String], in_order: bool, holds: impl Fn(&str) -> bool) -> Option<&str> {
+    let relay = |route: &&String| route.starts_with(RELAY_ROUTE);
+    let order: Vec<&String> = if in_order {
+        routes.iter().collect()
+    } else {
+        let direct = routes.iter().filter(|route| !relay(route));
+        direct.chain(routes.iter().filter(relay)).collect()
+    };
+    order
+        .iter()
+        .find(|route| holds(route))
+        .or(order.first())
+        .map(|route| route.as_str())
 }
 
 /// What a dial sends with its `ClientHello` when a ticket lets it (PLX-1585): the upgrade with the
@@ -1215,6 +1257,7 @@ async fn open_dial(
     route: &str,
     pin: &Pin,
     upgrade: &EarlyUpgrade<'_>,
+    offers: bool,
 ) -> Result<(TlsStream<crate::relay::Stream>, Option<SentEarly>), Error> {
     if !KEEPS_TICKETS.load(Ordering::Relaxed) || *pin == Pin::Any {
         return Ok((open_pinned(route, pin).await?.0, None));
@@ -1222,7 +1265,7 @@ async fn open_dial(
     let stream = route_stream(route).await?;
     crate::connect_timing::mark("pinned_tls_start");
     let name = ServerName::try_from("parallax").expect("a DNS name");
-    let mut tls = tokio_rustls::TlsConnector::from(resuming_config(pin)?)
+    let mut tls = tokio_rustls::TlsConnector::from(resuming(pin, offers)?)
         .early_data(true)
         .connect(name, stream)
         .await
@@ -2102,18 +2145,23 @@ where
     F: Fn(String) -> Opening,
     Opening: Future<Output = Result<T, Error>>,
 {
-    let networks = own_networks();
-    // Without this computer's networks, every route may answer, as before PLX-1553.
-    let holds = |route: &str| {
-        networks
-            .as_deref()
-            .is_none_or(|networks| may_answer(route, networks))
-    };
-    let racing = first(routes, in_order, holds, open);
-    if relay_waits(routes, in_order, holds) {
+    let holds = answers_here();
+    let racing = first(routes, in_order, &holds, open);
+    if relay_waits(routes, in_order, &holds) {
         crate::relay::warm::ahead(racing).await
     } else {
         racing.await
+    }
+}
+
+/// Whether a route [`may_answer`] from this computer's networks. Without them, every route may
+/// answer, as before PLX-1553.
+fn answers_here() -> impl Fn(&str) -> bool {
+    let networks = own_networks();
+    move |route: &str| {
+        networks
+            .as_deref()
+            .is_none_or(|networks| may_answer(route, networks))
     }
 }
 
@@ -2539,8 +2587,10 @@ async fn dial_pinned<I: AsyncRead + Unpin>(
         lines,
     };
     let early = &early;
+    let offered = ticket_route(routes, in_order, answers_here());
     let opened = race_by(routes, in_order, |route| async move {
-        open_dial(&route, pin, early).await
+        let offers = offered == Some(route.as_str());
+        open_dial(&route, pin, early, offers).await
     });
     let (route, (tls, sent)) = opened.await?;
     let answered = async {
@@ -3170,6 +3220,29 @@ mod tests {
             won.map(|(route, ())| route).map_err(|e| e.to_string()),
             started,
         )
+    }
+
+    #[test]
+    fn a_dial_offers_its_ticket_on_the_route_that_starts_first_and_may_answer() {
+        let routes = |list: &[&str]| {
+            list.iter()
+                .map(|&route| route.to_owned())
+                .collect::<Vec<_>>()
+        };
+        let home = |route: &str| route.starts_with("192.168.1.") || route.starts_with(RELAY_ROUTE);
+        let both = routes(&["relay:h", "192.168.1.5", "100.64.0.9"]);
+        assert_eq!(ticket_route(&both, false, home), Some("192.168.1.5"));
+        let away = |route: &str| route.starts_with(RELAY_ROUTE);
+        assert_eq!(ticket_route(&both, false, away), Some("relay:h"));
+        assert_eq!(
+            ticket_route(&both, true, home),
+            Some("relay:h"),
+            "in the user's order"
+        );
+        assert_eq!(
+            ticket_route(&routes(&["10.0.0.1"]), false, |_| false),
+            Some("10.0.0.1")
+        );
     }
 
     #[tokio::test(start_paused = true)]

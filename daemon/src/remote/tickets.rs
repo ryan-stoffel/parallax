@@ -35,9 +35,17 @@ fn fresh(made: SystemTime) -> bool {
 /// Sessions by ticket, each with when it was made.
 type Sessions = HashMap<Vec<u8>, (SystemTime, Vec<u8>)>;
 
-/// The listener's sessions, by ticket.
-#[derive(Debug, Default)]
+/// The listener's sessions, by ticket. Each holds its resumption secret, so its `Debug` says only
+/// how many there are.
+#[derive(Default)]
 pub struct Issued(Mutex<Sessions>);
+
+impl std::fmt::Debug for Issued {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let held = self.0.lock().unwrap_or_else(PoisonError::into_inner).len();
+        f.debug_struct("Issued").field("held", &held).finish()
+    }
+}
 
 impl StoresServerSessions for Issued {
     fn put(&self, key: Vec<u8>, value: Vec<u8>) -> bool {
@@ -98,17 +106,59 @@ impl ClientSessionStore for Held {
 
     fn insert_tls13_ticket(&self, _: ServerName<'static>, value: Tls13ClientSessionValue) {
         let mut tickets = self.tickets.lock().unwrap_or_else(PoisonError::into_inner);
-        tickets.retain(|(made, _)| fresh(*made));
-        if tickets.len() >= MAX_HELD {
-            tickets.pop_front();
-        }
-        tickets.push_back((SystemTime::now(), value));
+        keep(&mut tickets, SystemTime::now(), value);
     }
 
     fn take_tls13_ticket(&self, _: &ServerName<'static>) -> Option<Tls13ClientSessionValue> {
         let mut tickets = self.tickets.lock().unwrap_or_else(PoisonError::into_inner);
-        tickets.retain(|(made, _)| fresh(*made));
-        tickets.pop_back().map(|(_, value)| value)
+        take_newest(&mut tickets)
+    }
+}
+
+/// Adds a ticket made at `made` to a client's `tickets`, dropping expired ones and the oldest
+/// past [`MAX_HELD`].
+fn keep<T>(tickets: &mut VecDeque<(SystemTime, T)>, made: SystemTime, value: T) {
+    tickets.retain(|(made, _)| fresh(*made));
+    if tickets.len() >= MAX_HELD {
+        tickets.pop_front();
+    }
+    tickets.push_back((made, value));
+}
+
+/// Takes a client's newest ticket that hasn't expired.
+fn take_newest<T>(tickets: &mut VecDeque<(SystemTime, T)>) -> Option<T> {
+    tickets.retain(|(made, _)| fresh(*made));
+    tickets.pop_back().map(|(_, value)| value)
+}
+
+/// A wrapper that keeps a dial's new tickets in `Held` but offers none, for a route the dial
+/// didn't pick to resume on, so racing routes don't spend each other's tickets.
+#[derive(Debug)]
+pub struct KeepOnly(pub std::sync::Arc<Held>);
+
+impl ClientSessionStore for KeepOnly {
+    fn set_kx_hint(&self, name: ServerName<'static>, group: NamedGroup) {
+        self.0.set_kx_hint(name, group);
+    }
+
+    fn kx_hint(&self, name: &ServerName<'_>) -> Option<NamedGroup> {
+        self.0.kx_hint(name)
+    }
+
+    fn set_tls12_session(&self, _: ServerName<'static>, _: Tls12ClientSessionValue) {}
+
+    fn tls12_session(&self, _: &ServerName<'_>) -> Option<Tls12ClientSessionValue> {
+        None
+    }
+
+    fn remove_tls12_session(&self, _: &ServerName<'static>) {}
+
+    fn insert_tls13_ticket(&self, name: ServerName<'static>, value: Tls13ClientSessionValue) {
+        self.0.insert_tls13_ticket(name, value);
+    }
+
+    fn take_tls13_ticket(&self, _: &ServerName<'static>) -> Option<Tls13ClientSessionValue> {
+        None
     }
 }
 
@@ -135,6 +185,33 @@ mod tests {
             .unwrap()
             .insert(b"old".to_vec(), (old, b"session".to_vec()));
         assert_eq!(issued.take(b"old"), None);
+    }
+
+    #[test]
+    fn the_listener_prints_no_session() {
+        let issued = Issued::default();
+        issued.put(b"ticket".to_vec(), b"secret".to_vec());
+        assert_eq!(format!("{issued:?}"), "Issued { held: 1 }");
+    }
+
+    #[test]
+    fn a_client_offers_its_newest_ticket_under_an_hour_old_and_keeps_at_most_four() {
+        let now = SystemTime::now();
+        let mut tickets = VecDeque::new();
+        keep(&mut tickets, now - LIFETIME, "expired");
+        keep(&mut tickets, now, "fresh");
+        assert_eq!(take_newest(&mut tickets), Some("fresh"));
+        assert_eq!(
+            take_newest(&mut tickets),
+            None,
+            "an hour-old ticket isn't offered"
+        );
+        let mut many = VecDeque::new();
+        for n in 0..=MAX_HELD {
+            keep(&mut many, now, n);
+        }
+        assert_eq!(many.len(), MAX_HELD);
+        assert_eq!(take_newest(&mut many), Some(MAX_HELD));
     }
 
     #[test]

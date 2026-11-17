@@ -245,31 +245,41 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> AsyncRead for Stream<IO> {
 }
 
 impl<IO: AsyncRead + AsyncWrite + Unpin> AsyncWrite for Stream<IO> {
+    /// As tokio-rustls writes: rustls takes what fits its send buffer, and what it holds goes to
+    /// `io`. It answers `Pending` only when nothing was taken and `io` is full, never `Ok(0)`.
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        let written = this.conn.writer().write(buf)?;
-        if written > 0 {
-            this.wrote = true;
-        }
-        let mut blocked = false;
-        while this.conn.wants_write() {
-            match this.write_io(cx) {
-                Poll::Ready(Ok(0)) | Poll::Pending => {
-                    blocked = true;
-                    break;
+        let mut taken = 0;
+        while taken < buf.len() {
+            let written = this.conn.writer().write(&buf[taken..])?;
+            if written > 0 {
+                this.wrote = true;
+            }
+            taken += written;
+            let mut blocked = false;
+            while this.conn.wants_write() {
+                match this.write_io(cx) {
+                    Poll::Ready(Ok(0)) | Poll::Pending => {
+                        blocked = true;
+                        break;
+                    }
+                    Poll::Ready(Ok(_)) => {}
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 }
-                Poll::Ready(Ok(_)) => {}
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+            }
+            if blocked {
+                return if taken == 0 {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok(taken))
+                };
             }
         }
-        if written == 0 && blocked {
-            return Poll::Pending;
-        }
-        Poll::Ready(Ok(written))
+        Poll::Ready(Ok(taken))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -517,14 +527,21 @@ mod tests {
         assert!(!served.done_at_request, "read before the client's Finished");
         assert_eq!(served.writes_to_answer, 1);
 
-        // The same flight again, as a captured one: its ticket was taken, so no early data comes
-        // out, and the handshake waits for a Finished the replay can't send.
-        let (mut near, far) = duplex(64 * 1024);
-        near.write_all(&flight).await.unwrap();
-        let replayed =
-            tokio::time::timeout(Duration::from_millis(300), accept(Arc::clone(&config), far))
-                .await;
-        assert!(replayed.is_err(), "a replay got as far as plxd's reads");
+        // The same flight again, as a captured one: its ticket was taken, so rustls doesn't
+        // resume, takes no early data, and waits for a Finished the replay can't send.
+        let mut replayed = ServerConnection::new(Arc::clone(&config)).unwrap();
+        let mut rest = &flight[..];
+        while !rest.is_empty() {
+            replayed.read_tls(&mut rest).unwrap();
+            if replayed.process_new_packets().is_err() {
+                break;
+            }
+        }
+        assert!(
+            replayed.early_data().is_none(),
+            "a replay's early data was taken"
+        );
+        assert!(replayed.is_handshaking());
 
         // After a restart the host has no tickets: it refuses the early data, the client sends
         // it again after the handshake, and the dial goes on.
@@ -532,6 +549,43 @@ mod tests {
         let (served, accepted, _) = connect(&restarted, &pin).await;
         assert!(!accepted);
         assert!(served.done_at_request);
+    }
+
+    /// More than rustls's 64 KiB send buffer, to a reader that lets the connection fill and then
+    /// empties it at once: every byte arrives, and no write answers `Ok(0)`, which `write_all`
+    /// takes as a failed connection.
+    #[tokio::test]
+    async fn a_write_past_the_send_buffer_waits_for_a_slow_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        let config = key.server_config().unwrap();
+        let pin = remote::Pin::Fingerprint(key.fingerprint.clone());
+        let (near, far) = duplex(128 * 1024);
+        let big = vec![7_u8; 600 * 1024];
+        let sent = big.clone();
+        let served = tokio::spawn(async move {
+            let mut stream = accept(config, far).await.unwrap();
+            let mut request = vec![0; REQUEST.len()];
+            stream.read_exact(&mut request).await.unwrap();
+            stream.write_all(&sent).await.unwrap();
+            stream.flush().await.unwrap();
+        });
+        let name = ServerName::try_from("parallax").unwrap();
+        let mut tls = TlsConnector::from(remote::resuming_config(&pin).unwrap())
+            .connect(name, near)
+            .await
+            .unwrap();
+        tls.write_all(REQUEST).await.unwrap();
+        tls.flush().await.unwrap();
+        let mut got = vec![0; big.len()];
+        let mut at = 0;
+        while at < got.len() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let end = (at + 256 * 1024).min(got.len());
+            at += tls.read(&mut got[at..end]).await.unwrap();
+        }
+        assert_eq!(got, big);
+        served.await.unwrap();
     }
 
     #[tokio::test]

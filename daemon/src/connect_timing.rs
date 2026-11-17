@@ -8,9 +8,14 @@ use std::time::Instant;
 static START: OnceLock<Option<Instant>> = OnceLock::new();
 static LINES: AtomicUsize = AtomicUsize::new(0);
 
-/// Whether this process explicitly enabled timings. Cached before a dial starts.
+/// Whether this process explicitly enabled timings, or the dial this task runs for `plxd dial`
+/// did. Cached before a dial starts.
 #[must_use]
 pub fn enabled() -> bool {
+    // Inside a plxd that dials for `plxd dial`, that `dial` decides (PLX-1585).
+    if let Some(scope) = crate::local_dial::current() {
+        return scope.timings();
+    }
     START
         .get_or_init(|| {
             (std::env::var("PLXD_CONNECT_TIMINGS").as_deref() == Ok("1")).then(Instant::now)

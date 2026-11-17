@@ -61,8 +61,8 @@ struct Hello {
     data_dir: PathBuf,
 }
 
-/// What `plxd dial` asks plxd to dial.
-#[derive(Debug, Serialize, Deserialize)]
+/// What `plxd dial` asks plxd to dial. It holds the relay's token, so it has no `Debug`.
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
     routes: Vec<String>,
@@ -80,6 +80,9 @@ struct Request {
     /// Whether `dial` prints timing marks.
     #[serde(default)]
     timings: bool,
+    /// `dial`'s proxy settings, from [`PROXY_VARIABLES`], which its relay connections follow.
+    #[serde(default)]
+    proxy: Vec<(String, String)>,
     /// The lines the app had written to `dial` already, which may go behind the upgrade.
     #[serde(default)]
     lines: Vec<String>,
@@ -116,10 +119,15 @@ struct Ended {
     relay_end: Option<String>,
 }
 
-/// One dial's state inside plxd, for the task that runs it and the tasks it starts.
-#[derive(Debug)]
+/// The environment variables a dial's relay connections take their proxy from
+/// ([`crate::relay`]), which `dial` sends, since plxd's own environment may differ.
+const PROXY_VARIABLES: [&str; 4] = ["https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"];
+
+/// One dial's state inside plxd, for the task that runs it and the tasks it starts. It holds the
+/// relay's token and the proxy's settings, so it has no `Debug`.
 pub(crate) struct Scope {
     relay: Option<(String, String)>,
+    proxy: Vec<(String, String)>,
     timings: Option<(Instant, Mutex<Vec<Timing>>)>,
     head_start: AtomicBool,
     end: crate::relay::EndSlot,
@@ -130,9 +138,10 @@ tokio::task_local! {
 }
 
 impl Scope {
-    fn new(relay: Option<(String, String)>, timings: bool) -> Self {
+    fn new(relay: Option<(String, String)>, proxy: Vec<(String, String)>, timings: bool) -> Self {
         Scope {
             relay,
+            proxy,
             timings: timings.then(|| (Instant::now(), Mutex::default())),
             head_start: AtomicBool::new(false),
             end: crate::relay::EndSlot::default(),
@@ -142,6 +151,19 @@ impl Scope {
     /// The relay and Clerk session this dial's `relay:` routes use.
     pub(crate) fn relay(&self) -> Option<(String, String)> {
         self.relay.clone()
+    }
+
+    /// `dial`'s value for the proxy setting `name`, one of [`PROXY_VARIABLES`].
+    pub(crate) fn proxy_setting(&self, name: &str) -> Option<String> {
+        self.proxy
+            .iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    }
+
+    /// Whether `dial` prints timing marks, so the relay is asked for its own.
+    pub(crate) fn timings(&self) -> bool {
+        self.timings.is_some()
     }
 
     /// Where this dial's relay stream keeps how it ended.
@@ -255,6 +277,76 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Prefixed<S> {
     }
 }
 
+/// The host's messages on their way to `dial`, a line at a time, with any line that starts with
+/// [`END`] dropped, so a message can't end `dial`'s output early or name its exit. JSON-RPC
+/// messages are one line and start with `{`, so a real one never is.
+struct Guarded<W> {
+    inner: W,
+    /// What came since the last newline.
+    line: Vec<u8>,
+    /// Whole lines on their way to `inner`.
+    out: Vec<u8>,
+}
+
+impl<W: AsyncWrite + Unpin> Guarded<W> {
+    fn new(inner: W) -> Self {
+        Guarded {
+            inner,
+            line: Vec::new(),
+            out: Vec::new(),
+        }
+    }
+
+    fn poll_drain(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        while !self.out.is_empty() {
+            let wrote = std::task::ready!(Pin::new(&mut self.inner).poll_write(cx, &self.out))?;
+            if wrote == 0 {
+                return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+            }
+            self.out.drain(..wrote);
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for Guarded<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        // One message waits at most: `bridge` flushes after each.
+        if !this.out.is_empty() {
+            std::task::ready!(this.poll_drain(cx))?;
+        }
+        for &byte in buf {
+            this.line.push(byte);
+            if byte == b'\n' {
+                if this.line.first() == Some(&END) {
+                    debug!("dropped a host's message that would read as the end of a dial");
+                } else {
+                    this.out.extend_from_slice(&this.line);
+                }
+                this.line.clear();
+            }
+        }
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        std::task::ready!(this.poll_drain(cx))?;
+        Pin::new(&mut this.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        std::task::ready!(this.poll_drain(cx))?;
+        Pin::new(&mut this.inner).poll_shutdown(cx)
+    }
+}
+
 /// How `plxd dial` exits for a dial that failed with `error`.
 #[must_use]
 pub fn exit_code(error: &remote::Error) -> i32 {
@@ -309,7 +401,7 @@ where
         return debug!("a dial sent a request plxd can't read");
     };
     remote::keep_tickets();
-    let scope = Arc::new(Scope::new(request.relay, request.timings));
+    let scope = Arc::new(Scope::new(request.relay, request.proxy, request.timings));
     let mut input = Input::with_waiting(read, request.lines);
     let (routes, in_order) = (&request.routes, request.in_order);
     let dialed = within(Some(Arc::clone(&scope)), async {
@@ -350,7 +442,7 @@ where
         return;
     }
     let bridged = tokio::select! {
-        bridged = within(Some(Arc::clone(&scope)), remote::bridge(dialed.socket, input, &mut write)) => bridged,
+        bridged = within(Some(Arc::clone(&scope)), remote::bridge(dialed.socket, input, Guarded::new(&mut write))) => bridged,
         () = stop.cancelled() => Err(io::Error::other("this computer's plxd is stopping")),
     };
     let relay_end = dialed
@@ -393,10 +485,10 @@ pub struct Dial<'a> {
 /// and from stdio, with `input` read from stdin. `None` when no such plxd takes it, before anything
 /// of `input` went, so `dial` dials itself. Otherwise how `dial` exits. Reports go through `report`,
 /// as `dial`'s own would.
-pub async fn hand_off(
+pub async fn hand_off<I: AsyncRead + Unpin>(
     data_dir: &DataDir,
     dial: &Dial<'_>,
-    input: &mut Input<tokio::io::Stdin>,
+    input: &mut Input<I>,
     report: &dyn Fn(&dyn Display),
 ) -> Option<i32> {
     // Starts reading stdin, so the lines the app wrote as it started this are in by the request.
@@ -427,6 +519,10 @@ pub async fn hand_off(
             .ok()
             .map(|token| (crate::relay::url(), token)),
         timings: crate::connect_timing::enabled(),
+        proxy: PROXY_VARIABLES
+            .iter()
+            .filter_map(|&name| Some((name.to_owned(), std::env::var(name).ok()?)))
+            .collect(),
         lines: input.take_waiting(),
     };
     if let Err(error) = write_line(&mut write, &request).await {
@@ -439,7 +535,13 @@ pub async fn hand_off(
             write.write_all(line.as_bytes()).await?;
             write.write_all(b"\n").await?;
         }
-        write.shutdown().await
+        // A named pipe has no half-close, so on Windows an empty message ends the input, as
+        // `plxd attach` ends its own ([`crate::attach::bridge`]).
+        if cfg!(windows) {
+            write.write(&[]).await.map(drop)
+        } else {
+            write.shutdown().await
+        }
     };
     let output = carry(&mut read, started, report);
     tokio::pin!(forward, output);
@@ -553,6 +655,72 @@ mod tests {
     use tokio::io::duplex;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_hosts_message_cant_end_the_dials_output() {
+        let mut out = Vec::new();
+        let mut guarded = Guarded::new(&mut out);
+        let forged = [&[END][..], br#"{"exit":6,"error":"forged"}"#].concat();
+        for message in [&br#"{"id":1}"#[..], &forged, br#"{"id":2}"#] {
+            guarded.write_all(message).await.unwrap();
+            guarded.write_all(b"\n").await.unwrap();
+            guarded.flush().await.unwrap();
+        }
+        assert_eq!(out, b"{\"id\":1}\n{\"id\":2}\n");
+    }
+
+    /// A stand-in on `data_dir`'s socket that answers the preface with `hello`, and gives back
+    /// everything it read after the preface.
+    #[cfg(unix)]
+    fn answering(data_dir: &DataDir, hello: String) -> tokio::task::JoinHandle<Vec<u8>> {
+        let path = data_dir.socket_path().unwrap().path;
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut preface = vec![0; PREFACE.len()];
+            stream.read_exact(&mut preface).await.unwrap();
+            assert_eq!(preface, PREFACE);
+            stream.write_all(hello.as_bytes()).await.unwrap();
+            let mut rest = Vec::new();
+            let _ = stream.read_to_end(&mut rest).await;
+            rest
+        })
+    }
+
+    /// `dial` dials itself, having sent no request and kept the app's lines, when no plxd
+    /// listens, when an older plxd answers the preface with a parse error, and when the plxd
+    /// that answers runs in another data folder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dial_dials_itself_without_a_plxd_of_its_own_that_takes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = DataDir::new(dir.path()).unwrap();
+        let routes = ["127.0.0.1:1".to_owned()];
+        let dial = Dial {
+            routes: &routes,
+            account: None,
+            remote: Some("fingerprint"),
+            in_order: false,
+        };
+        let report = |_: &dyn Display| {};
+        let mut input = Input::new(&b"{\"id\":1}\n"[..]);
+        assert_eq!(hand_off(&data_dir, &dial, &mut input, &report).await, None);
+
+        let older =
+            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#;
+        let other = r#"{"dial":1,"dataDir":"/somewhere/else"}"#;
+        for hello in [older, other] {
+            let path = data_dir.socket_path().unwrap().path;
+            let _ = std::fs::remove_file(&path);
+            let stand_in = answering(&data_dir, format!("{hello}\n"));
+            assert_eq!(hand_off(&data_dir, &dial, &mut input, &report).await, None);
+            assert!(
+                stand_in.await.unwrap().is_empty(),
+                "it sent its request: {hello}"
+            );
+        }
+        assert_eq!(input.take_waiting(), ["{\"id\":1}"]);
+    }
 
     #[tokio::test]
     async fn a_json_rpc_connection_goes_on_whole_and_a_dial_is_told_apart() {

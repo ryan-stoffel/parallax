@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -1591,4 +1592,143 @@ async fn a_dial_through_the_local_plxd_resumes_with_early_data_until_the_host_re
     dial(Some("early_data_accepted")).await;
     local.stop().await;
     host.stop().await;
+}
+
+/// Accepts any certificate, for a test client that only needs a session to resume.
+#[derive(Debug)]
+struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        let algorithms = &self.0.signature_verification_algorithms;
+        rustls::crypto::verify_tls12_signature(message, cert, dss, algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        let algorithms = &self.0.signature_verification_algorithms;
+        rustls::crypto::verify_tls13_signature(message, cert, dss, algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// Reads what the host sends within `wait`, processing it, and gives back the plaintext.
+fn read_for(
+    conn: &mut rustls::ClientConnection,
+    tcp: &mut std::net::TcpStream,
+    wait: Duration,
+) -> Vec<u8> {
+    use std::io::Read as _;
+    tcp.set_read_timeout(Some(wait)).unwrap();
+    let mut plain = Vec::new();
+    loop {
+        match conn.read_tls(tcp) {
+            Ok(0) => break,
+            Ok(_) => {
+                conn.process_new_packets().unwrap();
+                let _ = conn.reader().read_to_end(&mut plain);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+    plain
+}
+
+/// Only a session's `/ws` upgrade runs on 0-RTT early data. Any other request sent there, here the
+/// descriptor, is answered only once the client's Finished checked out (PLX-1585).
+#[tokio::test]
+async fn a_request_other_than_ws_in_early_data_waits_for_the_handshake() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let answered = tokio::task::spawn_blocking(move || {
+        use std::io::{Read as _, Write as _};
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        config.enable_early_data = true;
+        let config = Arc::new(config);
+        let name = rustls::pki_types::ServerName::try_from("parallax").unwrap();
+        let request = format!(
+            "GET /.well-known/parallax HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        // A full handshake, for a ticket.
+        let mut conn = rustls::ClientConnection::new(Arc::clone(&config), name.clone()).unwrap();
+        let mut tcp = std::net::TcpStream::connect((LOOPBACK, port)).unwrap();
+        let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+        tls.write_all(request.as_bytes()).unwrap();
+        let mut first = Vec::new();
+        let _ = tls.read_to_end(&mut first);
+        assert!(first.starts_with(b"HTTP/1.1 200"), "{}", String::from_utf8_lossy(&first));
+
+        // The request as early data, with the ClientHello, and no Finished yet.
+        let mut conn = rustls::ClientConnection::new(config, name).unwrap();
+        conn.early_data()
+            .expect("the ticket allows early data")
+            .write_all(request.as_bytes())
+            .unwrap();
+        let mut tcp = std::net::TcpStream::connect((LOOPBACK, port)).unwrap();
+        while conn.wants_write() {
+            conn.write_tls(&mut tcp).unwrap();
+        }
+        let before = read_for(&mut conn, &mut tcp, Duration::from_millis(500));
+        assert!(conn.is_early_data_accepted());
+        assert!(before.is_empty(), "answered before the Finished");
+        // The Finished, and then the answer.
+        while conn.wants_write() {
+            conn.write_tls(&mut tcp).unwrap();
+        }
+        read_for(&mut conn, &mut tcp, PATIENCE)
+    })
+    .await
+    .unwrap();
+    assert!(
+        answered.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&answered)
+    );
+    drop(client);
+    server.stop().await;
 }
