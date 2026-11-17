@@ -137,7 +137,6 @@ import {
   lineageOf,
   noRepo,
   otherRepos,
-  reposOnSeveral,
   repoless,
   sharedRepoIcons,
   rootOf,
@@ -522,8 +521,6 @@ export function App() {
     () => otherRepos(hosts, views, start.id),
     [hosts, views, start.id],
   );
-  // The repositories on more than one computer, which Mod+N's picker shows as one project.
-  const onSeveral = useMemo(() => reposOnSeveral(hosts, views), [hosts, views]);
   // When each repository last had a thread, for the picker's Recently used order.
   const repoLastUsed = useMemo(() => {
     const last = new Map<string, number>();
@@ -1847,9 +1844,7 @@ export function App() {
         groups={startGroups.filter((g) => !g.project)}
         repos={startState.repos}
         hostId={start.id}
-        hostName={listed.length > 1 ? start.name : undefined}
         elsewhere={startElsewhere}
-        several={onSeveral}
         lastUsed={repoLastUsed}
         onPick={pickStartRepo}
         onPickElsewhere={pickRepoOn}

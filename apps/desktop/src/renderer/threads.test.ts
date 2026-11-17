@@ -9,7 +9,6 @@ import type {
   ThreadStartResult,
   ParallaxEvent,
 } from "../protocol/generated/protocol";
-import type { Host } from "./hosts";
 import {
   addToProject,
   asksOf,
@@ -18,7 +17,6 @@ import {
   orchestratorRuns,
   repoIconOf,
   repoIconsByName,
-  reposOnSeveral,
   threadOrchestrators,
   threadsReducer,
   type ThreadsState,
@@ -421,12 +419,4 @@ test("with no pick times, a repository's copies draw the icon of the copy added 
   // A Project keeps its own icon, whatever a repository of its name has.
   const project = copy("brain", { project: true });
   expect(repoIconOf(project, repoIconsByName([first, project]))?.name).toBe("brain");
-});
-
-test("reposOnSeveral names the repositories more than one computer lists", () => {
-  const hosts = [{ id: "a" }, { id: "b" }] as Host[];
-  const view = (...names: string[]) =>
-    ({ state: { repos: names.map((name) => copy("rocket", { name })) } }) as ThreadsView;
-  const views = { a: view("parallax", "docs", "docs"), b: view("parallax", "notes") };
-  expect([...reposOnSeveral(hosts, views)]).toEqual(["parallax"]);
 });

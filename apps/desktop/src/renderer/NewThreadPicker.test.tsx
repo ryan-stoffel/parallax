@@ -28,11 +28,7 @@ let handle: { current: NewThreadPickerHandle | null };
 const onPick = vi.fn();
 const onNewOrchestrator = vi.fn();
 
-function render(
-  lastUsed: [string, number][] = [],
-  elsewhere: OtherRepo[] = [],
-  several?: ReadonlySet<string>,
-) {
+function render(lastUsed: [string, number][] = [], elsewhere: OtherRepo[] = []) {
   handle = createRef();
   root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
@@ -45,9 +41,7 @@ function render(
         ]}
         repos={repos}
         hostId="local"
-        hostName="mini"
         elsewhere={elsewhere}
-        several={several}
         lastUsed={new Map(lastUsed)}
         onPick={onPick}
         onPickElsewhere={vi.fn()}
@@ -152,13 +146,15 @@ test("Date added mixes other computers' repositories in by when they were added"
   expect(names()).toEqual(["dune", "atlas", "beacon", "cobalt", "No repo", "photon"]);
 });
 
-test("a repository on several computers shows as one project, with no computer or path (PLX-1498)", () => {
-  render([], [], new Set(["beacon"]));
+test("every repository shows its path and not its computer", () => {
+  const dune = { ...repo("dune"), path: "/srv/dune" };
+  render([], [{ host: { id: "mini", name: "mini" } as OtherRepo["host"], repo: dune }]);
   const rows = [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent);
-  expect(rows.slice(0, 3)).toEqual([
-    "atlasmini · /code/atlas",
-    "beacon",
-    "cobaltmini · /code/cobalt",
+  expect(rows.slice(0, 4)).toEqual([
+    "atlas/code/atlas",
+    "beacon/code/beacon",
+    "cobalt/code/cobalt",
+    "dune/srv/dune",
   ]);
 });
 
