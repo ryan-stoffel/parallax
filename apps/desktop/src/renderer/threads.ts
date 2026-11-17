@@ -442,22 +442,6 @@ export function otherRepos(
 }
 
 /**
- * The names of the repositories that more than one of `hosts` lists, which count as one project
- * wherever the computer is chosen later (PLX-1498). Matched by name, as `otherRepos` matches.
- */
-export function reposOnSeveral(
-  hosts: Host[],
-  views: Readonly<Record<string, ThreadsView>>,
-): ReadonlySet<string> {
-  const seen = new Set<string>();
-  const several = new Set<string>();
-  for (const host of hosts)
-    for (const name of new Set(views[host.id]?.state.repos.filter(isRepository).map((r) => r.name)))
-      (seen.has(name) ? several : seen).add(name);
-  return several;
-}
-
-/**
  * Whether `view`'s computer has no repository named `name`. False until its first list is in (a
  * computer that never connected still has `emptyThreads`), since that can't be told yet.
  */

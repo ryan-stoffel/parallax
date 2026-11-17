@@ -68,20 +68,17 @@ const page = 5;
  * Shift+Tab moves focus as usual.
  * Up and Down move and wrap, Home, End, Page Up, and Page Down jump, Enter picks, Mod+1 to Mod+9
  * pick that row, Escape closes. The footer's menu sets the order, row size, and whether Thread
- * lists orchestrators (`pickerPrefs`). A repository on one computer shows that computer and its
- * path; one that several computers list (`several`) shows as one project, since the computer is
- * chosen after it (PLX-1498). Picking closes it and calls `onPick` with the group's id,
- * for one of the other computers' repositories `onPickElsewhere` with its computer and entry, an
- * orchestrator's `open`, or `onNewOrchestrator` with the repository to start it in.
+ * lists orchestrators (`pickerPrefs`). Each repository shows its path but not its computer, since
+ * the computer is chosen after it (PLX-1498). Picking closes it and calls `onPick` with the
+ * group's id, for one of the other computers' repositories `onPickElsewhere` with its computer and
+ * entry, an orchestrator's `open`, or `onNewOrchestrator` with the repository to start it in.
  */
 export function NewThreadPicker({
   ref,
   groups,
   repos,
   hostId,
-  hostName,
   elsewhere,
-  several,
   lastUsed,
   onPick,
   onPickElsewhere,
@@ -94,12 +91,8 @@ export function NewThreadPicker({
   /** The host's repo entries, for each group's icon and path. */
   repos: Repo[];
   hostId: string;
-  /** The host's name, shown on its rows when there's more than one computer to tell apart. */
-  hostName?: string;
   /** The other computers' repositories, listed among the host's own. */
   elsewhere: OtherRepo[];
-  /** The names of the repositories more than one computer lists (`reposOnSeveral`). */
-  several?: ReadonlySet<string>;
   /** When a repository last had a thread, in ms, by `<host>/<entry>`. */
   lastUsed: ReadonlyMap<string, number>;
   onPick: (groupId: string) => void;
@@ -145,8 +138,6 @@ export function NewThreadPicker({
     value: string;
     name: string;
     icon: ReactNode;
-    /** Whose it is, before its second line. */
-    computer?: string;
     /** Its second line. */
     hint?: string;
     /** That the hint is a path, whose end says the most, so it's cut from the start. */
@@ -160,14 +151,11 @@ export function NewThreadPicker({
       .filter((g) => g.id !== noRepo)
       .flatMap((g) => {
         const repo = repos.find((r) => r.id === g.id);
-        return repo
-          ? [{ hostId, repo, computer: hostName, pick: () => onPick(g.id), name: g.name }]
-          : [];
+        return repo ? [{ hostId, repo, pick: () => onPick(g.id), name: g.name }] : [];
       }),
     ...elsewhere.map((o) => ({
       hostId: o.host.id,
       repo: o.repo,
-      computer: o.host.name,
       pick: () => onPickElsewhere(o.host.id, o.repo.id),
       name: o.repo.name,
     })),
@@ -183,8 +171,8 @@ export function NewThreadPicker({
     value: p.hostId === hostId ? p.repo.id : `${p.hostId}/${p.repo.id}`,
     name: p.name,
     icon: <RepoIcon repo={p.repo} />,
-    // One computer's copy says where it is; a repository on several is just the project.
-    ...(!several?.has(p.repo.name) && { computer: p.computer, hint: p.repo.path, path: true }),
+    hint: p.repo.path,
+    path: true,
     pick,
   });
   const repoRows: Row[] =
@@ -236,7 +224,7 @@ export function NewThreadPicker({
   const inName = (row: Row) => words.every((w) => row.name.toLowerCase().includes(w));
   const matching = (all: Row[]) => {
     const found = all.filter((row) => {
-      const text = `${row.name} ${row.computer ?? ""} ${row.hint ?? ""}`.toLowerCase();
+      const text = `${row.name} ${row.hint ?? ""}`.toLowerCase();
       return words.every((w) => text.includes(w));
     });
     return [...found.filter(inName), ...found.filter((row) => !inName(row))];
@@ -459,23 +447,15 @@ export function NewThreadPicker({
   );
 }
 
-/** A row's second line, or the rest of its one line when compact: its computer, then its hint. */
-function RowHint({ row }: { row: { computer?: string; hint?: string; path?: boolean } }) {
-  if (!row.computer && !row.hint) return null;
+/** A row's second line, or the rest of its one line when compact. */
+function RowHint({ row }: { row: { hint?: string; path?: boolean } }) {
+  if (!row.hint) return null;
   return (
     <span className="flex min-w-0 flex-1 text-body text-muted-foreground">
-      {row.computer && (
-        <span className="shrink-0 whitespace-pre">
-          {row.computer}
-          {row.hint && " · "}
-        </span>
-      )}
-      {row.hint && (
-        // Right to left, so a path too long for the row loses its start and keeps its folder.
-        <span className={`min-w-0 truncate ${row.path ? "[direction:rtl]" : ""}`}>
-          <bdi>{row.hint}</bdi>
-        </span>
-      )}
+      {/* Right to left, so a path too long for the row loses its start and keeps its folder. */}
+      <span className={`min-w-0 truncate ${row.path ? "[direction:rtl]" : ""}`}>
+        <bdi>{row.hint}</bdi>
+      </span>
     </span>
   );
 }
