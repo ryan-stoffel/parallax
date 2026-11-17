@@ -12,13 +12,12 @@ import {
   LIMITS,
   MAX_DAILY_BYTES,
   MAX_HOOK_BYTES,
-  MAX_PLACEMENT_TRIES,
   MAX_REMOVAL,
   MAX_STREAMS,
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
-import { EARLY_BYTES, EARLY_FRAMES, MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay, TRACE_URL } from "../src/stream";
+import { EARLY_BYTES, EARLY_FRAMES, MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
 import { apnsPayload, MAX_SEALED, sendApns, sendFcm } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
@@ -42,13 +41,12 @@ import {
 /** The relay's account for `user` of this test's Clerk instance. */
 const account = (user: string) => accountOf("https://clerk.test", user);
 
-/** A registered, connected host for `user`, a new one by default, and that user's token. `colo` is
- *  the data center its control socket enters, unknown when not given. */
-async function online(user = `user_${crypto.randomUUID()}`, colo?: string) {
+/** A registered, connected host for `user`, a new one by default, and that user's token. */
+async function online(user = `user_${crypto.randomUUID()}`) {
   const host = await newHost();
   const token = await session(user);
   expect((await register(host, token)).status).toBe(200);
-  const { control } = await connectHost(host, undefined, colo);
+  const { control } = await connectHost(host);
   expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
   return { host, token, control };
 }
@@ -1412,203 +1410,71 @@ async function away() {
   return { host, token };
 }
 
-describe("spare placement (PLX-1540)", () => {
-  /**
-   * Asks for a spare with `SPARE_PLACEMENT_TRIES` at `tries`, while each new stream object's colo
-   * lookup answers the next of `colos`, null for a failed lookup. plxd's control socket entered
-   * `entered`, or an unknown colo when null. Answers the spare and the stream objects asked, in order.
-   */
-  async function placed(tries: string | undefined, colos: (string | null)[], entered: string | null = "LAX") {
-    const answers = [...colos];
-    const lookups = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      expect(String(input instanceof Request ? input.url : input)).toBe(TRACE_URL);
-      const colo = answers.shift();
-      expect(colo).not.toBeUndefined();
-      if (!colo) return new Response("", { status: 503 });
-      return new Response(`fl=1\nh=cloudflare.com\ncolo=${colo}\n`);
-    });
-    const asked: string[] = [];
-    const original = StreamRelay.prototype.colo;
-    const colo = vi.spyOn(StreamRelay.prototype, "colo").mockImplementation(async function (this: StreamRelay) {
-      asked.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString());
+describe("standby spare object (PLX-1574)", () => {
+  /** Records each stream object asked whether plxd joined it, as the host's object asks a new
+   *  standby, in order. */
+  function asked() {
+    const ids: string[] = [];
+    const original = StreamRelay.prototype.hostJoined;
+    const spy = vi.spyOn(StreamRelay.prototype, "hostJoined").mockImplementation(async function (this: StreamRelay) {
+      ids.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString());
       return original.call(this);
     });
-    const before = testEnv.SPARE_PLACEMENT_TRIES;
-    testEnv.SPARE_PLACEMENT_TRIES = tries;
-    try {
-      const { host, control } = await online(undefined, entered ?? undefined);
-      control.ws.send(JSON.stringify({ t: "spare" }));
-      const spare = JSON.parse((await control.next()) as string) as Open;
-      expect(spare).toMatchObject({ t: "open", spare: true });
-      expect(answers).toEqual([]);
-      // The kept spare works as any other: plxd joins it with its token.
-      opened(await join(host, spare));
-      expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
-      // A dropped object kept nothing.
-      for (const id of asked.filter((id) => id !== spare.stream))
-        expect(await runInDurableObject(streamObject(id), (_, state) => state.storage.list())).toEqual(new Map());
-      return { spare, asked };
-    } finally {
-      testEnv.SPARE_PLACEMENT_TRIES = before;
-      lookups.mockRestore();
-      colo.mockRestore();
-    }
+    return { ids, spy };
   }
 
-  it("changes nothing when the setting is unset or 0", async () => {
-    for (const tries of [undefined, "0"]) expect((await placed(tries, [])).asked).toEqual([]);
-    // Nor is the control socket tagged with its colo.
-    const { host } = await online(undefined, "LAX");
-    const tags = await runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (_: HostRelay, state) =>
-      state.getTags(state.getWebSockets("host")[0]!),
-    );
-    expect(tags.some((tag) => tag.startsWith("colo:"))).toBe(false);
-  });
-
-  /** Holds each colo lookup until the test sets `answers` at its index, as `asked` lists them. A
-   *  plain value, since a promise made here can't be settled from another object. */
-  function heldLookups() {
-    const answers: string[] = [];
-    const asked: string[] = [];
-    const spy = vi.spyOn(StreamRelay.prototype, "colo").mockImplementation(async function (this: StreamRelay) {
-      const at = asked.push((this as unknown as { ctx: DurableObjectState }).ctx.id.toString()) - 1;
-      while (answers[at] === undefined) await new Promise((resolve) => setTimeout(resolve, 5));
-      return answers[at];
-    });
-    return { answers, asked, spy };
-  }
-
-  /** Counts the relay's `spare_superseded` log lines, still printing every line. */
-  function supersedes() {
-    const log = console.log.bind(console);
-    let count = 0;
-    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      if (typeof args[0] === "string" && args[0].includes('"event":"spare_superseded"')) count++;
-      log(...args);
-    });
-    return { count: () => count, spy };
-  }
-
-  it("lets a second spare request mid-placement supersede the first, so plxd gets one spare", async () => {
-    const { answers, asked, spy } = heldLookups();
-    const superseded = supersedes();
-    const before = testEnv.SPARE_PLACEMENT_TRIES;
-    testEnv.SPARE_PLACEMENT_TRIES = "3";
+  it("makes each spare's object one spare ahead, storing nothing in it until it's armed", async () => {
+    const { ids, spy } = asked();
     try {
-      const { host, control } = await online(undefined, "LAX");
+      const { host, token, control } = await online();
       control.ws.send(JSON.stringify({ t: "spare" }));
-      await expect.poll(() => asked.length).toBe(1);
-      // As plxd does after doubting its link: it drops the unannounced spare and asks again.
-      control.ws.send(JSON.stringify({ t: "spare" }));
-      await expect.poll(() => asked.length).toBe(2);
-      // The first finishes first, and is dropped before the second answers.
-      answers[0] = "LAX";
-      await expect.poll(superseded.count).toBe(1);
-      expect(await openStreams(host)).toEqual({});
-      answers[1] = "LAX";
-      const open = JSON.parse((await control.next()) as string) as Open;
-      expect(open).toMatchObject({ spare: true, stream: asked[1] });
-      expect(await openStreams(host)).toEqual({ [asked[1]!]: { spare: true } });
-      expect(await runInDurableObject(streamObject(asked[0]!), (_, state) => state.storage.list())).toEqual(new Map());
-    } finally {
-      testEnv.SPARE_PLACEMENT_TRIES = before;
-      spy.mockRestore();
-      superseded.spy.mockRestore();
-    }
-  });
+      const first = JSON.parse((await control.next()) as string) as Open;
+      expect(first).toMatchObject({ t: "open", spare: true });
+      // The first spare had no standby, so it made one beside it.
+      await expect.poll(() => ids.length).toBe(1);
+      const standby = ids[0]!;
+      expect(standby).not.toBe(first.stream);
+      expect(await runInDurableObject(streamObject(standby), (_, state) => state.storage.list())).toEqual(new Map());
+      expect(await openStreams(host)).toEqual({ [first.stream]: { spare: true } });
 
-  it("drops a placement plxd reconnected during, so the new connection isn't sent the old spare", async () => {
-    const { answers, asked, spy } = heldLookups();
-    const superseded = supersedes();
-    const before = testEnv.SPARE_PLACEMENT_TRIES;
-    testEnv.SPARE_PLACEMENT_TRIES = "3";
-    try {
-      const { host, control } = await online(undefined, "LAX");
-      control.ws.send(JSON.stringify({ t: "spare" }));
-      await expect.poll(() => asked.length).toBe(1);
-      const again = (await connectHost(host, [], "LAX")).control;
-      expect(JSON.parse((await again.next()) as string)).toMatchObject({ t: "ready" });
-      // No spare request came on the new connection, so only the reconnect can drop this one.
-      answers[0] = "LAX";
-      await expect.poll(superseded.count).toBe(1);
-      expect(await openStreams(host)).toEqual({});
-      // The new connection asks for its own spare, which is the first open it hears.
-      again.ws.send(JSON.stringify({ t: "spare" }));
-      await expect.poll(() => asked.length).toBe(2);
-      answers[1] = "LAX";
-      const open = JSON.parse((await again.next()) as string) as Open;
-      expect(open).toMatchObject({ spare: true, stream: asked[1] });
-      expect(await openStreams(host)).toEqual({ [asked[1]!]: { spare: true } });
-    } finally {
-      testEnv.SPARE_PLACEMENT_TRIES = before;
-      spy.mockRestore();
-      superseded.spy.mockRestore();
-    }
-  });
-
-  it("re-creates a spare away from the control socket's colo, up to the cap, and keeps the last", async () => {
-    const { spare, asked } = await placed("3", ["SJC", "SJC", "SJC"]);
-    expect(asked).toHaveLength(3);
-    expect(new Set(asked).size).toBe(3);
-    expect(spare.stream).toBe(asked[2]);
-    // A larger setting is capped.
-    expect((await placed("50", ["SJC", "SJC", "SJC"])).asked).toHaveLength(MAX_PLACEMENT_TRIES);
-  });
-
-  it("keeps a spare in the control socket's colo", async () => {
-    const first = await placed("3", ["LAX"]);
-    expect(first.asked).toEqual([first.spare.stream]);
-    const second = await placed("3", ["SJC", "LAX"]);
-    expect(second.asked).toHaveLength(2);
-    expect(second.spare.stream).toBe(second.asked[1]);
-  });
-
-  it("keeps the current spare when its lookup fails", async () => {
-    const failed = await placed("3", [null]);
-    expect(failed.asked).toEqual([failed.spare.stream]);
-  });
-
-  it("never offers a spare until its placement ends, so a client arriving meanwhile gets its own stream", async () => {
-    const { answers, asked, spy: colo } = heldLookups();
-    const before = testEnv.SPARE_PLACEMENT_TRIES;
-    testEnv.SPARE_PLACEMENT_TRIES = "3";
-    try {
-      const { host, token, control } = await online(undefined, "LAX");
-      control.ws.send(JSON.stringify({ t: "spare" }));
-      await expect.poll(() => asked.length).toBe(1);
-      answers[0] = "SJC";
-      await expect.poll(() => asked.length).toBe(2);
-      // Mid-placement: nothing is listed, so a client takes a new stream, not a spare.
-      expect(await openStreams(host)).toEqual({});
+      // A client takes the spare, and plxd asks for the next, which is the standby.
+      opened(await join(host, first));
       const client = opened(await connect(host, token));
-      const open = JSON.parse((await control.next()) as string) as Open;
-      expect(open.spare).toBeUndefined();
-      expect(asked).not.toContain(open.stream);
-      opened(await join(host, open));
       expect(await client.next()).toBe("ready");
-
-      answers[1] = "SJC";
-      await expect.poll(() => asked.length).toBe(3);
-      answers[2] = "LAX";
-      const spare = JSON.parse((await control.next()) as string) as Open;
-      expect(spare).toMatchObject({ spare: true, stream: asked[2] });
-      // The two dropped objects were never listed, armed, or announced.
-      expect(Object.keys(await openStreams(host)).sort()).toEqual([open.stream, spare.stream].sort());
-      for (const id of asked.slice(0, 2))
-        expect(await runInDurableObject(streamObject(id), (_, state) => state.storage.list())).toEqual(new Map());
-      // The next client takes the placed spare, and plxd joins it.
-      const side = opened(await join(host, spare));
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const second = JSON.parse((await control.next()) as string) as Open;
+      expect(second).toMatchObject({ t: "open", spare: true, stream: standby });
+      await expect.poll(() => ids.length).toBe(2);
+      expect(ids[1]).not.toBe(standby);
+      // It works as any spare: plxd joins it, and the next client takes it.
+      const side = opened(await join(host, second));
       const next = opened(await connect(host, token));
       expect(await next.next()).toBe("ready");
       expect(await side.next()).toBe("ready");
     } finally {
-      testEnv.SPARE_PLACEMENT_TRIES = before;
-      colo.mockRestore();
+      spy.mockRestore();
     }
   });
 
-  it("looks nothing up when the control socket's colo is unknown", async () => {
-    expect((await placed("3", [], null)).asked).toEqual([]);
+  it("leaves the standby to spares: a client with no spare gets a new object", async () => {
+    const { ids, spy } = asked();
+    try {
+      const { host, token, control } = await online();
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      await expect.poll(() => ids.length).toBe(1);
+      // plxd hasn't joined the spare, but a client takes it, and a second gets its own stream.
+      opened(await connect(host, token));
+      opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      expect(open.spare).toBeUndefined();
+      expect([spare.stream, ids[0]]).not.toContain(open.stream);
+      // The standby is still there for the next spare.
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true, stream: ids[0] });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
