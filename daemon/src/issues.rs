@@ -87,20 +87,28 @@ pub(crate) async fn connections(daemon: &Daemon) -> Result<IssueConnectionsResul
 }
 
 /// `issue/connect`: checks the token with the tracker, keeps it in the keystore, then records the
-/// account. An account saved before keeps its id and gets the new token.
+/// account by the tracker's stable ids for it. An account saved before keeps its id and gets the
+/// new token and names.
 pub(crate) async fn connect(
     daemon: &Daemon,
     params: IssueConnectParams,
 ) -> Result<IssueConnectResult, ErrorObject> {
     crate::secrets::need_keystore()?;
     let launcher = daemon.cli_detector.launcher();
-    let (provider, name, site, account, token) = match params {
+    let (provider, name, identity, site, account, token) = match params {
         IssueConnectParams::Linear { api_key } => {
             let key = Zeroizing::new(api_key);
             let key = Zeroizing::new(key.trim().to_owned());
             check_token(&key, "API key")?;
-            let (account, site) = linear::check(launcher, &key).await?;
-            (IssueProvider::Linear, "linear", site, account, key)
+            let (identity, account, site) = linear::check(launcher, &key).await?;
+            (
+                IssueProvider::Linear,
+                "linear",
+                identity,
+                site,
+                account,
+                key,
+            )
         }
         IssueConnectParams::Jira {
             site,
@@ -117,8 +125,8 @@ pub(crate) async fn connect(
                     "the email must be one line with no colon",
                 ));
             }
-            let account = jira::check(launcher, &site, &email, &token).await?;
-            (IssueProvider::Jira, "jira", site, account, token)
+            let (identity, account) = jira::check(launcher, &site, &email, &token).await?;
+            (IssueProvider::Jira, "jira", identity, site, account, token)
         }
     };
     let key = AccountId::generate();
@@ -127,7 +135,7 @@ pub(crate) async fn connect(
     let saved = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
-            db.save_issue_connection(key.into(), name, &store_site, &store_account)
+            db.save_issue_connection(key.into(), name, &identity, &store_account, &store_site)
                 .map_err(|e| store_error(&e))
         })
         .await;
@@ -213,6 +221,11 @@ pub(crate) async fn list(
         }))
         .await
     };
+    Ok(gather(reads))
+}
+
+/// Each connection's issues, most recently updated first, and each failure in `errors`.
+fn gather(reads: Vec<(String, Result<Vec<Issue>, ErrorObject>)>) -> IssueListResult {
     let mut result = IssueListResult {
         issues: Vec::new(),
         errors: Vec::new(),
@@ -229,7 +242,7 @@ pub(crate) async fn list(
     result
         .issues
         .sort_by_key(|issue| std::cmp::Reverse(issue.updated_at));
-    Ok(result)
+    result
 }
 
 async fn list_one(launcher: &Launcher, tracker: Tracker) -> Result<Vec<Issue>, ErrorObject> {
@@ -481,7 +494,57 @@ fn parse<T: serde::de::DeserializeOwned>(tracker: &str, body: &str) -> Result<T,
 
 #[cfg(test)]
 mod tests {
-    use super::curl_config;
+    use jiff::Timestamp;
+    use parallax_protocol::{
+        Issue, IssueConnectionError, IssueContainer, IssueProvider, IssueState, IssueStateCategory,
+    };
+
+    use super::{curl_config, failed, gather};
+
+    fn issue(connection: &str, key: &str, updated: i64) -> Issue {
+        Issue {
+            connection_id: connection.to_owned(),
+            provider: IssueProvider::Linear,
+            id: key.to_owned(),
+            key: key.to_owned(),
+            title: key.to_owned(),
+            url: String::new(),
+            state: IssueState {
+                id: "s".to_owned(),
+                name: "Todo".to_owned(),
+                category: IssueStateCategory::Todo,
+                color: None,
+            },
+            container: IssueContainer {
+                id: "t".to_owned(),
+                name: "Team".to_owned(),
+            },
+            assignee: None,
+            updated_at: Timestamp::from_second(updated).unwrap(),
+        }
+    }
+
+    /// One connection's failure is in `errors`, and the others' issues still come, newest first.
+    #[test]
+    fn a_failing_connection_is_an_error_beside_the_others_issues() {
+        let result = gather(vec![
+            ("a".to_owned(), Ok(vec![issue("a", "A-1", 100)])),
+            ("b".to_owned(), Err(failed("Linear refused the API key."))),
+            (
+                "c".to_owned(),
+                Ok(vec![issue("c", "C-1", 200), issue("c", "C-2", 50)]),
+            ),
+        ]);
+        let keys: Vec<_> = result.issues.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys, ["C-1", "A-1", "C-2"]);
+        assert_eq!(
+            result.errors,
+            [IssueConnectionError {
+                connection_id: "b".to_owned(),
+                message: "Linear refused the API key.".to_owned(),
+            }]
+        );
+    }
 
     /// The token goes in the config, never the arguments, and a body's quotes and backslashes
     /// survive curl's unquoting.

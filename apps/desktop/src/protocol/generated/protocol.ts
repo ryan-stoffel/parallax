@@ -12429,9 +12429,9 @@ export type IssueContainer = {
  */
 export type IssueState = {
 	/**
-	 * In an issue, its state's id. In [`IssueDetail::states`], what `issue/setState` takes:
-	 * `open`, `completed`, or `notPlanned` on GitHub, a workflow state's id on Linear, and a
-	 * transition's id on Jira.
+	 * Its id, the same in an issue and in [`IssueDetail::states`], and what `issue/setState`
+	 * takes: `open`, `completed`, or `notPlanned` on GitHub, a workflow state's id on Linear,
+	 * and a status's id on Jira, which plxd moves to through the transition that leads there.
 	 */
 	id: string,
 	/**

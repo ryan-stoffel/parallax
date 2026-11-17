@@ -26,36 +26,14 @@ const ISSUE_FIELDS: &str = "fragment IssueFields on Issue {
 
 /// The open issues assigned to the viewer, most recently updated first.
 pub(super) async fn list(launcher: &Launcher) -> Result<Vec<Issue>, ErrorObject> {
-    let query = format!(
-        "query($q: String!) {{ rateLimit {{ remaining resetAt }} \
-         search(query: $q, type: ISSUE, first: 100) {{ nodes {{ ...IssueFields }} }} }} \
-         {ISSUE_FIELDS}"
-    );
-    let search = "is:issue is:open assignee:@me archived:false sort:updated-desc";
-    let answer = graphql(launcher, &query, &[("-f", format!("q={search}"))]).await?;
+    let answer = gh(launcher, &list_args(), None).await?;
     crate::gh_shim::record_graphql(launcher.data_dir(), &answer);
     list_of(&answer)
 }
 
 /// Issue `id` with its body and comments.
 pub(super) async fn get(launcher: &Launcher, id: &str) -> Result<IssueDetail, ErrorObject> {
-    let (owner, name, number) = parts(id)?;
-    let query = format!(
-        "query($owner: String!, $name: String!, $number: Int!) {{ \
-         repository(owner: $owner, name: $name) {{ issue(number: $number) {{ ...IssueFields body \
-         comments(first: 100) {{ nodes {{ id body createdAt author {{ login }} }} }} }} }} }} \
-         {ISSUE_FIELDS}"
-    );
-    let answer = graphql(
-        launcher,
-        &query,
-        &[
-            ("-f", format!("owner={owner}")),
-            ("-f", format!("name={name}")),
-            ("-F", format!("number={number}")),
-        ],
-    )
-    .await?;
+    let answer = gh(launcher, &get_args(id)?, None).await?;
     detail_of(&answer)
 }
 
@@ -65,7 +43,7 @@ pub(super) async fn containers(launcher: &Launcher) -> Result<Vec<IssueContainer
                  orderBy: { field: PUSHED_AT, direction: DESC }, \
                  ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) \
                  { nodes { nameWithOwner hasIssuesEnabled isArchived } } } }";
-    let answer = graphql(launcher, query, &[]).await?;
+    let answer = gh(launcher, &graphql_args(query, &[]), None).await?;
     containers_of(&answer)
 }
 
@@ -76,36 +54,14 @@ pub(super) async fn create(
     title: &str,
     body: &str,
 ) -> Result<Issue, ErrorObject> {
-    let Some((owner, name)) = repo
-        .split_once('/')
-        .filter(|(o, n)| is_name(o) && is_name(n))
-    else {
-        return Err(ErrorObject::invalid_params(format!(
-            "{repo:?} is not a GitHub repository"
-        )));
-    };
-    let created = gh(
-        launcher,
-        &[
-            "issue",
-            "create",
-            &format!("--repo={owner}/{name}"),
-            &format!("--title={title}"),
-            "--body-file=-",
-            "--assignee=@me",
-        ],
-        Some(body),
-    )
-    .await?;
+    let created = gh(launcher, &create_args(repo, title)?, Some(body)).await?;
     // gh prints the new issue's URL last.
     let number = created
         .trim()
         .rsplit_once("/issues/")
         .and_then(|(_, number)| number.parse::<u64>().ok())
         .ok_or_else(|| failed("gh filed the issue but didn't say where."))?;
-    Ok(get(launcher, &format!("{owner}/{name}#{number}"))
-        .await?
-        .issue)
+    Ok(get(launcher, &format!("{repo}#{number}")).await?.issue)
 }
 
 /// Opens issue `id` again, or closes it as completed or not planned.
@@ -114,19 +70,7 @@ pub(super) async fn set_state(
     id: &str,
     state: &str,
 ) -> Result<Issue, ErrorObject> {
-    let (owner, name, number) = parts(id)?;
-    let (number, repo) = (number.to_string(), format!("--repo={owner}/{name}"));
-    let args: &[&str] = match state {
-        "open" => &["issue", "reopen", &number, &repo],
-        "completed" => &["issue", "close", &number, &repo, "--reason=completed"],
-        "notPlanned" => &["issue", "close", &number, &repo, "--reason=not planned"],
-        _ => {
-            return Err(ErrorObject::invalid_params(format!(
-                "{state:?} is not open, completed, or notPlanned"
-            )));
-        }
-    };
-    gh(launcher, args, None).await?;
+    gh(launcher, &state_args(id, state)?, None).await?;
     Ok(get(launcher, id).await?.issue)
 }
 
@@ -143,14 +87,7 @@ pub(super) async fn comment(
         body: String,
         created_at: Timestamp,
     }
-    let (owner, name, number) = parts(id)?;
-    let endpoint = format!("repos/{owner}/{name}/issues/{number}/comments");
-    let answer = gh(
-        launcher,
-        &["api", "--method=POST", &endpoint, "-F", "body=@-"],
-        Some(body),
-    )
-    .await?;
+    let answer = gh(launcher, &comment_args(id)?, Some(body)).await?;
     let created: Posted = parse("GitHub", &answer)?;
     Ok(IssueComment {
         id: created.node_id,
@@ -158,6 +95,106 @@ pub(super) async fn comment(
         body: created.body,
         created_at: created.created_at,
     })
+}
+
+/// `gh api graphql` with `query` and `fields`, each a flag (`-f` for text, `-F` for a number)
+/// and its `key=value`.
+fn graphql_args(query: &str, fields: &[(&str, String)]) -> Vec<String> {
+    let mut args = vec![
+        "api".to_owned(),
+        "graphql".to_owned(),
+        "-f".to_owned(),
+        format!("query={query}"),
+    ];
+    for (flag, field) in fields {
+        args.extend([(*flag).to_owned(), field.clone()]);
+    }
+    args
+}
+
+/// The search for the viewer's open issues.
+fn list_args() -> Vec<String> {
+    let query = format!(
+        "query($q: String!) {{ rateLimit {{ remaining resetAt }} \
+         search(query: $q, type: ISSUE, first: 100) {{ nodes {{ ...IssueFields }} }} }} \
+         {ISSUE_FIELDS}"
+    );
+    let search = "is:issue is:open assignee:@me archived:false sort:updated-desc";
+    graphql_args(&query, &[("-f", format!("q={search}"))])
+}
+
+fn get_args(id: &str) -> Result<Vec<String>, ErrorObject> {
+    let (owner, name, number) = parts(id)?;
+    let query = format!(
+        "query($owner: String!, $name: String!, $number: Int!) {{ \
+         repository(owner: $owner, name: $name) {{ issue(number: $number) {{ ...IssueFields body \
+         comments(first: 100) {{ nodes {{ id body createdAt author {{ login }} }} }} }} }} }} \
+         {ISSUE_FIELDS}"
+    );
+    Ok(graphql_args(
+        &query,
+        &[
+            ("-f", format!("owner={owner}")),
+            ("-f", format!("name={name}")),
+            ("-F", format!("number={number}")),
+        ],
+    ))
+}
+
+/// `gh issue create` in `repo`, assigned to the viewer, with the body on stdin. Values go as
+/// `--flag=value`, so none is read as a flag.
+fn create_args(repo: &str, title: &str) -> Result<Vec<String>, ErrorObject> {
+    if !repo
+        .split_once('/')
+        .is_some_and(|(owner, name)| is_name(owner) && is_name(name))
+    {
+        return Err(ErrorObject::invalid_params(format!(
+            "{repo:?} is not a GitHub repository"
+        )));
+    }
+    Ok(vec![
+        "issue".to_owned(),
+        "create".to_owned(),
+        format!("--repo={repo}"),
+        format!("--title={title}"),
+        "--body-file=-".to_owned(),
+        "--assignee=@me".to_owned(),
+    ])
+}
+
+/// `gh issue reopen` or `gh issue close` with its reason, for `state`.
+fn state_args(id: &str, state: &str) -> Result<Vec<String>, ErrorObject> {
+    let (owner, name, number) = parts(id)?;
+    let (verb, reason) = match state {
+        "open" => ("reopen", None),
+        "completed" => ("close", Some("--reason=completed")),
+        "notPlanned" => ("close", Some("--reason=not planned")),
+        _ => {
+            return Err(ErrorObject::invalid_params(format!(
+                "{state:?} is not open, completed, or notPlanned"
+            )));
+        }
+    };
+    let mut args = vec![
+        "issue".to_owned(),
+        verb.to_owned(),
+        number.to_string(),
+        format!("--repo={owner}/{name}"),
+    ];
+    args.extend(reason.map(str::to_owned));
+    Ok(args)
+}
+
+/// `gh api` posting a comment whose body is on stdin.
+fn comment_args(id: &str) -> Result<Vec<String>, ErrorObject> {
+    let (owner, name, number) = parts(id)?;
+    Ok(vec![
+        "api".to_owned(),
+        "--method=POST".to_owned(),
+        format!("repos/{owner}/{name}/issues/{number}/comments"),
+        "-F".to_owned(),
+        "body=@-".to_owned(),
+    ])
 }
 
 /// `owner/repo#12`'s parts.
@@ -181,29 +218,14 @@ fn is_name(part: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-/// Runs `gh api graphql` with `query` and `fields`, each a flag (`-f` for text, `-F` for a
-/// number) and its `key=value`.
-async fn graphql(
-    launcher: &Launcher,
-    query: &str,
-    fields: &[(&str, String)],
-) -> Result<String, ErrorObject> {
-    let query = format!("query={query}");
-    let mut args = vec!["api", "graphql", "-f", query.as_str()];
-    for (flag, field) in fields {
-        args.extend([*flag, field.as_str()]);
-    }
-    gh(launcher, &args, None).await
-}
-
 /// Runs `gh args`, with `input` on stdin: its stdout.
 async fn gh(
     launcher: &Launcher,
-    args: &[&str],
+    args: &[String],
     input: Option<&str>,
 ) -> Result<String, ErrorObject> {
     let mut spec = probe_spec("gh");
-    spec.args = args.iter().map(|arg| (*arg).into()).collect();
+    spec.args = args.iter().map(Into::into).collect();
     spec.inject.set("GH_PROMPT_DISABLED", "1");
     if input.is_some() {
         spec.stdin = StdinMode::Piped;
@@ -417,7 +439,82 @@ mod tests {
     use parallax_protocol::IssueStateCategory;
     use serde_json::json;
 
-    use super::{containers_of, detail_of, list_of, parts};
+    use super::{
+        comment_args, containers_of, create_args, detail_of, get_args, list_args, list_of, parts,
+        state_args,
+    };
+
+    /// The arguments for each `gh` call: values as GraphQL variables or `--flag=value`, and bodies
+    /// on stdin, never in the arguments.
+    #[test]
+    fn gh_arguments() {
+        let list = list_args();
+        assert_eq!(list[..3], ["api", "graphql", "-f"]);
+        assert!(list[3].starts_with("query=query($q: String!)"));
+        assert_eq!(
+            list[4..],
+            [
+                "-f",
+                "q=is:issue is:open assignee:@me archived:false sort:updated-desc"
+            ]
+        );
+
+        let get = get_args("octo/hello#12").unwrap();
+        assert_eq!(
+            get[4..],
+            ["-f", "owner=octo", "-f", "name=hello", "-F", "number=12"]
+        );
+
+        assert_eq!(
+            create_args("octo/hello", "--help me").unwrap(),
+            [
+                "issue",
+                "create",
+                "--repo=octo/hello",
+                "--title=--help me",
+                "--body-file=-",
+                "--assignee=@me"
+            ]
+        );
+        assert!(create_args("octo", "T").is_err());
+
+        assert_eq!(
+            state_args("octo/hello#12", "open").unwrap(),
+            ["issue", "reopen", "12", "--repo=octo/hello"]
+        );
+        assert_eq!(
+            state_args("octo/hello#12", "completed").unwrap(),
+            [
+                "issue",
+                "close",
+                "12",
+                "--repo=octo/hello",
+                "--reason=completed"
+            ]
+        );
+        assert_eq!(
+            state_args("octo/hello#12", "notPlanned").unwrap(),
+            [
+                "issue",
+                "close",
+                "12",
+                "--repo=octo/hello",
+                "--reason=not planned"
+            ]
+        );
+        assert!(state_args("octo/hello#12", "closed").is_err());
+
+        assert_eq!(
+            comment_args("octo/hello#12").unwrap(),
+            [
+                "api",
+                "--method=POST",
+                "repos/octo/hello/issues/12/comments",
+                "-F",
+                "body=@-"
+            ]
+        );
+    }
 
     fn issue_json(number: u64, state: &str, reason: Option<&str>) -> serde_json::Value {
         json!({

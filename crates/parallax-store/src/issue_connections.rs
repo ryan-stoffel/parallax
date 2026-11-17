@@ -48,8 +48,9 @@ fn parse(
 }
 
 impl Store {
-    /// Saves `account` on `provider` at `site` as connection `id`, unless it is already saved:
-    /// the id it is saved under, `id` or the earlier one's.
+    /// Saves the account `identity` names on `provider` as connection `id`, shown as `account`
+    /// at `site`. One already saved keeps its id and takes the new names. Answers the id it is
+    /// saved under, `id` or the earlier one's.
     ///
     /// # Errors
     ///
@@ -58,29 +59,30 @@ impl Store {
         &self,
         id: Uuid,
         provider: &str,
-        site: &str,
+        identity: &str,
         account: &str,
+        site: &str,
     ) -> Result<Uuid, StoreError> {
-        self.conn
-            .prepare_cached(
-                "INSERT INTO issue_connections (id, provider, account, site, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT (provider, site, account) DO NOTHING",
-            )?
-            .execute(params![
-                id.to_string(),
-                provider,
-                account,
-                site,
-                timestamp::now()
-            ])?;
         let kept: String = self
             .conn
             .prepare_cached(
-                "SELECT id FROM issue_connections
-                 WHERE provider = ?1 AND site = ?2 AND account = ?3",
+                "INSERT INTO issue_connections (id, provider, identity, account, site, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (provider, identity)
+                 DO UPDATE SET account = excluded.account, site = excluded.site
+                 RETURNING id",
             )?
-            .query_row(params![provider, site, account], |row| row.get(0))?;
+            .query_row(
+                params![
+                    id.to_string(),
+                    provider,
+                    identity,
+                    account,
+                    site,
+                    timestamp::now()
+                ],
+                |row| row.get(0),
+            )?;
         Ok(Uuid::parse_str(&kept)?)
     }
 
@@ -133,49 +135,35 @@ mod tests {
 
     use crate::Store;
 
-    /// Saving an account again keeps its first id; the same account on another site is another
-    /// connection; a deleted one is gone.
+    /// Saving an account again keeps its first id and takes its new names; another account
+    /// with the same names is another connection; a deleted one is gone.
     #[test]
-    fn an_issue_connection_is_saved_once_per_account_and_deleted() {
+    fn an_issue_connection_is_saved_once_per_identity_and_deleted() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
         let (first, again, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
-        let site = "acme.atlassian.net";
-        assert_eq!(
+        let save = |id, identity, account| {
             store
-                .save_issue_connection(first, "jira", site, "ada@example.com")
-                .unwrap(),
-            first
-        );
-        assert_eq!(
-            store
-                .save_issue_connection(again, "jira", site, "ada@example.com")
-                .unwrap(),
-            first
-        );
-        assert_eq!(
-            store
-                .save_issue_connection(other, "jira", "beta.atlassian.net", "ada@example.com")
-                .unwrap(),
-            other
-        );
+                .save_issue_connection(id, "linear", identity, account, "Acme")
+                .unwrap()
+        };
+        assert_eq!(save(first, "org-1/user-1", "Ada"), first);
+        assert_eq!(save(again, "org-1/user-1", "Ada Lovelace"), first);
+        assert_eq!(save(other, "org-2/user-9", "Ada Lovelace"), other);
         let saved: Vec<_> = store
             .issue_connections()
             .unwrap()
             .into_iter()
-            .map(|row| (row.id, row.site))
+            .map(|row| (row.id, row.account))
             .collect();
         assert_eq!(
             saved,
             [
-                (first, site.to_owned()),
-                (other, "beta.atlassian.net".to_owned())
+                (first, "Ada Lovelace".to_owned()),
+                (other, "Ada Lovelace".to_owned())
             ]
         );
-        assert_eq!(
-            store.issue_connection(first).unwrap().unwrap().account,
-            "ada@example.com"
-        );
+        assert_eq!(store.issue_connection(first).unwrap().unwrap().site, "Acme");
         assert!(store.issue_connection(again).unwrap().is_none());
         assert!(store.delete_issue_connection(first).unwrap());
         assert!(!store.delete_issue_connection(first).unwrap());

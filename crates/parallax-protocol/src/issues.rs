@@ -138,9 +138,9 @@ pub enum IssueStateCategory {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueState {
-    /// In an issue, its state's id. In [`IssueDetail::states`], what `issue/setState` takes:
-    /// `open`, `completed`, or `notPlanned` on GitHub, a workflow state's id on Linear, and a
-    /// transition's id on Jira.
+    /// Its id, the same in an issue and in [`IssueDetail::states`], and what `issue/setState`
+    /// takes: `open`, `completed`, or `notPlanned` on GitHub, a workflow state's id on Linear,
+    /// and a status's id on Jira, which plxd moves to through the transition that leads there.
     pub id: String,
     /// Its name, such as `In Progress`.
     pub name: String,

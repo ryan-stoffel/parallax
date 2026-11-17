@@ -1,7 +1,8 @@
 //! Jira Cloud, through REST v3 at `https://<site>` with basic auth from the account's email and
-//! an API token. Issue ids are keys such as `ABC-12`, containers are projects, and a state an
-//! issue can move to is a transition. Descriptions and comments are Atlassian Document Format,
-//! converted to and from a small part of Markdown.
+//! an API token. Issue ids are keys such as `ABC-12`, and containers are projects. A state is a
+//! status, by its id, and an issue moves to one through the transition that leads there.
+//! Descriptions and comments are Atlassian Document Format, converted to and from a small part of
+//! Markdown.
 
 use data_encoding::BASE64;
 use jiff::Timestamp;
@@ -12,6 +13,7 @@ use parallax_protocol::{
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tracing::warn;
 use zeroize::Zeroizing;
 
 use super::{Answer, failed, parse, request};
@@ -49,13 +51,14 @@ pub(super) fn normalize_site(site: &str) -> Result<String, String> {
     }
 }
 
-/// Checks the account with Jira: its email, else `email`.
+/// Checks the account with Jira: its stable identity (the site and account id), and its email,
+/// else `email`.
 pub(super) async fn check(
     launcher: &Launcher,
     site: &str,
     email: &str,
     token: &str,
-) -> Result<String, ErrorObject> {
+) -> Result<(String, String), ErrorObject> {
     let auth = basic(email, token);
     let url = format!("https://{site}/rest/api/3/myself");
     let answer = request(launcher, "Jira", "GET", &url, &auth, None).await?;
@@ -68,22 +71,23 @@ pub(super) async fn check(
         )));
     }
     let myself: Myself = answered(&answer)?;
-    Ok(myself
+    let account = myself
         .email_address
         .filter(|address| !address.is_empty())
-        .unwrap_or_else(|| email.to_owned()))
+        .unwrap_or_else(|| email.to_owned());
+    Ok((format!("{site}/{}", myself.account_id), account))
 }
 
 impl Jira {
     /// The unfinished issues assigned to the account, most recently updated first.
     pub(super) async fn list(&self, launcher: &Launcher) -> Result<Vec<Issue>, ErrorObject> {
-        let body = json!({
-            "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
-            "maxResults": 100,
-            "fields": FIELDS.split(',').collect::<Vec<_>>(),
-        });
         let found: Search = self
-            .call(launcher, "POST", "/rest/api/3/search/jql", Some(&body))
+            .call(
+                launcher,
+                "POST",
+                "/rest/api/3/search/jql",
+                Some(&search_body()),
+            )
             .await?;
         Ok(found
             .issues
@@ -109,7 +113,7 @@ impl Jira {
                 None,
             )
             .await?;
-        detail_of(&self.id, &self.site, issue, &transitions)
+        detail_of(&self.id, &self.site, issue, transitions)
     }
 
     /// The projects the account can see.
@@ -169,50 +173,53 @@ impl Jira {
         let myself: Myself = self
             .call(launcher, "GET", "/rest/api/3/myself", None)
             .await?;
-        let mut fields = json!({
-            "project": { "key": project },
-            "issuetype": { "id": kind },
-            "summary": title,
-        });
-        if !body.is_empty() {
-            fields["description"] = markdown_to_adf(body);
-        }
         let created: Created = self
             .call(
                 launcher,
                 "POST",
                 "/rest/api/3/issue",
-                Some(&json!({ "fields": fields })),
+                Some(&create_body(project, kind, title, body)),
             )
             .await?;
-        // Not every project's create screen has the assignee, so it's set after.
-        let assignee = json!({ "accountId": myself.account_id });
-        self.send(
-            launcher,
-            "PUT",
-            &format!("/rest/api/3/issue/{}/assignee", created.key),
-            Some(&assignee),
-        )
-        .await?;
+        // Not every project's create screen has the assignee, so it's set after. The issue exists
+        // by now, so a refusal is only logged: failing would have the user file it again.
+        let assigned = self
+            .send(
+                launcher,
+                "PUT",
+                &format!("/rest/api/3/issue/{}/assignee", created.key),
+                Some(&json!({ "accountId": myself.account_id })),
+            )
+            .await;
+        if let Err(error) = assigned {
+            warn!(issue = %created.key, error = %error.message, "could not assign a new Jira issue");
+        }
         self.issue(launcher, &created.key).await
     }
 
-    /// Moves issue `key` through transition `transition`.
+    /// Moves issue `key` to status `status` through the transition that leads there. One already
+    /// there stays as it is.
     pub(super) async fn set_state(
         &self,
         launcher: &Launcher,
         key: &str,
-        transition: &str,
+        status: &str,
     ) -> Result<Issue, ErrorObject> {
         let key = issue_key(key)?;
-        let body = json!({ "transition": { "id": transition } });
-        self.send(
-            launcher,
-            "POST",
-            &format!("/rest/api/3/issue/{key}/transitions"),
-            Some(&body),
-        )
-        .await?;
+        let path = format!("/rest/api/3/issue/{key}/transitions");
+        let transitions: Transitions = self.call(launcher, "GET", &path, None).await?;
+        let Some(transition) = transition_to(&transitions, status) else {
+            let issue = self.issue(launcher, key).await?;
+            if issue.state.id == status {
+                return Ok(issue);
+            }
+            return Err(failed(format!(
+                "Jira has no way to move {key} from {} to that status.",
+                issue.state.name
+            )));
+        };
+        let body = transition_body(transition);
+        self.send(launcher, "POST", &path, Some(&body)).await?;
         self.issue(launcher, key).await
     }
 
@@ -229,7 +236,7 @@ impl Jira {
                 launcher,
                 "POST",
                 &format!("/rest/api/3/issue/{key}/comment"),
-                Some(&json!({ "body": markdown_to_adf(body) })),
+                Some(&comment_body(body)),
             )
             .await?;
         comment.into_comment()
@@ -289,6 +296,45 @@ impl Jira {
             status => Err(failed(format!("Jira answered HTTP {status}{}.", why()))),
         }
     }
+}
+
+/// `/search/jql`'s body: the account's unfinished issues, most recently updated first.
+fn search_body() -> Value {
+    json!({
+        "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+        "maxResults": 100,
+        "fields": FIELDS.split(',').collect::<Vec<_>>(),
+    })
+}
+
+/// A new issue's body, with no description when `body` is empty.
+fn create_body(project: &str, kind: &str, title: &str, body: &str) -> Value {
+    let mut fields = json!({
+        "project": { "key": project },
+        "issuetype": { "id": kind },
+        "summary": title,
+    });
+    if !body.is_empty() {
+        fields["description"] = markdown_to_adf(body);
+    }
+    json!({ "fields": fields })
+}
+
+/// The id of the transition that leads to status `status`.
+fn transition_to<'a>(transitions: &'a Transitions, status: &str) -> Option<&'a str> {
+    transitions
+        .transitions
+        .iter()
+        .find(|transition| transition.to.id == status)
+        .map(|transition| transition.id.as_str())
+}
+
+fn transition_body(transition: &str) -> Value {
+    json!({ "transition": { "id": transition } })
+}
+
+fn comment_body(body: &str) -> Value {
+    json!({ "body": markdown_to_adf(body) })
 }
 
 /// `Basic` auth for `email` and `token`.
@@ -367,43 +413,28 @@ fn deserialize_time<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Timestamp
     jira_time(&text).ok_or_else(|| serde::de::Error::custom(format!("{text:?} is not a time")))
 }
 
-/// An issue from `/issue/{key}` and its transitions from `/transitions`: the transitions, each as
-/// the status it leads to, and the issue's own status when none leads there.
+/// An issue from `/issue/{key}` and its transitions from `/transitions`. Its states are the
+/// statuses the transitions lead to, by status id, once each, with its own status first when no
+/// transition leads there.
 fn detail_of(
     connection: &str,
     site: &str,
     issue: Value,
-    transitions: &Value,
+    transitions: Value,
 ) -> Result<IssueDetail, ErrorObject> {
-    #[derive(Deserialize)]
-    struct Transitions {
-        transitions: Vec<Transition>,
-    }
-    #[derive(Deserialize)]
-    struct Transition {
-        id: String,
-        to: Status,
-    }
     let description = issue["fields"]["description"].clone();
     let comments: Vec<Comment> =
         serde_json::from_value(issue["fields"]["comment"]["comments"].clone()).unwrap_or_default();
     let issue: JiraIssue = serde_json::from_value(issue).map_err(|_| unreadable())?;
-    let transitions: Transitions =
-        serde_json::from_value(transitions.clone()).map_err(|_| unreadable())?;
+    let transitions: Transitions = serde_json::from_value(transitions).map_err(|_| unreadable())?;
+    let mut states: Vec<IssueState> = Vec::new();
+    for transition in transitions.transitions {
+        if !states.iter().any(|state| state.id == transition.to.id) {
+            states.push(transition.to.into_state());
+        }
+    }
     let own = issue.fields.status.clone();
-    let leads_to_own = transitions
-        .transitions
-        .iter()
-        .any(|transition| transition.to.id == own.id);
-    let mut states: Vec<IssueState> = transitions
-        .transitions
-        .into_iter()
-        .map(|transition| IssueState {
-            id: transition.id,
-            ..transition.to.into_state()
-        })
-        .collect();
-    if !leads_to_own {
+    if !states.iter().any(|state| state.id == own.id) {
         states.insert(0, own.into_state());
     }
     let mut comments = comments
@@ -417,6 +448,17 @@ fn detail_of(
         comments,
         states,
     })
+}
+
+#[derive(Deserialize)]
+struct Transitions {
+    transitions: Vec<Transition>,
+}
+
+#[derive(Deserialize)]
+struct Transition {
+    id: String,
+    to: Status,
 }
 
 fn unreadable() -> ErrorObject {
@@ -692,7 +734,8 @@ fn markdown_to_adf(text: &str) -> Value {
         if !language.is_empty() {
             block["attrs"] = json!({ "language": language });
         }
-        if !lines.is_empty() {
+        // ADF refuses an empty text node.
+        if lines.iter().any(|line| !line.trim().is_empty()) {
             block["content"] = json!([{ "type": "text", "text": lines.join("\n") }]);
         }
         block
@@ -726,8 +769,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        IssueType, Search, adf_to_markdown, detail_of, markdown_to_adf, normalize_site,
-        pick_issue_type,
+        IssueType, Search, Transitions, adf_to_markdown, comment_body, create_body, detail_of,
+        markdown_to_adf, normalize_site, pick_issue_type, search_body, transition_body,
+        transition_to,
     };
 
     fn issue_json(key: &str, status: (&str, &str, &str)) -> serde_json::Value {
@@ -803,8 +847,8 @@ mod tests {
         assert_eq!(issues[1].state.category, IssueStateCategory::Todo);
     }
 
-    /// An issue reads with its description and comments as Markdown, and its transitions as the
-    /// states they lead to, its own status first when no transition leads there.
+    /// An issue reads with its description and comments as Markdown, and its states as the
+    /// statuses its transitions lead to, once each, its own status first when none leads there.
     #[test]
     fn a_jira_issue_reads_with_comments_and_transitions() {
         let mut issue = issue_json("ABC-12", ("3", "In Progress", "indeterminate"));
@@ -823,9 +867,11 @@ mod tests {
             { "id": "11", "name": "Back to do", "to": {
                 "id": "10000", "name": "To Do", "statusCategory": { "key": "new" } } },
             { "id": "31", "name": "Done", "to": {
+                "id": "10001", "name": "Done", "statusCategory": { "key": "done" } } },
+            { "id": "41", "name": "Close", "to": {
                 "id": "10001", "name": "Done", "statusCategory": { "key": "done" } } }
         ] });
-        let detail = detail_of("conn", "acme.atlassian.net", issue, &transitions).unwrap();
+        let detail = detail_of("conn", "acme.atlassian.net", issue, transitions).unwrap();
         assert_eq!(detail.body, "Broken.");
         let comments: Vec<_> = detail
             .comments
@@ -843,8 +889,8 @@ mod tests {
             states,
             [
                 ("3", "In Progress", IssueStateCategory::InProgress),
-                ("11", "To Do", IssueStateCategory::Todo),
-                ("31", "Done", IssueStateCategory::Done)
+                ("10000", "To Do", IssueStateCategory::Todo),
+                ("10001", "Done", IssueStateCategory::Done)
             ]
         );
     }
@@ -937,5 +983,55 @@ mod tests {
             json!({ "type": "doc", "version": 1, "content": [
                 { "type": "codeBlock", "content": [] }] })
         );
+        // A block of blank lines has no empty text node, which ADF refuses.
+        assert_eq!(
+            markdown_to_adf("```\n\n  \n```"),
+            json!({ "type": "doc", "version": 1, "content": [
+                { "type": "codeBlock", "content": [] }] })
+        );
+    }
+
+    /// The bodies sent to Jira: the search, a new issue with and without a description, a
+    /// transition picked by the status it leads to, and a comment.
+    #[test]
+    fn jira_request_bodies() {
+        assert_eq!(
+            search_body(),
+            json!({
+                "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+                "maxResults": 100,
+                "fields": ["summary", "status", "assignee", "updated", "project"],
+            })
+        );
+        let paragraph = json!({ "type": "doc", "version": 1, "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Body" }] }] });
+        assert_eq!(
+            create_body("ABC", "10002", "Title", "Body"),
+            json!({ "fields": {
+                "project": { "key": "ABC" },
+                "issuetype": { "id": "10002" },
+                "summary": "Title",
+                "description": paragraph,
+            } })
+        );
+        assert!(
+            create_body("ABC", "10002", "Title", "")["fields"]
+                .get("description")
+                .is_none()
+        );
+
+        let transitions: Transitions = serde_json::from_value(json!({ "transitions": [
+            { "id": "11", "to": { "id": "10000", "name": "To Do", "statusCategory": { "key": "new" } } },
+            { "id": "31", "to": { "id": "10001", "name": "Done", "statusCategory": { "key": "done" } } }
+        ] }))
+        .unwrap();
+        assert_eq!(transition_to(&transitions, "10001"), Some("31"));
+        assert_eq!(transition_to(&transitions, "3"), None);
+        assert_eq!(
+            transition_body("31"),
+            json!({ "transition": { "id": "31" } })
+        );
+
+        assert_eq!(comment_body("Body"), json!({ "body": paragraph }));
     }
 }

@@ -30,37 +30,39 @@ pub(super) struct Linear {
     pub(super) key: Zeroizing<String>,
 }
 
-/// Checks `key` with Linear: who it signs in as, and the workspace's name.
-pub(super) async fn check(launcher: &Launcher, key: &str) -> Result<(String, String), ErrorObject> {
+/// Checks `key` with Linear: the account's stable identity (the workspace's and user's ids), the
+/// user's name, and the workspace's name.
+pub(super) async fn check(
+    launcher: &Launcher,
+    key: &str,
+) -> Result<(String, String, String), ErrorObject> {
     #[derive(Deserialize)]
     struct Data {
         viewer: Viewer,
     }
     #[derive(Deserialize)]
     struct Viewer {
+        id: String,
         name: String,
-        organization: Named,
+        organization: Team,
     }
-    let data: Data = graphql(
-        launcher,
-        key,
-        "query { viewer { id name organization { name } } }",
+    let body = request_body(
+        "query { viewer { id name organization { id name } } }",
         json!({}),
-        false,
-    )
-    .await?;
-    Ok((data.viewer.name, data.viewer.organization.name))
+    );
+    let data: Data = graphql(launcher, key, &body, false).await?;
+    let Viewer {
+        id,
+        name,
+        organization,
+    } = data.viewer;
+    Ok((format!("{}/{id}", organization.id), name, organization.name))
 }
 
 impl Linear {
     /// The open issues assigned to the viewer, most recently updated first.
     pub(super) async fn list(&self, launcher: &Launcher) -> Result<Vec<Issue>, ErrorObject> {
-        let query = format!(
-            "query {{ viewer {{ assignedIssues(first: 100, orderBy: updatedAt, \
-             filter: {{ state: {{ type: {{ nin: [\"completed\", \"canceled\"] }} }} }}) \
-             {{ nodes {{ ...IssueFields }} }} }} }} {ISSUE_FIELDS}"
-        );
-        let data: Value = self.query(launcher, &query, json!({})).await?;
+        let data: Value = self.query(launcher, &list_request()).await?;
         list_of(&self.id, data)
     }
 
@@ -70,12 +72,7 @@ impl Linear {
         launcher: &Launcher,
         id: &str,
     ) -> Result<IssueDetail, ErrorObject> {
-        let query = format!(
-            "query($id: String!) {{ issue(id: $id) {{ ...IssueFields description \
-             comments(first: 100) {{ nodes {{ id body createdAt user {{ name }} botActor {{ name }} }} }} \
-             team {{ states {{ nodes {{ id name type color position }} }} }} }} }} {ISSUE_FIELDS}"
-        );
-        let data: Value = self.query(launcher, &query, json!({ "id": id })).await?;
+        let data: Value = self.query(launcher, &get_request(id)).await?;
         detail_of(&self.id, data)
     }
 
@@ -92,13 +89,11 @@ impl Linear {
         struct TeamsOf {
             teams: Nodes<Team>,
         }
-        let data: Data = self
-            .query(
-                launcher,
-                "query { viewer { teams(first: 100) { nodes { id name } } } }",
-                json!({}),
-            )
-            .await?;
+        let body = request_body(
+            "query { viewer { teams(first: 100) { nodes { id name } } } }",
+            json!({}),
+        );
+        let data: Data = self.query(launcher, &body).await?;
         Ok(data
             .viewer
             .teams
@@ -123,20 +118,10 @@ impl Linear {
         struct Data {
             viewer: Id,
         }
-        let viewer: Data = self
-            .query(launcher, "query { viewer { id } }", json!({}))
-            .await?;
-        let mut input = json!({ "teamId": team, "title": title, "assigneeId": viewer.viewer.id });
-        if !body.is_empty() {
-            input["description"] = json!(body);
-        }
-        let query = format!(
-            "mutation($input: IssueCreateInput!) {{ issueCreate(input: $input) \
-             {{ issue {{ ...IssueFields }} }} }} {ISSUE_FIELDS}"
-        );
-        let data: Value = self
-            .query(launcher, &query, json!({ "input": input }))
-            .await?;
+        let viewer = request_body("query { viewer { id } }", json!({}));
+        let viewer: Data = self.query(launcher, &viewer).await?;
+        let request = create_request(team, title, body, &viewer.viewer.id);
+        let data: Value = self.query(launcher, &request).await?;
         self.issue_in(&data["issueCreate"]["issue"])
     }
 
@@ -147,13 +132,7 @@ impl Linear {
         id: &str,
         state: &str,
     ) -> Result<Issue, ErrorObject> {
-        let query = format!(
-            "mutation($id: String!, $state: String!) {{ issueUpdate(id: $id, \
-             input: {{ stateId: $state }}) {{ issue {{ ...IssueFields }} }} }} {ISSUE_FIELDS}"
-        );
-        let data: Value = self
-            .query(launcher, &query, json!({ "id": id, "state": state }))
-            .await?;
+        let data: Value = self.query(launcher, &set_state_request(id, state)).await?;
         self.issue_in(&data["issueUpdate"]["issue"])
     }
 
@@ -164,14 +143,7 @@ impl Linear {
         id: &str,
         body: &str,
     ) -> Result<IssueComment, ErrorObject> {
-        let data: Value = self
-            .query(
-                launcher,
-                "mutation($input: CommentCreateInput!) { commentCreate(input: $input) \
-                 { comment { id body createdAt user { name } botActor { name } } } }",
-                json!({ "input": { "issueId": id, "body": body } }),
-            )
-            .await?;
+        let data: Value = self.query(launcher, &comment_request(id, body)).await?;
         let comment: Comment = serde_json::from_value(data["commentCreate"]["comment"].clone())
             .map_err(|_| unreadable())?;
         Ok(comment.into())
@@ -185,24 +157,76 @@ impl Linear {
     async fn query<T: DeserializeOwned>(
         &self,
         launcher: &Launcher,
-        query: &str,
-        variables: Value,
+        body: &Value,
     ) -> Result<T, ErrorObject> {
-        graphql(launcher, &self.key, query, variables, true).await
+        graphql(launcher, &self.key, body, true).await
     }
 }
 
-/// Runs `query` with `variables` as `key`: its `data`. `saved` says the key was saved, so a
-/// refusal tells the user to connect again.
+/// A GraphQL request's body.
+fn request_body(query: &str, variables: Value) -> Value {
+    let mut body = json!({ "query": query });
+    body["variables"] = variables;
+    body
+}
+
+/// The viewer's assigned issues whose state isn't completed or canceled.
+fn list_request() -> Value {
+    let query = format!(
+        "query {{ viewer {{ assignedIssues(first: 100, orderBy: updatedAt, \
+         filter: {{ state: {{ type: {{ nin: [\"completed\", \"canceled\"] }} }} }}) \
+         {{ nodes {{ ...IssueFields }} }} }} }} {ISSUE_FIELDS}"
+    );
+    request_body(&query, json!({}))
+}
+
+fn get_request(id: &str) -> Value {
+    let query = format!(
+        "query($id: String!) {{ issue(id: $id) {{ ...IssueFields description \
+         comments(first: 100) {{ nodes {{ id body createdAt user {{ name }} botActor {{ name }} }} }} \
+         team {{ states {{ nodes {{ id name type color position }} }} }} }} }} {ISSUE_FIELDS}"
+    );
+    request_body(&query, json!({ "id": id }))
+}
+
+/// `issueCreate` in `team`, assigned to `viewer`, with no description when `body` is empty.
+fn create_request(team: &str, title: &str, body: &str, viewer: &str) -> Value {
+    let mut input = json!({ "teamId": team, "title": title, "assigneeId": viewer });
+    if !body.is_empty() {
+        input["description"] = json!(body);
+    }
+    let query = format!(
+        "mutation($input: IssueCreateInput!) {{ issueCreate(input: $input) \
+         {{ issue {{ ...IssueFields }} }} }} {ISSUE_FIELDS}"
+    );
+    request_body(&query, json!({ "input": input }))
+}
+
+fn set_state_request(id: &str, state: &str) -> Value {
+    let query = format!(
+        "mutation($id: String!, $state: String!) {{ issueUpdate(id: $id, \
+         input: {{ stateId: $state }}) {{ issue {{ ...IssueFields }} }} }} {ISSUE_FIELDS}"
+    );
+    request_body(&query, json!({ "id": id, "state": state }))
+}
+
+fn comment_request(id: &str, body: &str) -> Value {
+    request_body(
+        "mutation($input: CommentCreateInput!) { commentCreate(input: $input) \
+         { comment { id body createdAt user { name } botActor { name } } } }",
+        json!({ "input": { "issueId": id, "body": body } }),
+    )
+}
+
+/// Sends `body` as `key`: its `data`. `saved` says the key was saved, so a refusal tells the
+/// user to connect again.
 async fn graphql<T: DeserializeOwned>(
     launcher: &Launcher,
     key: &str,
-    query: &str,
-    variables: Value,
+    body: &Value,
     saved: bool,
 ) -> Result<T, ErrorObject> {
-    let body = json!({ "query": query, "variables": variables });
-    let answer = request(launcher, "Linear", "POST", URL, key, Some(&body)).await?;
+    let answer = request(launcher, "Linear", "POST", URL, key, Some(body)).await?;
     let parsed: Option<Response<T>> = serde_json::from_str(&answer.body).ok();
     let error = parsed
         .as_ref()
@@ -438,7 +462,54 @@ mod tests {
     use parallax_protocol::IssueStateCategory;
     use serde_json::json;
 
-    use super::{detail_of, list_of};
+    use super::{
+        comment_request, create_request, detail_of, get_request, list_of, list_request,
+        set_state_request,
+    };
+
+    /// Each request names its operation and passes the user's values only as variables.
+    #[test]
+    fn linear_requests_carry_their_variables() {
+        let list = list_request();
+        let query = list["query"].as_str().unwrap();
+        assert!(query.contains("assignedIssues(first: 100, orderBy: updatedAt"));
+        assert!(query.contains(r#"nin: ["completed", "canceled"]"#));
+        assert_eq!(list["variables"], json!({}));
+
+        assert_eq!(get_request("i1")["variables"], json!({ "id": "i1" }));
+
+        let create = create_request("t1", "Title", "Body", "u1");
+        assert!(
+            create["query"]
+                .as_str()
+                .unwrap()
+                .contains("issueCreate(input: $input)")
+        );
+        assert_eq!(
+            create["variables"],
+            json!({ "input": {
+                "teamId": "t1", "title": "Title", "assigneeId": "u1", "description": "Body"
+            } })
+        );
+        assert_eq!(
+            create_request("t1", "Title", "", "u1")["variables"],
+            json!({ "input": { "teamId": "t1", "title": "Title", "assigneeId": "u1" } })
+        );
+
+        let set_state = set_state_request("i1", "s2");
+        assert!(
+            set_state["query"]
+                .as_str()
+                .unwrap()
+                .contains("input: { stateId: $state }")
+        );
+        assert_eq!(set_state["variables"], json!({ "id": "i1", "state": "s2" }));
+
+        assert_eq!(
+            comment_request("i1", "Done \"now\"")["variables"],
+            json!({ "input": { "issueId": "i1", "body": "Done \"now\"" } })
+        );
+    }
 
     /// An assigned issue reads with its state's category and color, its team, and its assignee.
     #[test]
