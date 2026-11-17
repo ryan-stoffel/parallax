@@ -47,6 +47,7 @@ import {
   highlightActiveLineGutter,
   highlightSpecialChars,
   keymap,
+  type KeyBinding,
   lineNumbers,
   type Panel,
   rectangularSelection,
@@ -441,6 +442,19 @@ function findBar(view: EditorView): Panel {
   };
 }
 
+/**
+ * CodeMirror's keymaps the editor loads, under its own Mod+S. An app shortcut takes its key from
+ * these (the keydown handler below), so a new default must not be one of theirs.
+ */
+export const editorKeymaps: readonly KeyBinding[] = [
+  ...closeBracketsKeymap,
+  ...defaultKeymap,
+  ...searchKeymap,
+  ...historyKeymap,
+  ...foldKeymap,
+  indentWithTab,
+];
+
 /** Where each view sends its cursor, since a state moves between views. */
 const cursorReports = new WeakMap<EditorView, (update: ViewUpdate) => void>();
 
@@ -561,12 +575,7 @@ export default function CodeEditor({
               return true;
             },
           },
-          ...closeBracketsKeymap,
-          ...defaultKeymap,
-          ...searchKeymap,
-          ...historyKeymap,
-          ...foldKeymap,
-          indentWithTab,
+          ...editorKeymaps,
         ]),
         language.of([]),
         wrapping.of(wrapped(wrap)),

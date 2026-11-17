@@ -37,7 +37,7 @@ const sorts: { id: PrSort; label: string }[] = [
 const key = (e: PrEntry) => `${e.hostId} ${e.url}`;
 
 /** Whether a key press belongs to what has focus, or to a dialog or menu open over the page. */
-const keyTaken = (e: KeyboardEvent) => {
+export const keyTaken = (e: KeyboardEvent) => {
   const target = e.target instanceof HTMLElement ? e.target : undefined;
   return (
     e.defaultPrevented ||
@@ -325,8 +325,11 @@ function OpenPullRequest({
   );
 }
 
-/** A toolbar button opening a popover menu of checkable items, in groups when they have one. */
-function Menu({
+/**
+ * A toolbar button opening a popover menu of checkable items, in groups when they have one, each
+ * led by its `icon` when it has one. The Issues page's toolbar has them too.
+ */
+export function Menu({
   label,
   icon,
   items,
@@ -334,7 +337,14 @@ function Menu({
 }: {
   label: string;
   icon: React.ReactNode;
-  items: { id: string; group?: string; label: string; checked: boolean; onPick: () => void }[];
+  items: {
+    id: string;
+    group?: string;
+    icon?: React.ReactNode;
+    label: string;
+    checked: boolean;
+    onPick: () => void;
+  }[];
   closeOnPick?: boolean;
 }) {
   const id = useId();
@@ -371,6 +381,7 @@ function Menu({
               }}
               className={menuItem}
             >
+              {item.icon}
               {item.label}
               <icons.done aria-hidden className={`ml-auto ${item.checked ? "" : "invisible"}`} />
             </button>

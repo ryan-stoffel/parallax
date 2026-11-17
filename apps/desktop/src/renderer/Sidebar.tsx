@@ -127,6 +127,7 @@ import { hostIcon } from "./RunTargetMenu";
 import { ProfileButton } from "./ProfileMenu";
 import { localId, type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
+import { icons } from "./icons";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NightSky } from "./NightSky";
@@ -4244,6 +4245,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   schedules: CalendarClock,
   secrets: KeyRound,
   sourceControl: GitBranch,
+  issueTrackers: icons.issue,
   worktrees: GitFork,
   computerUse: MousePointerClick,
   connections: Server,

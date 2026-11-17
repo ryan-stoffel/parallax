@@ -2,6 +2,7 @@
 // from fixtures.ts held in memory. Writes that are cheap to fake change that state and emit the
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
 
+import { issueHandlers } from "./issues";
 import { pullRequestHandlers } from "./pullRequests";
 import {
   iconFor,
@@ -222,6 +223,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "pins",
     "prActions",
     "prDiff",
+    "issues",
     "prGuide",
     "prWatch",
     "orchestratorAutonomy",
@@ -1418,6 +1420,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
   },
   // Made-up pull requests, as plxd reports them (pullRequests.ts).
   ...pullRequestHandlers,
+  ...issueHandlers,
   "agent/approve": (p) => {
     const decision = p.decision === "allow" ? "allowed" : "denied";
     output(p.runId, {

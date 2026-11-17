@@ -23,6 +23,7 @@ export type Command =
   | "open"
   | "settings"
   | "usage"
+  | "issuesView"
   | "find"
   | "openPr"
   | "parentThread"
@@ -110,6 +111,15 @@ export const commands: {
   { id: "settingsProviders", name: msg("Settings: Open Providers"), category: "Navigation" },
   { id: "settingsProjects", name: msg("Settings: Open Projects"), category: "Navigation" },
   { id: "usage", name: msg("Usage: Open"), category: "Navigation", default: "Mod+Alt+KeyU" },
+  // On the Issues page: List to Board, or back.
+  {
+    id: "issuesView",
+    name: msg("Issues: Switch List and Board"),
+    category: "Navigation",
+    // Not Mod+Alt+L, which locks the screen on several Linux desktops as Ctrl+Alt+L, nor
+    // Mod+Shift+L, the code editor's select all matches.
+    default: "Mod+Shift+KeyM",
+  },
   // The threads opened in this window, as a browser's history (PLX-789).
   { id: "back", name: msg("History: Back"), category: "Navigation", default: "Mod+BracketLeft" },
   {

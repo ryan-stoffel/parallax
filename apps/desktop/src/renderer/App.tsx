@@ -85,6 +85,10 @@ import { useOrchestratorContext } from "./ContextPanel";
 import { OrchestratorChat } from "./OrchestratorChat";
 import { OrchestratorHome, waitingCount } from "./OrchestratorHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
+import { icons } from "./icons";
+import { switchIssuesView } from "./issuePrefs";
+import { draftGroup, issueDraft } from "./issues";
+import { IssuesPage } from "./IssuesPage";
 import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
 import { projectEntries, projectsBeta, useProjectsOn, type ProjectEntry } from "./projectList";
@@ -213,6 +217,7 @@ export type SettingsSection =
   | "devices"
   | "projects"
   | "sourceControl"
+  | "issueTrackers"
   | "worktrees"
   | "computerUse"
   | "schedules"
@@ -320,9 +325,9 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
+  // The page shown in place of the chat, if any: Projects, Pull requests, Issues, or Usage. Opening a
   // thread closes it.
-  const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
+  const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "issues" | "usage">();
   // A page takes the whole workspace: the thread's side panel, browser, and terminal drawer stay
   // shut on it, and come back as they were with the thread (PLX-1242, PLX-1271).
   const panelsAllowed = !mainPage;
@@ -1231,6 +1236,14 @@ export function App() {
       run: () => openMainPage("pullRequests"),
     },
     {
+      id: "issues",
+      label: t("Issues"),
+      text: t("Issues"),
+      keywords: "tickets github linear jira",
+      icon: <icons.issue />,
+      run: () => openMainPage("issues"),
+    },
+    {
       id: "usage",
       label: t("Usage"),
       text: t("Usage"),
@@ -1376,7 +1389,9 @@ export function App() {
         const size = uiSizes[at + (command === "textLarger" ? 1 : -1)];
         if (size) setAppearance({ uiSize: size });
       } else if (command === "usage") openMainPage("usage");
-      else if (command === "openPr") {
+      else if (command === "issuesView") {
+        if (mainPage === "issues" && !dialog) switchIssuesView();
+      } else if (command === "openPr") {
         // The open thread's latest linked pull request.
         const latest = prs.urls.at(-1);
         if (!latest) return;
@@ -1869,6 +1884,7 @@ export function App() {
           theme={theme}
           onThemeChange={setTheme}
           sourceControlHost={settingsHost}
+          onSourceControl={(hostId) => openSettings("sourceControl", hostId)}
           openHost={host.id}
           focus={settingsFocus}
           onSection={(section, anchor) => {
@@ -1990,6 +2006,31 @@ export function App() {
                     setCompose({ text, send });
                   }}
                   onSetUpGithub={(e) => openSettings("sourceControl", e.hostId)}
+                />
+              </div>
+            ) : mainPage === "issues" ? (
+              <div className={tabsOn ? pageCard : pagePlain}>
+                {/* The page's own heading names it, so the bar doesn't. */}
+                <TopBar className={topBarInset}>{showSidebar}</TopBar>
+                <IssuesPage
+                  hosts={hosts}
+                  settingsClosed={settingsClosed.count}
+                  onOpenTrackers={(hostId) => openSettings("issueTrackers", hostId)}
+                  onOpenSourceControl={(hostId) => openSettings("sourceControl", hostId)}
+                  onStartThread={({ hostId, issue }, body) => {
+                    // A GitHub issue in the repository of its name on its computer, else No repo.
+                    // Another tracker's in the repository open there, else No repo.
+                    const state = (views[hostId] ?? idleThreads).state;
+                    const fallback = hostId === host.id && !group.project ? group.id : noRepo;
+                    const draft = issueDraft(
+                      hostId,
+                      draftGroup(issue, groupThreads(state), fallback, noRepo),
+                      issue,
+                      body,
+                    );
+                    drafts.put(draft);
+                    openOnHost(hostId, { kind: "new", groupId: draft.groupId, draft: draft.id });
+                  }}
                 />
               </div>
             ) : (
