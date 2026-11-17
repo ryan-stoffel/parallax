@@ -1,0 +1,210 @@
+[
+  { "jsonrpc": "2.0", "id": 1, "method": "issue/connections", "params": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "connections": [
+        { "id": "github", "provider": "github", "account": "octocat" },
+        {
+          "id": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b06",
+          "provider": "linear",
+          "account": "Ada Lovelace",
+          "site": "Acme"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "issue/connect",
+    "params": { "provider": "linear", "apiKey": "lin_api_example" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "connection": {
+        "id": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b06",
+        "provider": "linear",
+        "account": "Ada Lovelace",
+        "site": "Acme"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "issue/connect",
+    "params": {
+      "provider": "jira",
+      "site": "acme.atlassian.net",
+      "email": "ada@example.com",
+      "apiToken": "example"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "connection": {
+        "id": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07",
+        "provider": "jira",
+        "account": "ada@example.com",
+        "site": "acme.atlassian.net"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "issue/disconnect",
+    "params": { "id": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07" }
+  },
+  { "jsonrpc": "2.0", "id": 4, "result": {} },
+  { "jsonrpc": "2.0", "id": 5, "method": "issue/list", "params": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "issues": [
+        {
+          "connectionId": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b06",
+          "provider": "linear",
+          "id": "9c675a02-3529-4cfb-8496-cc7e462c12c1",
+          "key": "ENG-12",
+          "title": "Show issues in Parallax",
+          "url": "https://linear.app/acme/issue/ENG-12",
+          "state": {
+            "id": "5e6f7a81-9c83-4d0e-8f2a-3b0601a0f702",
+            "name": "In Progress",
+            "category": "inProgress",
+            "color": "#f2c94c"
+          },
+          "container": { "id": "f74db9be-b8c6-4385-86ab-f9edc54d1382", "name": "Engineering" },
+          "assignee": "Ada Lovelace",
+          "updatedAt": "2026-11-17T12:00:00Z"
+        }
+      ],
+      "errors": [{ "connectionId": "github", "message": "gh is signed out." }]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "issue/get",
+    "params": { "connectionId": "github", "id": "octo/hello#12" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "issue": {
+        "connectionId": "github",
+        "provider": "github",
+        "id": "octo/hello#12",
+        "key": "#12",
+        "title": "Crash on start",
+        "url": "https://github.com/octo/hello/issues/12",
+        "state": { "id": "open", "name": "Open", "category": "todo" },
+        "container": { "id": "octo/hello", "name": "octo/hello" },
+        "updatedAt": "2026-11-17T12:00:00Z"
+      },
+      "body": "It crashes.",
+      "comments": [
+        {
+          "id": "IC_kwDOA",
+          "author": "octocat",
+          "body": "Same here.",
+          "createdAt": "2026-11-17T12:05:00Z"
+        }
+      ],
+      "states": [
+        { "id": "open", "name": "Open", "category": "todo" },
+        { "id": "completed", "name": "Closed as completed", "category": "done" },
+        { "id": "notPlanned", "name": "Closed as not planned", "category": "canceled" }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "issue/containers",
+    "params": { "connectionId": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": { "containers": [{ "id": "ABC", "name": "Alphabet" }] }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "issue/create",
+    "params": {
+      "connectionId": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07",
+      "containerId": "ABC",
+      "title": "Add a logo",
+      "body": ""
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": {
+      "connectionId": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07",
+      "provider": "jira",
+      "id": "ABC-7",
+      "key": "ABC-7",
+      "title": "Add a logo",
+      "url": "https://acme.atlassian.net/browse/ABC-7",
+      "state": { "id": "10000", "name": "To Do", "category": "todo" },
+      "container": { "id": "ABC", "name": "Alphabet" },
+      "assignee": "Ada Lovelace",
+      "updatedAt": "2026-11-17T12:00:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "issue/setState",
+    "params": {
+      "connectionId": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07",
+      "id": "ABC-7",
+      "stateId": "31"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": {
+      "connectionId": "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07",
+      "provider": "jira",
+      "id": "ABC-7",
+      "key": "ABC-7",
+      "title": "Add a logo",
+      "url": "https://acme.atlassian.net/browse/ABC-7",
+      "state": { "id": "10001", "name": "Done", "category": "done" },
+      "container": { "id": "ABC", "name": "Alphabet" },
+      "assignee": "Ada Lovelace",
+      "updatedAt": "2026-11-17T12:10:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "issue/comment",
+    "params": { "connectionId": "github", "id": "octo/hello#12", "body": "Fixed in #13." }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": {
+      "id": "IC_kwDOB",
+      "author": "octocat",
+      "body": "Fixed in #13.",
+      "createdAt": "2026-11-17T12:15:00Z"
+    }
+  }
+]

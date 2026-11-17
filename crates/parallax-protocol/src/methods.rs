@@ -29,7 +29,10 @@ use crate::schedule::{PrFailureLogParams, PrFailureLogResult};
 use crate::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
     AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
-    AccessState,
+    AccessState, Issue, IssueComment, IssueCommentParams, IssueConnectParams, IssueConnectResult,
+    IssueConnectionsParams, IssueConnectionsResult, IssueContainersParams, IssueContainersResult,
+    IssueCreateParams, IssueDetail, IssueDisconnectParams, IssueDisconnectResult, IssueGetParams,
+    IssueListParams, IssueListResult, IssueSetStateParams,
 };
 use crate::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
@@ -896,6 +899,26 @@ method_table! {
         /// `secret/use`: writes a saved secret to a private file for a run's commands
         /// (`use_secret`).
         SecretUse = "secret/use": SecretUseParams => SecretUseResult;
+        /// `issue/connections`: the issue trackers plxd reads on this computer (0107, PLX-1594).
+        /// Gated on the `issues` capability, like every method below through `issue/comment`.
+        IssueConnections = "issue/connections": IssueConnectionsParams => IssueConnectionsResult;
+        /// `issue/connect`: saves a Linear or Jira account once the tracker accepts its token.
+        /// Refused with `keychainUnavailable` on a host with no keystore.
+        IssueConnect = "issue/connect": IssueConnectParams => IssueConnectResult;
+        /// `issue/disconnect`: removes a saved account and its token.
+        IssueDisconnect = "issue/disconnect": IssueDisconnectParams => IssueDisconnectResult;
+        /// `issue/list`: the open issues assigned to you, on one connection or all of them.
+        IssueList = "issue/list": IssueListParams => IssueListResult;
+        /// `issue/get`: an issue's body, comments, and the states it can move to.
+        IssueGet = "issue/get": IssueGetParams => IssueDetail;
+        /// `issue/containers`: the repositories, teams, or projects an issue can be filed in.
+        IssueContainers = "issue/containers": IssueContainersParams => IssueContainersResult;
+        /// `issue/create`: files an issue, assigned to you.
+        IssueCreate = "issue/create": IssueCreateParams => Issue;
+        /// `issue/setState`: moves an issue to another state.
+        IssueSetState = "issue/setState": IssueSetStateParams => Issue;
+        /// `issue/comment`: comments on an issue.
+        IssueAddComment = "issue/comment": IssueCommentParams => IssueComment;
         /// `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
         /// its `commandId`. Gated on the `orchestration` capability, like every
         /// `orchestration/*` method.

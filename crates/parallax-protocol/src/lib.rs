@@ -54,6 +54,7 @@ mod hub;
 mod id;
 mod import;
 mod inbox;
+mod issues;
 pub mod jsonrpc;
 mod land;
 pub mod legacy;
@@ -183,6 +184,13 @@ pub use import::{
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult, InboxSeenParams,
     InboxSeenResult,
+};
+pub use issues::{
+    Issue, IssueComment, IssueCommentParams, IssueConnectParams, IssueConnectResult,
+    IssueConnection, IssueConnectionError, IssueConnectionsParams, IssueConnectionsResult,
+    IssueContainer, IssueContainersParams, IssueContainersResult, IssueCreateParams, IssueDetail,
+    IssueDisconnectParams, IssueDisconnectResult, IssueGetParams, IssueListParams, IssueListResult,
+    IssueProvider, IssueSetStateParams, IssueState, IssueStateCategory,
 };
 pub use land::{
     LandApproveParams, LandQueueParams, LandResult, LandSendBackParams, Landing, LandingStatus,
