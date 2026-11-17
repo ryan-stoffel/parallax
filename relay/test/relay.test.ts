@@ -1191,15 +1191,23 @@ describe("streams", () => {
       return { client, object, send, alarm };
     };
 
-    // A report by size leaves nothing pending, and the next frame sets the alarm again.
+    // A report by size leaves nothing pending, and the next frame sets the alarm again. Its
+    // deletion holds no frame that passes while the host's object answers (PLX-1569).
     const drained = await pair();
     await drained.send();
     expect(await drained.alarm()).not.toBeNull();
-    await runInDurableObject(drained.object, (relay: StreamRelay) => {
+    const deletions: unknown[] = [];
+    await runInDurableObject(drained.object, (relay: StreamRelay, state) => {
       (relay as unknown as { unreported: number }).unreported = REPORT_BYTES - MIN_FRAME_BYTES;
+      const remove = state.storage.deleteAlarm.bind(state.storage);
+      vi.spyOn(state.storage, "deleteAlarm").mockImplementation((options) => {
+        deletions.push(options);
+        return remove(options);
+      });
     });
     await drained.send();
     await expect.poll(drained.alarm).toBeNull();
+    expect(deletions).toEqual([{ allowUnconfirmed: true }]);
     await drained.send();
     expect(await drained.alarm()).not.toBeNull();
 

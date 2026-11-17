@@ -21,9 +21,9 @@ export const EARLY_FRAMES = 4;
 export const EARLY_BYTES = 64 * 1024;
 
 /**
- * How this object writes an alarm on a path a client waits on: a spare's claim, a join, and a
- * frame. Cloudflare holds what an object sends, a 101 and a WebSocket message included, until
- * each write before it is confirmed, and setting an alarm also waits for the alarm's scheduler,
+ * How this object writes an alarm on a path a client waits on: a spare's claim, a join, a frame,
+ * and a report. Cloudflare holds what an object sends, a 101 and a WebSocket message included,
+ * until each write before it is confirmed, and setting an alarm also waits for the alarm's scheduler,
  * behind the one a deletion left in flight (PLX-1493). These alarms only bound a wait or time a
  * report, so nothing a client gets depends on one. A write that then fails resets the object,
  * which drops both ends, and the stream ends as any whose object reset does.
@@ -402,9 +402,10 @@ export class StreamRelay extends DurableObject<Env> {
     const bytes = this.pending();
     if (closed) this.unreported = 0;
     else this.keep(0);
-    // Nothing's left to report, so nothing needs waking until the next frame sets it again.
+    // Nothing's left to report, so nothing needs waking until the next frame sets it again. Frames
+    // pass while the host's object answers, and a confirmed deletion would hold them (PLX-1569).
     this.reportDue = false;
-    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAlarm(UNCONFIRMED);
     const host = this.env.HOSTS.get(this.env.HOSTS.idFromName(armed.hostId));
     const within = await host.report(armed.stream, bytes, closed);
     if (!within && !closed)
