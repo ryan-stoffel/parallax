@@ -3626,7 +3626,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "ブラウザで{{service}}にサインインしてください。読み込まれないページで終わった場合は、そのページのアドレスをここに貼り付けてください。",
   "Sign in to a provider, or re-authenticate": "プロバイダーにサインイン、または再認証",
   "Sign in to get notifications while Parallax is closed.": "Parallaxを閉じている間も通知を受け取るには、サインインしてください。",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "ソース管理でGitHubにサインインしてください。このコンピューターがサインインすると、ほかの設定なしでイシューが表示されます。",
   "Sign in to Google": "Googleにサインイン",
   "Sign in to Parallax": "Parallaxにサインイン",
   "Sign in to Parallax again": "Parallaxに再度サインイン",

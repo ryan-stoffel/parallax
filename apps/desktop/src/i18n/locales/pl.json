@@ -4115,7 +4115,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "Zaloguj się do {{service}} w przeglądarce. Jeśli zakończy się na stronie, która się nie wczytuje, wklej tutaj jej adres.",
   "Sign in to a provider, or re-authenticate": "Zaloguj się do dostawcy lub uwierzytelnij ponownie",
   "Sign in to get notifications while Parallax is closed.": "Zaloguj się, aby otrzymywać powiadomienia, gdy Parallax jest zamknięty.",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "Zaloguj się do GitHuba w sekcji Kontrola źródła. Gdy ten komputer będzie zalogowany, Twoje zgłoszenia pojawią się bez dalszej konfiguracji.",
   "Sign in to Google": "Zaloguj się do Google",
   "Sign in to Parallax": "Zaloguj się do Parallax",
   "Sign in to Parallax again": "Zaloguj się ponownie do Parallax",

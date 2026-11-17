@@ -144,13 +144,20 @@ export function boardGroups(entries: readonly IssueEntry[]): Record<BoardColumn,
   return groups;
 }
 
+/** A name as columns and states compare: "To do", "Todo", and "TO DO" are one. */
+const plain = (name: string) => name.toLowerCase().replace(/\s+/g, "");
+
 /**
- * The state a card dropped on `column` moves to: the first of the issue's `states` that leans that
- * way, in the tracker's order, since a tracker such as Linear can have several. Undefined when the
- * issue can't go there.
+ * The state a card dropped on `column` moves to, among the issue's `states` that lean that way: the
+ * one named as the column (Backlog, To do, In progress, Done), else the first in the tracker's
+ * order, since a tracker can have several. So a Backlog drop stays out of Linear's Triage, and a
+ * Done drop off a Jira workflow's Won't Do. Undefined when the issue can't go there.
  */
-export const dropState = (states: readonly IssueState[], column: BoardColumn) =>
-  states.find((s) => categoryOf(s.category) === column);
+export function dropState(states: readonly IssueState[], column: BoardColumn) {
+  const fits = states.filter((s) => categoryOf(s.category) === column);
+  const name = plain(boardColumns.find((c) => c.id === column)!.label);
+  return fits.find((s) => plain(s.name) === name) ?? fits[0];
+}
 
 /**
  * The repository a thread about `issue` starts in. A GitHub issue's is the computer's repository

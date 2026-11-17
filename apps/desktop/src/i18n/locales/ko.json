@@ -3626,7 +3626,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "브라우저에서 {{service}}에 로그인하세요. 로드되지 않는 페이지에서 끝나면 해당 페이지의 주소를 여기에 붙여 넣으세요.",
   "Sign in to a provider, or re-authenticate": "제공자에 로그인하거나 다시 인증",
   "Sign in to get notifications while Parallax is closed.": "Parallax가 닫혀 있을 때 알림을 받으려면 로그인하세요.",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "소스 제어에서 GitHub에 로그인하세요. 이 컴퓨터가 로그인되면 다른 설정 없이 이슈가 표시됩니다.",
   "Sign in to Google": "Google에 로그인",
   "Sign in to Parallax": "Parallax에 로그인",
   "Sign in to Parallax again": "Parallax에 다시 로그인",

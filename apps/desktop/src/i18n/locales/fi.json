@@ -3789,7 +3789,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "Kirjaudu palveluun {{service}} selaimessa. Jos se päättyy sivulle, joka ei lataudu, liitä sen sivun osoite tähän.",
   "Sign in to a provider, or re-authenticate": "Kirjaudu palveluntarjoajaan tai todenna uudelleen",
   "Sign in to get notifications while Parallax is closed.": "Kirjaudu saadaksesi ilmoituksia Parallaxin ollessa suljettuna.",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "Kirjaudu GitHubiin Versionhallinnassa. Kun tämä tietokone on kirjautunut, issuesi näkyvät ilman muita asetuksia.",
   "Sign in to Google": "Kirjaudu Googleen",
   "Sign in to Parallax": "Kirjaudu Parallaxiin",
   "Sign in to Parallax again": "Kirjaudu Parallaxiin uudelleen",

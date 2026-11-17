@@ -3952,7 +3952,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "Connectez-vous à {{service}} dans le navigateur. Si cela aboutit sur une page qui ne se charge pas, collez l’adresse de cette page ici.",
   "Sign in to a provider, or re-authenticate": "Se connecter à un fournisseur, ou se réauthentifier",
   "Sign in to get notifications while Parallax is closed.": "Connectez-vous pour recevoir des notifications lorsque Parallax est fermé.",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "Connectez-vous à GitHub dans Contrôle de code source. Une fois cet ordinateur connecté, vos tickets apparaissent sans autre configuration.",
   "Sign in to Google": "Se connecter à Google",
   "Sign in to Parallax": "Se connecter à Parallax",
   "Sign in to Parallax again": "Se reconnecter à Parallax",

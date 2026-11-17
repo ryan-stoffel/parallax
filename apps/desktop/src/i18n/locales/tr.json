@@ -3789,7 +3789,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "Tarayıcıda {{service}} oturumu açın. Yüklenmeyen bir sayfada biterse o sayfanın adresini buraya yapıştırın.",
   "Sign in to a provider, or re-authenticate": "Bir sağlayıcıda oturum açın veya yeniden kimlik doğrulayın",
   "Sign in to get notifications while Parallax is closed.": "Parallax kapalıyken bildirim almak için oturum açın.",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "Kaynak denetimi'nde GitHub'da oturum açın. Bu bilgisayar oturum açtığında sorunlarınız başka bir kurulum olmadan görünür.",
   "Sign in to Google": "Google'da oturum aç",
   "Sign in to Parallax": "Parallax'ta oturum aç",
   "Sign in to Parallax again": "Parallax'ta yeniden oturum aç",

@@ -37,7 +37,7 @@ const fieldLabel = "block text-body font-medium";
  * A tracker's set-up, a modal open while it's mounted, over Settings. Linear and Jira show their
  * steps, with links to where each is done, then their fields and Connect: plxd checks the account
  * with its tracker (`issue/connect`), and what it refuses shows here, in its words. A token stays
- * in its field, never in state. GitHub has no fields: it explains that the computer's GitHub CLI
+ * in its field, never in state. GitHub has no fields: its header says the computer's GitHub CLI
  * sign-in is used, and its one button opens Source control there. `onConnected` runs once an
  * account is saved, and `onDone` once the dialog has closed.
  */
@@ -104,11 +104,6 @@ export function TrackerSetupDialog({
       <Dialog ref={dialog} width="md" aria-labelledby={`${id}title`} onClose={onDone}>
         <div className="flex flex-col gap-4 px-5 pt-4 pb-4">
           {header}
-          <p className="text-body text-muted-foreground">
-            {t(
-              "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.",
-            )}
-          </p>
           <div className="flex justify-end gap-2">
             <Button onClick={() => dialog.current?.close()}>{t("Cancel")}</Button>
             <Button

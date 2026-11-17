@@ -12,6 +12,17 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { icons } from "./icons";
 import { IssueBoard } from "./IssueBoard";
+import {
+  boardEntries,
+  canMove,
+  failMove,
+  forgetMove,
+  listEntries,
+  refreshMoves,
+  settleMove,
+  startMove,
+  type Moves,
+} from "./issueMoves";
 import { connectionName, StateChip } from "./IssueParts";
 import {
   boardColumns,
@@ -47,12 +58,6 @@ interface HostRead {
 }
 
 const keyOf = (e: IssueEntry) => e.issue.url;
-
-/** `all` without its entry for `url`. */
-function without(all: Readonly<Record<string, IssueEntry>>, url: string) {
-  const { [url]: _, ...rest } = all;
-  return rest;
-}
 
 type IssuesView = "list" | "board";
 
@@ -102,9 +107,15 @@ export function IssuesPage({
   const [open, setOpen] = useState<IssueEntry>();
   const [creating, setCreating] = useState(false);
   const view = issuesView.use();
-  // The board's cards as dragged, by URL, over what the computers last listed: a card shows in its
-  // new column at once, and one moved to Done, which `issue/list` leaves out, stays until Refresh.
-  const [moved, setMoved] = useState<Readonly<Record<string, IssueEntry>>>({});
+  // The board's cards as dragged (issueMoves.ts), over what the computers last listed: a card
+  // shows in its new column at once, and one moved to Done, which `issue/list` leaves out, stays
+  // until Refresh. The ref holds the same moves, for a drop to check before the next render.
+  const [moves, setMoves] = useState<Moves>({});
+  const movesNow = useRef<Moves>({});
+  const changeMoves = useCallback((change: (moves: Moves) => Moves) => {
+    movesNow.current = change(movesNow.current);
+    setMoves(movesNow.current);
+  }, []);
   const list = useRef<HTMLUListElement>(null);
 
   const load = useCallback(async (hostIds: readonly string[]) => {
@@ -137,45 +148,35 @@ export function IssuesPage({
   // Settings closes.
   const supportedKey = supported.map((h) => h.id).join("\n");
   useEffect(() => {
-    setMoved({});
+    changeMoves(refreshMoves);
     if (supportedKey) void load(supportedKey.split("\n"));
-  }, [supportedKey, settingsClosed, load]);
+  }, [supportedKey, settingsClosed, load, changeMoves]);
 
   const reads = supported.flatMap((h) => (read[h.id] ? [{ host: h, read: read[h.id]! }] : []));
   const accounts: ConnectionEntry[] = reads.flatMap(({ host, read: r }) =>
     r.connections.map((connection) => ({ hostId: host.id, connection })),
   );
   const entries = mergeIssues(reads.map(({ host, read: r }) => ({ hostId: host.id, ...r })));
-  const rows = sortIssues(
-    entries.filter((e) => matchesIssue(e.issue, query, chosen)),
-    sort,
-  );
-  const boardRows = sortIssues(
-    [
-      ...entries.map((e) => moved[keyOf(e)] ?? e),
-      ...Object.values(moved).filter((m) => !entries.some((e) => keyOf(e) === keyOf(m))),
-    ].filter((e) => matchesIssue(e.issue, query, chosen)),
-    sort,
-  );
-  const unmove = (url: string) => setMoved((all) => without(all, url));
-  // Moves a dragged card's issue to `column`: the card goes there at once, then the issue to the
-  // column's first state on its tracker. When it can't, the card goes back and a toast says why.
+  const matching = (e: IssueEntry) => matchesIssue(e.issue, query, chosen);
+  const rows = sortIssues(listEntries(entries, moves).filter(matching), sort);
+  const boardRows = sortIssues(boardEntries(entries, moves).filter(matching), sort);
+  // Moves a dragged card's issue to `column`, one move per card at a time: the card goes there at
+  // once, then the issue to the column's state on its tracker, and its computer is read again.
+  // When it can't, the card goes back and a toast says why.
   const move = async (entry: IssueEntry, column: BoardColumn) => {
     const { hostId, issue } = entry;
     const url = keyOf(entry);
-    const before = moved[url];
+    if (!canMove(movesNow.current, url)) return;
     const label = t(boardColumns.find((c) => c.id === column)!.label);
-    const put = (next: IssueEntry["issue"]) =>
-      setMoved((all) => ({ ...all, [url]: { hostId, issue: next } }));
     const back = (why: string) => {
-      setMoved((all) => (before ? { ...all, [url]: before } : without(all, url)));
+      changeMoves((all) => failMove(all, url));
       notify({
         tone: "error",
         title: t("Couldn't move {{issue}}", { issue: issue.key }),
         body: why,
       });
     };
-    put({ ...issue, state: { ...issue.state, name: label, category: column } });
+    changeMoves((all) => startMove(all, entry, column, label));
     const params = { connectionId: issue.connectionId, id: issue.id };
     const detail = await window.parallax.request(hostId, "issue/get", params);
     if ("error" in detail) return back(describeError(detail.error));
@@ -197,11 +198,9 @@ export function IssuesPage({
       if ("error" in answer) return back(describeError(answer.error));
       now = answer.result;
     }
-    put(now);
-    // An open issue is listed again in its new state. A finished one isn't listed, so its card stays.
-    if (column === "done") return;
-    await load([hostId]);
-    unmove(url);
+    // The card keeps what its tracker answered until Refresh, whatever the read below lists.
+    changeMoves((all) => settleMove(all, url, now));
+    void load([hostId]);
   };
   const named = hosts.length > 1;
   // What couldn't be read: a computer, or one of its trackers, by name.
@@ -277,7 +276,7 @@ export function IssuesPage({
           entry={open}
           onBack={back}
           onChanged={() => {
-            unmove(keyOf(open));
+            changeMoves((all) => forgetMove(all, keyOf(open)));
             void load([open.hostId]);
           }}
           onStartThread={(body) => onStartThread(open, body)}
@@ -355,7 +354,7 @@ export function IssuesPage({
               aria-busy={loading > 0}
               disabled={loading > 0}
               onClick={() => {
-                setMoved({});
+                changeMoves(refreshMoves);
                 void load(supported.map((h) => h.id));
               }}
               className={accounts.length > 0 ? "" : "ml-auto"}
@@ -429,7 +428,12 @@ export function IssuesPage({
             className="flex-1 justify-center"
           />
         ) : view === "board" ? (
-          <IssueBoard entries={boardRows} onOpen={setOpen} onMove={(e, c) => void move(e, c)} />
+          <IssueBoard
+            entries={boardRows}
+            moving={new Set(Object.keys(moves).filter((url) => moves[url]!.pending))}
+            onOpen={setOpen}
+            onMove={(e, c) => void move(e, c)}
+          />
         ) : entries.length === 0 ? (
           <EmptyState
             icon={<icons.issue aria-hidden />}

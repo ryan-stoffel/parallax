@@ -133,4 +133,16 @@ test("a drop moves an issue to the column's first state in the tracker's order, 
   expect(dropState(states, "inProgress")?.id).toBe("b");
   expect(dropState(states, "done")?.id).toBe("d");
   expect(dropState(states, "backlog")).toBeUndefined();
+  // A state named as the column wins over one the tracker lists first.
+  const named = [
+    { id: "t", name: "Triage", category: "backlog" as const },
+    { id: "b", name: "Backlog", category: "backlog" as const },
+    { id: "u", name: "Unstarted", category: "todo" as const },
+    { id: "o", name: "TODO", category: "todo" as const },
+    { id: "w", name: "Won't Do", category: "done" as const },
+    { id: "d", name: "Done", category: "done" as const },
+  ];
+  expect(dropState(named, "backlog")?.id).toBe("b");
+  expect(dropState(named, "todo")?.id).toBe("o");
+  expect(dropState(named, "done")?.id).toBe("d");
 });

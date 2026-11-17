@@ -19,15 +19,19 @@ const issueDragType = "application/x-parallax-issue";
 /**
  * The Issues page as a board: a column for each way a state leans (Backlog, To do, In progress,
  * Done), each scrolling on its own, with `entries` as cards in the order given. A card opens its
- * issue, and dragged onto another column asks `onMove` to move it there. The columns keep their
+ * issue, and dragged onto another column asks `onMove` to move it there. A card in `moving`, whose
+ * move its tracker hasn't answered, can't be dragged again until it has. The columns keep their
  * width and the board scrolls sideways where the page is narrow.
  */
 export function IssueBoard({
   entries,
+  moving,
   onOpen,
   onMove,
 }: {
   entries: readonly IssueEntry[];
+  /** The URLs of the issues with a move in flight. */
+  moving: ReadonlySet<string>;
   onOpen: (entry: IssueEntry) => void;
   onMove: (entry: IssueEntry, column: BoardColumn) => void;
 }) {
@@ -71,7 +75,11 @@ export function IssueBoard({
           <ul className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-1.5 pb-1.5">
             {groups[column.id].map((entry) => (
               <li key={entry.issue.url} data-issue={entry.issue.url}>
-                <IssueCard entry={entry} onOpen={() => onOpen(entry)} />
+                <IssueCard
+                  entry={entry}
+                  moving={moving.has(entry.issue.url)}
+                  onOpen={() => onOpen(entry)}
+                />
               </li>
             ))}
           </ul>
@@ -85,12 +93,21 @@ export function IssueBoard({
  * One issue on the board, with what its list row shows: its tracker's logo, its key, and how long
  * since it changed; its title on up to three lines; and where it is filed.
  */
-function IssueCard({ entry, onOpen }: { entry: IssueEntry; onOpen: () => void }) {
+function IssueCard({
+  entry,
+  moving,
+  onOpen,
+}: {
+  entry: IssueEntry;
+  moving: boolean;
+  onOpen: () => void;
+}) {
   const { issue } = entry;
   return (
     <button
       type="button"
-      draggable
+      draggable={!moving}
+      aria-busy={moving}
       onDragStart={(e) => {
         e.dataTransfer.setData(issueDragType, issue.url);
         e.dataTransfer.effectAllowed = "move";

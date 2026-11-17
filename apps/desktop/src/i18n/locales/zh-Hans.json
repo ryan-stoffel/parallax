@@ -3626,7 +3626,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "在浏览器中登录 {{service}}。如果最后停在无法加载的页面，请将该页面的地址粘贴到这里。",
   "Sign in to a provider, or re-authenticate": "登录提供商，或重新认证",
   "Sign in to get notifications while Parallax is closed.": "登录后可在 Parallax 关闭时接收通知。",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "在“源代码管理”中登录 GitHub。此电脑登录后，无需其他设置即可显示你的议题。",
   "Sign in to Google": "登录 Google",
   "Sign in to Parallax": "登录 Parallax",
   "Sign in to Parallax again": "重新登录 Parallax",

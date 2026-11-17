@@ -3789,7 +3789,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "Jelentkezzen be ide a böngészőben: {{service}}. Ha egy be nem töltődő oldalon ér véget, illessze be ide annak az oldalnak a címét.",
   "Sign in to a provider, or re-authenticate": "Bejelentkezés egy szolgáltatóhoz vagy újrahitelesítés",
   "Sign in to get notifications while Parallax is closed.": "Jelentkezzen be, hogy értesítéseket kapjon, amikor a Parallax be van zárva.",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "Jelentkezzen be a GitHubba a Verziókezelés alatt. Amint ez a számítógép be van jelentkezve, a feladatai további beállítás nélkül megjelennek.",
   "Sign in to Google": "Bejelentkezés a Google-ba",
   "Sign in to Parallax": "Bejelentkezés a Parallaxba",
   "Sign in to Parallax again": "Jelentkezzen be újra a Parallaxba",

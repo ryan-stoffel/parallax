@@ -3626,7 +3626,6 @@
   "Sign in to {{service}} in the browser. If it ends on a page that won't load, paste that page's address here.": "ลงชื่อเข้า {{service}} ในเบราว์เซอร์ หากไปจบที่หน้าที่โหลดไม่ได้ ให้วางที่อยู่ของหน้านั้นที่นี่",
   "Sign in to a provider, or re-authenticate": "ลงชื่อเข้าผู้ให้บริการ หรือยืนยันตัวตนอีกครั้ง",
   "Sign in to get notifications while Parallax is closed.": "ลงชื่อเข้าเพื่อรับการแจ้งเตือนขณะที่ Parallax ปิดอยู่",
-  "Sign in to GitHub in Source control. Once this computer is signed in, your issues show up with no other set-up.": "ลงชื่อเข้า GitHub ในการควบคุมซอร์ส เมื่อคอมพิวเตอร์นี้ลงชื่อเข้าแล้ว issue ของคุณจะแสดงโดยไม่ต้องตั้งค่าอื่น",
   "Sign in to Google": "ลงชื่อเข้า Google",
   "Sign in to Parallax": "ลงชื่อเข้า Parallax",
   "Sign in to Parallax again": "ลงชื่อเข้า Parallax อีกครั้ง",
