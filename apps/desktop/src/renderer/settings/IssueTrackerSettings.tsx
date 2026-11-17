@@ -1,12 +1,8 @@
 import { t } from "i18next";
-import { ArrowUpRight, Plus } from "lucide-react";
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { Plus } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
-import type {
-  IssueConnectParams,
-  IssueConnection,
-  IssueProvider,
-} from "../../protocol/generated/protocol";
+import type { IssueConnection, IssueProvider } from "../../protocol/generated/protocol";
 import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
@@ -16,26 +12,22 @@ import { TrackerLogo } from "../TrackerLogo";
 import {
   allHosts,
   ConfirmRemove,
-  field,
   HostPicker,
   hostsOf,
   outlineButton,
   PageTitle,
-  primaryButton,
   quietButton,
   StatusDot,
 } from "./parts";
 import { anchorOf } from "./search";
-
-const LINEAR_KEYS = "https://linear.app/settings/account/security";
-const JIRA_TOKENS = "https://id.atlassian.com/manage-profile/security/api-tokens";
+import { TrackerSetupDialog } from "./TrackerSetupDialog";
 
 /**
  * Settings > Issue trackers (0107): the accounts each computer reads issues with, for the Issues
- * page. GitHub is the computer's `gh` sign-in, which Source control sets up. Linear takes a
- * personal API key, and Jira a site, an email, and an API token; plxd checks each with its tracker
- * and keeps the token in the computer's keychain. `hostId` picks the computer it opens on; every
- * computer otherwise.
+ * page. A tracker with no account is its card and Set up, which opens that tracker's own dialog
+ * (TrackerSetupDialog). One with accounts lists them, each with Disconnect, and Add account opens
+ * the same dialog. GitHub is the computer's `gh` sign-in, which Source control manages. `hostId`
+ * picks the computer it opens on; every computer otherwise.
  */
 export function IssueTrackerSettings({
   hostId: opened,
@@ -93,8 +85,8 @@ function HostTrackers({
   const [accounts, setAccounts] = useState<IssueConnection[]>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  // The tracker whose form is open.
-  const [adding, setAdding] = useState<IssueProvider>();
+  // The tracker whose set-up dialog is open.
+  const [setting, setSetting] = useState<IssueProvider>();
   // The id of the account whose disconnect is waiting to be confirmed.
   const [removing, setRemoving] = useState<string>();
 
@@ -114,21 +106,6 @@ function HostTrackers({
     if (supported && connectedNow) void load();
   }, [supported, connectedNow, load]);
 
-  const connect = async (params: IssueConnectParams) => {
-    setBusy(true);
-    const answer = await window.parallax.request(hostId, "issue/connect", params);
-    setBusy(false);
-    if ("error" in answer) {
-      notify({
-        tone: "error",
-        title: t("Couldn't connect {{tracker}}", { tracker: providerNames[params.provider] }),
-        body: describeError(answer.error),
-      });
-      return;
-    }
-    setAdding(undefined);
-    void load();
-  };
   const disconnect = async (account: IssueConnection) => {
     setBusy(true);
     const answer = await window.parallax.request(hostId, "issue/disconnect", { id: account.id });
@@ -154,58 +131,46 @@ function HostTrackers({
           : undefined;
   const of = (provider: IssueProvider) => accounts?.filter((a) => a.provider === provider) ?? [];
   const github = of("github")[0];
-  // A tracker's saved accounts and its form, under its card's first row.
-  const saved = (provider: "linear" | "jira") => (
-    <>
-      {of(provider).map((account) => (
-        <div
-          key={account.id}
-          className="flex min-h-12 items-center gap-3 border-t border-border/40 py-2 pr-4 pl-15"
-        >
-          <div className="min-w-0 flex-1">
-            <span className="block truncate text-body">{account.account}</span>
-            {account.site && (
-              <span className="block truncate text-meta text-muted-foreground">{account.site}</span>
-            )}
-          </div>
-          {removing === account.id ? (
-            <div className="flex shrink-0 items-center gap-2">
-              <ConfirmRemove
-                label={t("Disconnect")}
-                disabled={busy}
-                onRemove={() => void disconnect(account)}
-                onCancel={() => setRemoving(undefined)}
-              />
-            </div>
-          ) : (
-            <button
-              type="button"
-              className={quietButton}
-              aria-label={t("Disconnect {{account}}", { account: account.account })}
-              onClick={() => setRemoving(account.id)}
-            >
-              {t("Disconnect")}
-            </button>
+  const setUp = (provider: IssueProvider) => (
+    <button type="button" onClick={() => setSetting(provider)} className={outlineButton}>
+      {of(provider).length > 0 && <Plus aria-hidden />}
+      {of(provider).length ? t("Add account") : t("Set up")}
+    </button>
+  );
+  // A tracker's saved accounts, under its card's first row.
+  const saved = (provider: "linear" | "jira") =>
+    of(provider).map((account) => (
+      <div
+        key={account.id}
+        className="flex min-h-12 items-center gap-3 border-t border-border/40 py-2 pr-4 pl-15"
+      >
+        <div className="min-w-0 flex-1">
+          <span className="block truncate text-body">{account.account}</span>
+          {account.site && (
+            <span className="block truncate text-meta text-muted-foreground">{account.site}</span>
           )}
         </div>
-      ))}
-      {adding === provider && (
-        <ConnectForm
-          provider={provider}
-          busy={busy}
-          onConnect={connect}
-          onCancel={() => setAdding(undefined)}
-        />
-      )}
-    </>
-  );
-  const add = (provider: "linear" | "jira") =>
-    adding !== provider && (
-      <button type="button" onClick={() => setAdding(provider)} className={outlineButton}>
-        <Plus aria-hidden />
-        {of(provider).length ? t("Add account") : t("Connect")}
-      </button>
-    );
+        {removing === account.id ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <ConfirmRemove
+              label={t("Disconnect")}
+              disabled={busy}
+              onRemove={() => void disconnect(account)}
+              onCancel={() => setRemoving(undefined)}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={quietButton}
+            aria-label={t("Disconnect {{account}}", { account: account.account })}
+            onClick={() => setRemoving(account.id)}
+          >
+            {t("Disconnect")}
+          </button>
+        )}
+      </div>
+    ));
   return (
     <section
       aria-label={title}
@@ -231,16 +196,20 @@ function HostTrackers({
                 : t("Uses this computer's GitHub sign-in, in Source control.")
             }
             action={
-              <button type="button" onClick={onSourceControl} className={outlineButton}>
-                {github ? t("Manage") : t("Sign in")}
-              </button>
+              github ? (
+                <button type="button" onClick={onSourceControl} className={outlineButton}>
+                  {t("Manage")}
+                </button>
+              ) : (
+                setUp("github")
+              )
             }
           />
           <TrackerCard
             provider="linear"
             on={of("linear").length > 0}
             detail={of("linear").length ? t("Connected") : t("Connects with a personal API key.")}
-            action={add("linear")}
+            action={setUp("linear")}
           >
             {saved("linear")}
           </TrackerCard>
@@ -252,7 +221,7 @@ function HostTrackers({
                 ? t("Connected")
                 : t("Connects to a Jira Cloud site with your email and an API token.")
             }
-            action={add("jira")}
+            action={setUp("jira")}
           >
             {saved("jira")}
           </TrackerCard>
@@ -263,11 +232,23 @@ function HostTrackers({
           {error}
         </p>
       )}
+      {setting && (
+        <TrackerSetupDialog
+          provider={setting}
+          hostId={hostId}
+          onSourceControl={onSourceControl}
+          onConnected={() => void load()}
+          onDone={() => setSetting(undefined)}
+        />
+      )}
     </section>
   );
 }
 
-/** A tracker's card: its logo, its name, whether it's connected, and its one action. */
+/**
+ * A tracker's card: its logo, its name, a line saying how it connects or that it has, and its one
+ * action. Its accounts, as `children`, list under that row.
+ */
 function TrackerCard({
   provider,
   on,
@@ -290,7 +271,7 @@ function TrackerCard({
         <div className="min-w-0 flex-1">
           <span className="block text-body font-medium">{providerNames[provider]}</span>
           <span className="mt-0.5 flex items-center gap-1.5 text-meta text-muted-foreground">
-            <StatusDot tone={on ? "on" : "off"} />
+            {on && <StatusDot tone="on" />}
             {detail}
           </span>
         </div>
@@ -298,116 +279,5 @@ function TrackerCard({
       </div>
       {children}
     </div>
-  );
-}
-
-const fieldLabel = "block text-body font-medium";
-
-/**
- * The form that connects a Linear or Jira account. A token stays in its field, never in state.
- * Escape cancels.
- */
-function ConnectForm({
-  provider,
-  busy,
-  onConnect,
-  onCancel,
-}: {
-  provider: "linear" | "jira";
-  busy: boolean;
-  onConnect: (params: IssueConnectParams) => void;
-  onCancel: () => void;
-}) {
-  const id = useId();
-  const name = providerNames[provider];
-  return (
-    <form
-      aria-label={t("Connect {{tracker}}", { tracker: name })}
-      onSubmit={(e) => {
-        e.preventDefault();
-        const value = (field: string) =>
-          (e.currentTarget.elements.namedItem(field) as HTMLInputElement).value.trim();
-        onConnect(
-          provider === "linear"
-            ? { provider, apiKey: value("token") }
-            : { provider, site: value("site"), email: value("email"), apiToken: value("token") },
-        );
-      }}
-      onKeyDown={(e) => {
-        if (e.key !== "Escape") return;
-        // Not Settings' too.
-        e.preventDefault();
-        onCancel();
-      }}
-      className="flex flex-col gap-4 border-t border-border/40 py-4 pr-4 pl-15"
-    >
-      {provider === "jira" && (
-        <div className="flex gap-3">
-          <div className="min-w-0 flex-1">
-            <label htmlFor={`${id}site`} className={fieldLabel}>
-              {t("Site")}
-            </label>
-            <input
-              id={`${id}site`}
-              name="site"
-              required
-              autoFocus
-              placeholder="acme.atlassian.net"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoComplete="off"
-              className={field}
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <label htmlFor={`${id}email`} className={fieldLabel}>
-              {t("Email")}
-            </label>
-            <input
-              id={`${id}email`}
-              name="email"
-              type="email"
-              required
-              placeholder="you@example.com"
-              spellCheck={false}
-              autoComplete="off"
-              className={field}
-            />
-          </div>
-        </div>
-      )}
-      <div>
-        <label htmlFor={`${id}token`} className={fieldLabel}>
-          {provider === "linear" ? t("API key") : t("API token")}
-        </label>
-        <input
-          id={`${id}token`}
-          name="token"
-          type="password"
-          required
-          autoFocus={provider === "linear"}
-          spellCheck={false}
-          autoComplete="off"
-          className={`${field} font-mono`}
-        />
-      </div>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <a
-          href={provider === "linear" ? LINEAR_KEYS : JIRA_TOKENS}
-          target="_blank"
-          rel="noreferrer"
-          className="mr-auto inline-flex items-center gap-1 text-meta text-muted-foreground hover:text-foreground hover:underline"
-        >
-          {provider === "linear" ? t("Create an API key in Linear") : t("Create an API token")}
-          <ArrowUpRight aria-hidden className="size-3" />
-        </a>
-        <button type="button" onClick={onCancel} className={quietButton}>
-          {t("Cancel")}
-        </button>
-        <button type="submit" disabled={busy} className={primaryButton}>
-          {busy ? t("Connecting…") : t("Connect")}
-        </button>
-      </div>
-    </form>
   );
 }

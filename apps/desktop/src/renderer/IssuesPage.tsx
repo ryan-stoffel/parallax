@@ -11,8 +11,11 @@ import { useShownConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { icons } from "./icons";
+import { IssueBoard } from "./IssueBoard";
 import { connectionName, StateChip } from "./IssueParts";
 import {
+  boardColumns,
+  dropState,
   issueSorts,
   knownConnections,
   matchesIssue,
@@ -20,16 +23,19 @@ import {
   providerNames,
   providers,
   sortIssues,
+  type BoardColumn,
   type ConnectionEntry,
   type IssueEntry,
   type IssueSort,
 } from "./issues";
 import { IssueView } from "./IssueView";
 import { NewIssueDialog } from "./NewIssueDialog";
+import { notify } from "./notifications";
 import { keyTaken, Menu } from "./PullRequestsPage";
 import { age } from "./Sidebar";
+import { stored } from "./stored";
 import { TrackerLogo } from "./TrackerLogo";
-import { Button, EmptyState, IconButton, searchField, Spinner } from "./ui";
+import { Button, EmptyState, IconButton, searchField, Segmented, Spinner } from "./ui";
 
 /** What one computer answered: its tracker accounts, its issues, and what it couldn't read. */
 interface HostRead {
@@ -42,13 +48,27 @@ interface HostRead {
 
 const keyOf = (e: IssueEntry) => e.issue.url;
 
+/** `all` without its entry for `url`. */
+function without(all: Readonly<Record<string, IssueEntry>>, url: string) {
+  const { [url]: _, ...rest } = all;
+  return rest;
+}
+
+type IssuesView = "list" | "board";
+
+/** Whether the page shows its issues as rows or as a board, kept on this computer. */
+const issuesView = stored<IssuesView>("parallax.issuesView", "list", (raw, fallback) =>
+  raw === "list" || raw === "board" ? raw : fallback,
+);
+
 /**
  * The Issues page, in place of the main pane (0107): the open issues assigned to you on GitHub,
  * Linear, and Jira, read with `issue/list` from every connected computer that has the `issues`
  * capability, and merged so an issue two computers read shows once. The header stays put above the
  * scrolling rows, with a search, Sort, a tracker filter, Refresh, and New issue. A tracker that
  * couldn't be read says so above the rows, which still show the others'. A row opens its issue on
- * the page. J and K move between rows.
+ * the page. J and K move between rows. Board shows the same issues as cards in a column per kind
+ * of state (IssueBoard): dragging a card to another column moves its issue there on its tracker.
  */
 export function IssuesPage({
   hosts,
@@ -81,6 +101,10 @@ export function IssuesPage({
   const [chosen, setChosen] = useState<ReadonlySet<IssueProvider>>(new Set());
   const [open, setOpen] = useState<IssueEntry>();
   const [creating, setCreating] = useState(false);
+  const view = issuesView.use();
+  // The board's cards as dragged, by URL, over what the computers last listed: a card shows in its
+  // new column at once, and one moved to Done, which `issue/list` leaves out, stays until Refresh.
+  const [moved, setMoved] = useState<Readonly<Record<string, IssueEntry>>>({});
   const list = useRef<HTMLUListElement>(null);
 
   const load = useCallback(async (hostIds: readonly string[]) => {
@@ -113,6 +137,7 @@ export function IssuesPage({
   // Settings closes.
   const supportedKey = supported.map((h) => h.id).join("\n");
   useEffect(() => {
+    setMoved({});
     if (supportedKey) void load(supportedKey.split("\n"));
   }, [supportedKey, settingsClosed, load]);
 
@@ -125,6 +150,59 @@ export function IssuesPage({
     entries.filter((e) => matchesIssue(e.issue, query, chosen)),
     sort,
   );
+  const boardRows = sortIssues(
+    [
+      ...entries.map((e) => moved[keyOf(e)] ?? e),
+      ...Object.values(moved).filter((m) => !entries.some((e) => keyOf(e) === keyOf(m))),
+    ].filter((e) => matchesIssue(e.issue, query, chosen)),
+    sort,
+  );
+  const unmove = (url: string) => setMoved((all) => without(all, url));
+  // Moves a dragged card's issue to `column`: the card goes there at once, then the issue to the
+  // column's first state on its tracker. When it can't, the card goes back and a toast says why.
+  const move = async (entry: IssueEntry, column: BoardColumn) => {
+    const { hostId, issue } = entry;
+    const url = keyOf(entry);
+    const before = moved[url];
+    const label = t(boardColumns.find((c) => c.id === column)!.label);
+    const put = (next: IssueEntry["issue"]) =>
+      setMoved((all) => ({ ...all, [url]: { hostId, issue: next } }));
+    const back = (why: string) => {
+      setMoved((all) => (before ? { ...all, [url]: before } : without(all, url)));
+      notify({
+        tone: "error",
+        title: t("Couldn't move {{issue}}", { issue: issue.key }),
+        body: why,
+      });
+    };
+    put({ ...issue, state: { ...issue.state, name: label, category: column } });
+    const params = { connectionId: issue.connectionId, id: issue.id };
+    const detail = await window.parallax.request(hostId, "issue/get", params);
+    if ("error" in detail) return back(describeError(detail.error));
+    const state = dropState(detail.result.states, column);
+    if (!state)
+      return back(
+        t("{{tracker}} has no {{state}} state for this issue.", {
+          tracker: providerNames[issue.provider],
+          state: label,
+        }),
+      );
+    let now = detail.result.issue;
+    // Already there, as when the list was behind its tracker, is nothing to send.
+    if (state.id !== now.state.id) {
+      const answer = await window.parallax.request(hostId, "issue/setState", {
+        ...params,
+        stateId: state.id,
+      });
+      if ("error" in answer) return back(describeError(answer.error));
+      now = answer.result;
+    }
+    put(now);
+    // An open issue is listed again in its new state. A finished one isn't listed, so its card stays.
+    if (column === "done") return;
+    await load([hostId]);
+    unmove(url);
+  };
   const named = hosts.length > 1;
   // What couldn't be read: a computer, or one of its trackers, by name.
   const notes = [
@@ -198,7 +276,10 @@ export function IssuesPage({
           key={`${open.hostId} ${keyOf(open)}`}
           entry={open}
           onBack={back}
-          onChanged={() => void load([open.hostId])}
+          onChanged={() => {
+            unmove(keyOf(open));
+            void load([open.hostId]);
+          }}
           onStartThread={(body) => onStartThread(open, body)}
         />
       )}
@@ -253,6 +334,19 @@ export function IssuesPage({
                   onPick: () => toggle(p),
                 }))}
               />
+              <Segmented
+                label={t("View")}
+                value={view}
+                onChange={(next) => issuesView.set(next)}
+                options={[
+                  { value: "list", title: t("List"), name: <icons.list aria-label={t("List")} /> },
+                  {
+                    value: "board",
+                    title: t("Board"),
+                    name: <icons.board aria-label={t("Board")} />,
+                  },
+                ]}
+              />
             </>
           )}
           {supported.length > 0 && (
@@ -260,7 +354,10 @@ export function IssuesPage({
               label={t("Refresh")}
               aria-busy={loading > 0}
               disabled={loading > 0}
-              onClick={() => void load(supported.map((h) => h.id))}
+              onClick={() => {
+                setMoved({});
+                void load(supported.map((h) => h.id));
+              }}
               className={accounts.length > 0 ? "" : "ml-auto"}
             >
               <icons.refresh
@@ -331,6 +428,8 @@ export function IssuesPage({
             }
             className="flex-1 justify-center"
           />
+        ) : view === "board" ? (
+          <IssueBoard entries={boardRows} onOpen={setOpen} onMove={(e, c) => void move(e, c)} />
         ) : entries.length === 0 ? (
           <EmptyState
             icon={<icons.issue aria-hidden />}

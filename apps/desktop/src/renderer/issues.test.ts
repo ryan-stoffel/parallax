@@ -1,7 +1,15 @@
 import { expect, test } from "vite-plus/test";
 
 import type { Issue, IssueProvider } from "../protocol/generated/protocol";
-import { draftGroup, issueDraft, matchesIssue, mergeIssues, sortIssues } from "./issues";
+import {
+  boardGroups,
+  draftGroup,
+  dropState,
+  issueDraft,
+  matchesIssue,
+  mergeIssues,
+  sortIssues,
+} from "./issues";
 
 const issue = (over: Partial<Issue> = {}): Issue => ({
   connectionId: "github",
@@ -94,4 +102,35 @@ test("a GitHub issue's thread starts in the repository of its name, never a Proj
   expect(draftGroup(issue(), groups, "g1", "no-repo")).toBe("g2");
   expect(draftGroup(issue(), groups.slice(0, 2), "g1", "no-repo")).toBe("no-repo");
   expect(draftGroup(linear, groups, "g1", "no-repo")).toBe("g1");
+});
+
+test("the board groups issues by where their state leans, and leaves canceled ones out", () => {
+  const canceled = issue({
+    url: "https://x/3",
+    state: { id: "notPlanned", name: "Closed as not planned", category: "canceled" },
+  });
+  const newer = issue({
+    url: "https://x/4",
+    state: { id: "s9", name: "Blocked", category: "blocked" as never },
+  });
+  const groups = boardGroups(
+    [issue(), linear, canceled, newer].map((i) => ({ hostId: "mac", issue: i })),
+  );
+  expect(groups.backlog).toEqual([]);
+  // A category this version doesn't know reads as to do.
+  expect(groups.todo.map((e) => e.issue.url)).toEqual([issue().url, "https://x/4"]);
+  expect(groups.inProgress.map((e) => e.issue.key)).toEqual(["ENG-12"]);
+  expect(groups.done).toEqual([]);
+});
+
+test("a drop moves an issue to the column's first state in the tracker's order, or nowhere", () => {
+  const states = [
+    { id: "a", name: "Todo", category: "todo" as const },
+    { id: "b", name: "In Progress", category: "inProgress" as const },
+    { id: "c", name: "In Review", category: "inProgress" as const },
+    { id: "d", name: "Done", category: "done" as const },
+  ];
+  expect(dropState(states, "inProgress")?.id).toBe("b");
+  expect(dropState(states, "done")?.id).toBe("d");
+  expect(dropState(states, "backlog")).toBeUndefined();
 });

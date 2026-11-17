@@ -108,14 +108,14 @@ export function IssueView({
   const repo = issue.provider === "github" ? issue.container.name : "";
   return (
     <>
-      <nav
-        aria-label={t("Issue")}
-        className="mx-auto flex w-full max-w-3xl shrink-0 items-center gap-2 px-4 pt-2"
-      >
-        <Button size="sm" variant="quiet" onClick={onBack}>
-          <icons.back aria-hidden />
-          {t("Issues")}
-        </Button>
+      {/* Laid out as the header under it, so the arrow sits on the title's left edge. */}
+      <nav aria-label={t("Issue")} className="shrink-0 px-4 pt-2">
+        <div className="mx-auto flex max-w-3xl">
+          <Button size="sm" variant="quiet" onClick={onBack} className="-ml-2.5">
+            <icons.back aria-hidden />
+            {t("Issues")}
+          </Button>
+        </div>
       </nav>
       <div className="flex min-h-0 flex-1 flex-col">
         <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
@@ -165,7 +165,6 @@ export function IssueView({
                 aria-label={t("Open {{issue}} in {{tracker}}", { issue: issue.key, tracker })}
                 title={t("Open {{issue}} in {{tracker}}", { issue: issue.key, tracker })}
                 onClick={() => window.open(issue.url, "_blank", "noreferrer")}
-                className="rounded-full pr-2.5 pl-3"
               >
                 <Trans>
                   Open in <TrackerLogo provider={issue.provider} className="size-4" />

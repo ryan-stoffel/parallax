@@ -224,6 +224,9 @@ const find = (id: string) => issues.find((i) => i.id === id)!;
 export const issueHandlers = {
   "issue/connections": () => ({ connections }),
   "issue/connect": (p: IssueConnectParams) => {
+    // A Linear key that isn't shaped like one is refused, as Linear would refuse it.
+    if (p.provider === "linear" && !p.apiKey.startsWith("lin_api_"))
+      return { code: -32603, message: "Linear refused the API key. Check it and try again." };
     const connection: IssueConnection =
       p.provider === "linear"
         ? connections.some((c) => c.id === LINEAR)

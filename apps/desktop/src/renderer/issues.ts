@@ -5,6 +5,7 @@ import type {
   Issue,
   IssueConnection,
   IssueProvider,
+  IssueState,
   IssueStateCategory,
 } from "../protocol/generated/protocol";
 import type { Draft } from "./drafts";
@@ -117,6 +118,39 @@ export function sortIssues(entries: readonly IssueEntry[], sort: IssueSort): Iss
   };
   return [...entries].sort(by[sort]);
 }
+
+/** The Board's columns, in order. Canceled issues have none. */
+export const boardColumns = [
+  { id: "backlog", label: msg("Backlog") },
+  { id: "todo", label: msg("To do") },
+  { id: "inProgress", label: msg("In progress") },
+  { id: "done", label: msg("Done") },
+] as const satisfies readonly { id: IssueStateCategory; label: string }[];
+
+export type BoardColumn = (typeof boardColumns)[number]["id"];
+
+/** `entries` by the Board column their state leans to, in the order given. Canceled ones are left out. */
+export function boardGroups(entries: readonly IssueEntry[]): Record<BoardColumn, IssueEntry[]> {
+  const groups: Record<BoardColumn, IssueEntry[]> = {
+    backlog: [],
+    todo: [],
+    inProgress: [],
+    done: [],
+  };
+  for (const entry of entries) {
+    const category = categoryOf(entry.issue.state.category);
+    if (category !== "canceled") groups[category].push(entry);
+  }
+  return groups;
+}
+
+/**
+ * The state a card dropped on `column` moves to: the first of the issue's `states` that leans that
+ * way, in the tracker's order, since a tracker such as Linear can have several. Undefined when the
+ * issue can't go there.
+ */
+export const dropState = (states: readonly IssueState[], column: BoardColumn) =>
+  states.find((s) => categoryOf(s.category) === column);
 
 /**
  * The repository a thread about `issue` starts in. A GitHub issue's is the computer's repository

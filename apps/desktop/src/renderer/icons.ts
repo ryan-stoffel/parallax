@@ -5,6 +5,8 @@ import {
   ArrowUpRight,
   Bot,
   Check,
+  Kanban,
+  List,
   Circle,
   ChevronDown,
   ChevronRight,
@@ -162,6 +164,10 @@ export const icons = {
   issueTodo: Circle,
   /** An issue someone has started. */
   issueStarted: CircleDotDashed,
+  /** A page's items as rows. */
+  list: List,
+  /** A page's items as cards in columns. */
+  board: Kanban,
   /** The order a list sorts in. */
   sort: ArrowDownUp,
 } as const satisfies Record<string, LucideIcon>;
