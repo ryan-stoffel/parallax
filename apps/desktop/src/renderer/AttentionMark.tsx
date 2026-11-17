@@ -1,6 +1,6 @@
 import { t } from "i18next";
 import { CircleAlert, Eye, MessageCircleQuestion } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import type { Attention } from "./attention";
 
@@ -101,25 +101,22 @@ export function duration(seconds: number): string {
   });
 }
 
-function Clock({ since }: { since: string }) {
-  return <>{duration(useSeconds(since))}</>;
+function Working({ since }: { since: string }) {
+  return <>{t("Working {{duration}}", { duration: duration(useSeconds(since)) })}</>;
 }
 
 /**
  * A row's status, as its mark and a word: Working for how long since `since`, Monitoring or Waiting (PLX-777),
  * Needs you, Done, or Failed. Settled shows nothing. Done animates only when this row saw the thread finish,
- * and a status that changed rises into place. `iconOnly`, as a sidebar row's is (PLX-1496), draws
- * the mark and Working's clock alone, with the word still there for a screen reader.
+ * and a status that changed rises into place.
  */
 export function AttentionBadge({
   attention,
   since,
-  iconOnly = false,
 }: {
   attention: Attention;
   /** When the user last sent the thread a message, for Working's clock (PLX-1012). */
   since?: string;
-  iconOnly?: boolean;
 }) {
   // Done animates only on a change from another state, never on the first render.
   const [shown, setShown] = useState(attention);
@@ -132,33 +129,43 @@ export function AttentionBadge({
   }
 
   const look = `flex items-center gap-1 text-meta font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
-  const badge = (color: string, mark: ReactNode, word: string, clock?: ReactNode) => (
-    <span key={attention} className={`${look} ${color}`}>
-      {mark}
-      <span className={iconOnly ? "sr-only" : undefined}>{word}</span>
-      {clock && <> {clock}</>}
-    </span>
-  );
   switch (attention) {
     case "working":
-      return badge("text-working", <WorkingMark />, t("Working"), since && <Clock since={since} />);
+      return (
+        <span key={attention} className={`${look} text-working`}>
+          <WorkingMark />
+          {since ? <Working since={since} /> : t("Working")}
+        </span>
+      );
     case "monitoring":
     case "waiting":
-      return badge(
-        "text-working",
-        <Eye aria-hidden />,
-        attention === "monitoring" ? t("Monitoring") : t("Waiting"),
+      return (
+        <span key={attention} className={`${look} text-working`}>
+          <Eye aria-hidden />
+          {attention === "monitoring" ? t("Monitoring") : t("Waiting")}
+        </span>
       );
     case "needsYou":
-      return badge("text-warning", <MessageCircleQuestion aria-hidden />, t("Needs you"));
+      return (
+        <span key={attention} className={`${look} text-warning`}>
+          <MessageCircleQuestion aria-hidden />
+          {t("Needs you")}
+        </span>
+      );
     case "done":
-      return badge(
-        "text-added",
-        <DoneMark animate={animate} />,
-        t("Done", { context: "thread status" }),
+      return (
+        <span key={attention} className={`${look} text-added`}>
+          <DoneMark animate={animate} />
+          {t("Done", { context: "thread status" })}
+        </span>
       );
     case "failed":
-      return badge("text-danger", <CircleAlert aria-hidden />, t("Failed"));
+      return (
+        <span key={attention} className={`${look} text-danger`}>
+          <CircleAlert aria-hidden />
+          {t("Failed")}
+        </span>
+      );
     default:
       return null;
   }
