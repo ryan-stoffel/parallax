@@ -156,7 +156,7 @@ import { RowCard, rowTool } from "./RowCard";
 import { PinnedSection, SidebarNav, navRow, pinnedFolded } from "./SidebarNav";
 import { ProjectCard } from "./ProjectsPage";
 import { projectChoices, ProjectPicker } from "./ThreadProjectMenu";
-import { projectEntries, type ProjectEntry } from "./projectList";
+import { projectEntries, useProjectsOn, type ProjectEntry } from "./projectList";
 import { stored } from "./stored";
 
 import { useFlip } from "./flip";
@@ -567,6 +567,8 @@ export function ThreadList({
   // The Project the delete dialog asks about, and its host's view.
   const [projectToDelete, setProjectToDelete] = useState<ProjectEntry>();
   const pins = pinnedProjects.use();
+  // Settings › Beta's Projects: off, no pinned Projects, Projects page, or Add to Project.
+  const projectsOn = useProjectsOn();
   // Which sidebar shows (0094): Inbox's head is the search box and its buttons, and its threads one
   // list; Traditional's head is rows, and it lists the threads in a folder per repo.
   const mode = sidebarMode.use();
@@ -1236,7 +1238,7 @@ export function ThreadList({
     const selected = item.key === openKey;
     const { thread, view } = item;
     const pinnable = pinsOn(view) && !thread.parent;
-    const projects = thread.parent ? undefined : projectChoices(thread, view, hosts);
+    const projects = thread.parent || !projectsOn ? undefined : projectChoices(thread, view, hosts);
     return (
       <ThreadRow
         key={item.key}
@@ -1828,7 +1830,9 @@ export function ThreadList({
   useImperativeHandle(orchestratorMenu, () => ({ actionsFor: entryActions }));
   // Every Project, for Pinned, in the order pinned.
   const entries = projectEntries(hosts);
-  const pinnedEntries = pins.flatMap((key) => entries.filter((e) => e.key === key));
+  const pinnedEntries = projectsOn
+    ? pins.flatMap((key) => entries.filter((e) => e.key === key))
+    : [];
   const openEntry = (entry: ProjectEntry) => {
     hideCard();
     onSelect(entry.host.id, { kind: "new", groupId: entry.id });
@@ -2019,15 +2023,17 @@ export function ThreadList({
           </label>
           {scopeMenu}
           {/* The Projects page, which Inbox has instead of a Projects drawer; pressed while open. */}
+          {projectsOn && (
+            <IconButton
+              label={t("Projects")}
+              aria-pressed={page === "projects"}
+              onClick={() => onOpenPage("projects")}
+            >
+              <LayoutGrid />
+            </IconButton>
+          )}
           <IconButton
-            label={t("Projects")}
-            aria-pressed={page === "projects"}
-            onClick={() => onOpenPage("projects")}
-          >
-            <LayoutGrid />
-          </IconButton>
-          <IconButton
-            label={t("New project or repository")}
+            label={projectsOn ? t("New project or repository") : t("Add repository")}
             onClick={() => addDialog.current?.open()}
           >
             <FolderPlus />

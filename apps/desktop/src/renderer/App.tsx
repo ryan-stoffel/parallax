@@ -87,7 +87,7 @@ import { OrchestratorHome, waitingCount } from "./OrchestratorHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
-import { projectEntries, type ProjectEntry } from "./projectList";
+import { projectEntries, projectsBeta, useProjectsOn, type ProjectEntry } from "./projectList";
 import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
 import { RunTargetMenu } from "./RunTargetMenu";
 import { ThreadBar } from "./ThreadBar";
@@ -508,6 +508,13 @@ export function App() {
   // sets that error aside (PLX-1482).
   const [setAside, setSetAside] = useState<ReadonlySet<string>>(new Set());
   const failedList = listed.find(({ view }) => view.error && !setAside.has(view.error));
+  // Projects are a beta (PLX-1582). Someone who already has one keeps them on: the first time a
+  // listed computer has a Project, an unset switch turns on. A switch the user set stays.
+  const projectsOn = useProjectsOn();
+  const hasProject = listed.some(({ view }) => view.state.repos.some((r) => r.project));
+  useEffect(() => {
+    if (hasProject && projectsBeta.get() === undefined) projectsBeta.set(true);
+  }, [hasProject]);
   const groups = groupThreads(threads.state);
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
@@ -1065,7 +1072,7 @@ export function App() {
   // Create Project (0090), from the orchestrators page or the add palette, where the open host makes
   // them.
   const newProject =
-    connected && "projects" in connection.capabilities
+    projectsOn && connected && "projects" in connection.capabilities
       ? () => newChatOrchestrator.current?.showModal()
       : undefined;
   const openMainPage = (next: NonNullable<typeof mainPage>) => {
@@ -1519,7 +1526,7 @@ export function App() {
           : undefined
       }
       project={
-        selection.kind === "thread" && openThread && !openThread.parent
+        projectsOn && selection.kind === "thread" && openThread && !openThread.parent
           ? { thread: openThread, view: threads, computers: listed }
           : undefined
       }
@@ -1937,7 +1944,7 @@ export function App() {
             hidden={expanded}
             className={`flex min-w-0 flex-1 flex-col ${tabsOn ? "" : "bg-pane"}`}
           >
-            {mainPage === "projects" ? (
+            {mainPage === "projects" && projectsOn ? (
               <div className={tabsOn ? pageCard : pagePlain}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
