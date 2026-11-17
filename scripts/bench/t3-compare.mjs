@@ -16,7 +16,7 @@
 // two Parallax builds on one network.
 // Sampling gap defaults to 2200 ms on both sides to respect the relay's 30 opens/minute, and can't
 // go under 2000 ms. Other options: [--connects 30] [--trips 50] [--version latest]. For the tail,
-// `--connects 60 --trips 200` keeps the same rate and takes about 12 minutes on the Parallax side.
+// `--connects 60 --trips 200` keeps the same rate and took 7 minutes on the Parallax side on staging.
 //
 // T3 side: it signs in with T3's device grant, which prints a link and a code to approve, and links
 // one computer, which holds one of the T3 account's 3 free slots while it runs. It runs `t3 serve` in
