@@ -130,7 +130,7 @@ const refusal = (page: Page, id: string, method: string, params: object) =>
 
 /** Opens one of Settings' two Connections pages. */
 const openSettings = async (page: Page, name: "Computers" | "Sharing & access") => {
-  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("button", { name: "dev@example.com", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name, exact: true }).click();
 };
