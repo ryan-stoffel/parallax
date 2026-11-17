@@ -2288,7 +2288,7 @@ function Toasts() {
       {list.map((item) => (
         <div
           key={item.id}
-          className="pointer-events-auto flex max-w-85 items-center gap-2.5 rounded-xl bg-foreground py-1.5 pr-1.5 pl-3 text-body text-background shadow-composer motion-safe:animate-[sidebar-rise_160ms_ease-out]"
+          className={`pointer-events-auto flex h-10 max-w-85 items-center gap-3 rounded-xl border border-border bg-surface pl-3.5 text-body text-foreground shadow-composer motion-safe:animate-[sidebar-rise_160ms_ease-out] ${item.undo ? "pr-1.5" : "pr-3.5"}`}
         >
           <span className="min-w-0 truncate">{item.text}</span>
           {item.undo && (
@@ -2296,12 +2296,11 @@ function Toasts() {
               type="button"
               onClick={() => undo(item.id)}
               title={t("Undo ({{keys}})", { keys: shortcut("Z") })}
-              className="shrink-0 rounded-md bg-background/15 px-2.25 py-0.75 font-semibold hover:bg-background/25"
+              className="h-7 shrink-0 rounded-md px-2.5 font-medium hover:bg-hover"
             >
               {t("Undo")}
             </button>
           )}
-          {!item.undo && <span className="w-1.5" />}
         </div>
       ))}
     </div>
