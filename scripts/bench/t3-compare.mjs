@@ -14,8 +14,9 @@
 // Other options: [--parallax-tag <exact-release-tag>] [--gap-ms 2200] [--plxd <path>] [--parallax-only]
 // --plxd times a plxd built here instead of a release's. --parallax-only skips T3, for comparing
 // two Parallax builds on one network.
-// Sampling gap defaults to 2200 ms on both sides to respect the relay's 30 opens/minute.
-// Other options: [--connects 30] [--trips 50] [--version latest].
+// Sampling gap defaults to 2200 ms on both sides to respect the relay's 30 opens/minute, and can't
+// go under 2000 ms. Other options: [--connects 30] [--trips 50] [--version latest]. For the tail,
+// `--connects 60 --trips 200` keeps the same rate and takes about 12 minutes on the Parallax side.
 //
 // T3 side: it signs in with T3's device grant, which prints a link and a code to approve, and links
 // one computer, which holds one of the T3 account's 3 free slots while it runs. It runs `t3 serve` in
@@ -30,6 +31,9 @@
 // a client that already holds a session. It skips the relay call a client makes to get its first
 // session. The first event is the first chunk of subscribeServerLifecycle, and a round trip is
 // server.probe on one open socket.
+//
+// Each product's JSONL line keeps its medians, nearest-rank p95 and p99, and max, and in `samples`
+// every connect and round trip with its start offset (PLX-1584), so the two tails compare.
 //
 // Parallax side: it runs relay-probe.mjs. With --token-file, relay-probe signs in as the test
 // account with that file's refresh token and times a real stream to a throwaway computer. A token
@@ -71,7 +75,7 @@ const { values: options } = parseArgs({
 
 count(options.connects, "connects");
 count(options.trips, "trips");
-count(options["gap-ms"], "gap-ms", 60000);
+count(options["gap-ms"], "gap-ms", 60000, 2000);
 
 // Read before T3 starts, so a missing file or account fails in seconds, not after T3's run.
 const probeEnv = {};
@@ -255,16 +259,23 @@ async function connectOnce(base, token) {
   return { session, connectMs, firstEventMs: await within(30_000, "the first event", firstEvent) };
 }
 
-/** Times `connects` connects with their first events, then `trips` round trips on one socket. */
+/**
+ * Times `connects` connects with their first events, then `trips` round trips on one socket, and
+ * keeps each with its start offset from the first warm-up, as relay-probe.mjs does.
+ */
 async function measure(base, token) {
   const [connects, firstEvents, trips] = [[], [], []];
+  const samples = { connects: [], roundTrips: [] };
+  const zero = performance.now();
   // One warm-up, not counted, so a cold DNS lookup doesn't land in the samples.
   (await connectOnce(base, token)).session.socket.close();
   for (let run = 0; run < Number(options.connects); run++) {
     await sleep(Number(options["gap-ms"]));
+    const started = performance.now();
     const { session, connectMs, firstEventMs } = await connectOnce(base, token);
     connects.push(connectMs);
     firstEvents.push(firstEventMs);
+    samples.connects.push({ atMs: Math.round(started - zero), connectMs: Math.round(connectMs), firstEventMs: Math.round(firstEventMs) });
     session.socket.close();
   }
   const { session } = await connectOnce(base, token);
@@ -274,9 +285,10 @@ async function measure(base, token) {
     const sent = performance.now();
     await within(15_000, "a round trip", probe(session));
     trips.push(performance.now() - sent);
+    samples.roundTrips.push({ atMs: Math.round(sent - zero), ms: Math.round(trips.at(-1)) });
   }
   session.socket.close();
-  return { connect: summary(connects), firstEvent: summary(firstEvents), roundTrip: summary(trips) };
+  return { connect: summary(connects), firstEvent: summary(firstEvents), roundTrip: summary(trips), samples };
 }
 
 let server;
@@ -361,7 +373,7 @@ if (options["parallax-only"]) {
     ],
     ...(await measure(base, token)),
   };
-  console.log(JSON.stringify(results, null, 2));
+  console.log(JSON.stringify({ ...results, samples: undefined }, null, 2));
   t3Results = results;
   if (options.out) writeFileSync(options.out, `${JSON.stringify(results)}\n`, { flag: "a" });
 } catch (error) {
@@ -394,18 +406,19 @@ try {
 }
 
 /**
- * T3 against Parallax's relay-only dial, which like T3's connect goes straight to the relay. The
- * app's dial away from home has no T3 counterpart, since it includes the 200 ms the app gives a
- * LAN route first, so it gets a line of its own (PLX-1549).
+ * T3 against Parallax's relay-only dial, which like T3's connect goes straight to the relay, for
+ * connect, first event, and round trip. The app's dial away from home has no T3 counterpart, since
+ * it also races a LAN route, so it gets a line of its own (PLX-1549).
  */
 function compare(metrics) {
-  const both = (summary) => summary && `median ${summary.medianMs} ms, p95 ${summary.p95Ms} ms`;
-  console.log("\nConnect, compared:");
-  if (t3Results) console.log(`  T3 through its tunnel: ${both(t3Results.connect)}`);
-  if (metrics.connect) console.log(`  Parallax, the relay alone: ${both(metrics.connect)}`);
+  const stats = (summary) => `median ${summary.medianMs} ms, p95 ${summary.p95Ms} ms, p99 ${summary.p99Ms} ms, max ${summary.maxMs} ms`;
+  for (const [title, name] of [["Connect", "connect"], ["First event", "firstEvent"], ["Round trip", "roundTrip"]]) {
+    console.log(`\n${title}, compared:`);
+    if (t3Results?.[name]) console.log(`  T3 through its tunnel: ${stats(t3Results[name])}`);
+    if (metrics[name]) console.log(`  Parallax, the relay alone: ${stats(metrics[name])}`);
+  }
   if (metrics.appConnect) {
-    const older = metrics.appDial?.early === 0 ? ", with a plxd from before PLX-1549" : "";
-    console.log(`  Parallax as its app dials away from home, a LAN route first${older}: ${both(metrics.appConnect)}`);
+    console.log(`\nParallax as its app dials away from home, a LAN route off this computer's networks first: ${stats(metrics.appConnect)}`);
   }
 }
 process.exit(failed ? 1 : 0);

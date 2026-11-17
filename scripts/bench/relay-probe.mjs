@@ -3,6 +3,7 @@
 // relay-probe.yml runs it on a schedule and on each nightly, whose notes get the result.
 //
 //     node scripts/bench/relay-probe.mjs [--relay <url>] [--tag <release tag>] [--plxd <path>] [--out <dir>]
+//         [--connects 5] [--trips 6] [--gap-ms 2200] [--timings]
 //
 // With no secret it checks the relay's TLS, routes, and refusals, a release's published assets, and
 // times the Worker and its stream objects (relay-objects.mjs). It stores nothing on the relay.
@@ -15,12 +16,17 @@
 //
 // It times two dials, in turn, so they share the network. `connect` dials the relay alone, as it
 // always has, so it compares with earlier runs and with T3. `appConnect` dials as the desktop app
-// does away from home (PLX-1549): a LAN route that doesn't answer, here a loopback port that takes
-// TCP and never answers TLS, then the relay, which starts `RELAY_HEAD_START` (200 ms) after it. A
-// plxd from PLX-1549 on opens the relay's connection during that head start, so its app dial costs
-// 200 ms less the relay handshake it hides over `connect`, about 100 to 130 ms on the Mac mini's
-// Wi-Fi. An older one costs the full 200 ms.
-// `appDial` says how many app dials opened the relay's connection early, so 0 marks an older plxd.
+// does away from home (PLX-1549): a home LAN route that doesn't answer, then the relay. The LAN
+// route is a private address on none of this computer's networks, 10.255.255.1:7341 unless this
+// computer is on 10/8, checked at start (PLX-1571). A plxd from PLX-1553 on starts the relay at
+// once beside such a route, so `appConnect` sits near `connect`. An older plxd gives the LAN route
+// a 200 ms head start, and one from PLX-1549 opens the relay's connection during it. `appDial`
+// counts those early connections and, with --timings, the dials whose relay waited a head start.
+//
+// Each counted connect prints a line with its start offset, its times, and, with --timings, its
+// slowest stage gap and relay stage, and relay-probe.json keeps every connect and round trip in
+// `metrics.samples` (PLX-1584). The gap stays at 2000 ms or more, so the dials stay within the
+// relay's 30 opens a minute however many there are, such as `--connects 60 --trips 200`.
 //
 // That part runs only on the account PROBE_CLERK_USER_ID names, a repo variable holding the test
 // account's Clerk user id. It fails before registering anything when the variable is unset or the
@@ -40,14 +46,14 @@ import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSyn
 import http from "node:http";
 import https from "node:https";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { count, summary } from "./timing-summary.mjs";
+import { count, slowestGap, summary } from "./timing-summary.mjs";
 import { attach } from "../../packages/plx/src/plxd.mjs";
 import { pickAsset, pickRelease, withSha256 } from "../../packages/plx/src/releases.mjs";
 import { replacePrivately } from "./private-file.mjs";
@@ -73,28 +79,20 @@ const PROBE_NAME = "relay-probe";
 const HOST_NAMES = new Set([PROBE_NAME, "relay-objects bench"]);
 const STREAMS = count(options.connects, "connects");
 const ROUND_TRIPS = count(options.trips, "trips");
-const GAP_MS = count(options["gap-ms"], "gap-ms", 60000);
+// Each dial waits the gap first, so 2000 ms keeps them at 30 a minute at most, the relay's limit.
+const GAP_MS = count(options["gap-ms"], "gap-ms", 60000, 2000);
+
+/** Private addresses for the app dial's home LAN route, in the order tried (PLX-1571). */
+const STAND_INS = ["10.255.255.1", "172.31.255.1", "192.168.255.1"];
 
 /**
- * A route that takes TCP on loopback and never answers TLS, standing in for the LAN address the
- * app's dial tries first away from home. It holds the relay route back the same 200 ms on every
- * network, where a real unreachable address may fail at once. Answers the route and a `close`.
+ * The first of STAND_INS on none of the IPv4 networks in `interfaces`, from os.networkInterfaces(),
+ * so plxd treats it as a home LAN address seen from elsewhere, or undefined when each is on one.
  */
-async function silentRoute() {
-  const held = new Set();
-  const server = createServer((socket) => {
-    held.add(socket);
-    socket.on("error", () => {});
-    socket.on("close", () => held.delete(socket));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    route: `127.0.0.1:${server.address().port}`,
-    close: () => {
-      for (const socket of held) socket.destroy();
-      server.close();
-    },
-  };
+function offNetwork(interfaces) {
+  const bits = (ip) => ip.split(".").reduce((value, part) => value * 256 + Number(part), 0);
+  const networks = Object.values(interfaces).flat().filter((entry) => entry?.family === "IPv4" || entry?.family === 4);
+  return STAND_INS.find((ip) => networks.every(({ address, netmask }) => ((bits(ip) ^ bits(address)) & bits(netmask)) !== 0));
 }
 
 // relay-probe.yml sets PROBE_SKIP_SIGNIN to stale when another run stored a rotated token after this
@@ -468,7 +466,7 @@ async function openStream(dial, token, stages = [], kind = "relay") {
     const connectMs = await within(30_000, "connecting", Promise.race([connected, exited]));
     await app.subscribed;
     const firstEventMs = await within(30_000, "the first event", Promise.race([firstEvent, exited]));
-    return { app, connectMs, firstEventMs, stages, early };
+    return { app, connectMs, firstEventMs, stages, early, started };
   } catch (error) {
     if (app) app.close();
     else child.kill();
@@ -564,14 +562,22 @@ async function checkSignedIn(release) {
     if (!approved) return true;
 
     await check("Stream: connect, first event, and round trip through the relay", async () => {
+      // Checked before any dial, so a computer on every stand-in's network says so (PLX-1571).
+      const standIn = offNetwork(networkInterfaces());
+      if (!standIn) throw new Error(`this computer is on the networks of ${STAND_INS.join(", ")}, so no address stands in for a home LAN seen from elsewhere`);
+      const lanRoute = `${standIn}:7341`;
       makeRepo(repo);
       await host.call("orchestrator/create", { id: uuid7(), name: PROBE_NAME, repoPath: repo });
       const relayToken = await clerkToken();
       const [connect, firstEvent, appConnect, appFirstEvent, trips] = [[], [], [], [], []];
       let appEarly = 0;
+      let appHeadStart = 0;
       const stageSamples = [];
-      const silent = await silentRoute();
-      const dialApp = (token) => dial([], token, [silent.route, route]);
+      // Every counted dial in attempt order, so index i is stageSamples[i], and every round trip,
+      // each with its start offset from here (PLX-1584).
+      const samples = { connects: [], roundTrips: [] };
+      const zero = performance.now();
+      const dialApp = (token) => dial([], token, [lanRoute, route]);
       try {
         await sleep(GAP_MS);
         (await openStream(dialRelay, relayToken)).app.close(); // One uncounted warm-up, as on T3.
@@ -585,10 +591,16 @@ async function checkSignedIn(release) {
             if (options.timings) stageSamples.push(stages);
             const opened = await openStream(kind === "app" ? dialApp : dialRelay, relayToken, stages, kind);
             const { app } = opened;
+            const sample = { dial: kind, atMs: ms(opened.started - zero), connectMs: ms(opened.connectMs), firstEventMs: ms(opened.firstEventMs), ...slowestGap(stages) };
+            samples.connects.push(sample);
+            console.log(`      ${kind} ${run + 1}/${STREAMS} ${connectLine(sample)}`);
             if (kind === "app") {
               appConnect.push(opened.connectMs);
               appFirstEvent.push(opened.firstEventMs);
               if (opened.early) appEarly++;
+              // The relay route's turn against the dial's start: about 0, or the 200 ms head start.
+              const at = (name) => stages.find((row) => row.kind === "connect-timing" && row.stage === name)?.ms;
+              if (at("relay_route_start") - at("dial_start") >= 100) appHeadStart++;
               app.close();
               continue;
             }
@@ -602,6 +614,7 @@ async function checkSignedIn(release) {
                   const sent = performance.now();
                   await within(15_000, "a round trip", app.call("host/health"));
                   trips.push(performance.now() - sent);
+                  samples.roundTrips.push({ atMs: ms(sent - zero), ms: ms(trips.at(-1)) });
                 }
               }
             } finally {
@@ -610,17 +623,19 @@ async function checkSignedIn(release) {
           }
         }
       } finally {
-        silent.close();
         // A failed attempt must not discard earlier measurements or its own stage evidence.
         if (options.timings) metrics.stages = stageSamples;
+        metrics.samples = samples;
         const named = [["connect", connect], ["firstEvent", firstEvent], ["appConnect", appConnect], ["appFirstEvent", appFirstEvent], ["roundTrip", trips]];
-        for (const [name, samples] of named) {
-          if (samples.length) {
-            metrics[name] = summary(samples);
+        for (const [name, values] of named) {
+          if (values.length) {
+            metrics[name] = summary(values);
             metrics[`${name}Ms`] = metrics[name].medianMs;
           }
         }
-        if (appConnect.length) metrics.appDial = { early: appEarly, of: appConnect.length };
+        if (appConnect.length) {
+          metrics.appDial = { early: appEarly, of: appConnect.length, route: lanRoute, ...(options.timings && { headStart: appHeadStart }) };
+        }
       }
       return `medians of ${STREAMS} streams of each dial and ${ROUND_TRIPS} round trips`;
     });
@@ -645,6 +660,37 @@ async function checkSignedIn(release) {
 
 const number = (value, label) => (value === undefined ? undefined : `${label} ${value} ms`);
 const line = (...parts) => parts.filter(Boolean).join(", ");
+/** A summary's tail: `p95 1108 ms, p99 1500 ms, max 2034 ms`. */
+const tail = (stats) => `p95 ${stats.p95Ms} ms, p99 ${stats.p99Ms} ms, max ${stats.maxMs} ms`;
+/** One connect sample: when it started, its times, and where most of its time went. */
+const connectLine = ({ atMs, connectMs, firstEventMs, gap, relay: stage }) =>
+  `at ${(atMs / 1000).toFixed(1)} s: ${line(
+    `connect ${connectMs} ms`,
+    `first event ${firstEventMs} ms`,
+    gap && `slowest ${gap.stage} ${gap.ms} ms`,
+    stage && `relay ${stage.stage} ${stage.ms} ms`,
+  )}`;
+
+/**
+ * The samples at or over each p95, in the order they ran, so a burst, one connection, or a spread
+ * shows without opening the JSON (PLX-1584).
+ */
+function tailLines() {
+  const samples = metrics.samples;
+  if (!samples) return [];
+  const lines = [];
+  for (const [name, dial] of [["connect", "relay"], ["appConnect", "app"]]) {
+    const stats = metrics[name];
+    if (!stats) continue;
+    const slow = samples.connects.filter((sample) => sample.dial === dial && sample.connectMs >= stats.p95Ms);
+    lines.push(`${name} at or over p95 ${stats.p95Ms} ms:`, ...slow.map((sample) => `- ${connectLine(sample)}`));
+  }
+  if (metrics.roundTrip) {
+    const slow = samples.roundTrips.filter((trip) => trip.ms >= metrics.roundTrip.p95Ms);
+    lines.push(`roundTrip at or over p95 ${metrics.roundTrip.p95Ms} ms:`, ...slow.map((trip) => `- at ${(trip.atMs / 1000).toFixed(1)} s: ${trip.ms} ms`));
+  }
+  return lines;
+}
 
 /** The results as the three files, and the job summary when there is one. */
 function report(release, signedIn) {
@@ -673,18 +719,21 @@ function report(release, signedIn) {
     number(metrics.firstEventMs, "first event"),
     number(metrics.roundTripMs, "round trip"),
     number(metrics.approvalMs, "approval"),
-    metrics.connect && `p95 connect ${metrics.connect.p95Ms} ms, first event ${metrics.firstEvent.p95Ms} ms`,
-    metrics.roundTrip && `p95 round trip ${metrics.roundTrip.p95Ms} ms`,
+    metrics.connect && `connect ${tail(metrics.connect)}`,
+    metrics.firstEvent && `first event ${tail(metrics.firstEvent)}`,
+    metrics.roundTrip && `round trip ${tail(metrics.roundTrip)}`,
   );
   // The app's dial away from home, which T3 has no counterpart for. Its own line, so `connect`
   // above stays the relay-only dial every earlier run timed (PLX-1549).
   const appDial = metrics.appDial;
+  // A plxd from PLX-1553 on starts the relay at once beside the stand-in, so no head start and no
+  // early connection is what it should show (PLX-1571).
   const appLine = metrics.appConnect && line(
-    `connect ${metrics.appConnectMs} ms, p95 ${metrics.appConnect.p95Ms} ms`,
-    `first event ${metrics.appFirstEventMs} ms, p95 ${metrics.appFirstEvent.p95Ms} ms`,
-    appDial.early === 0
-      ? "this plxd predates PLX-1549, so it opens the relay's connection after the 200 ms head start"
-      : appDial.early < appDial.of && `the relay's connection opened early on ${appDial.early} of ${appDial.of}`,
+    `connect ${metrics.appConnectMs} ms, ${tail(metrics.appConnect)}`,
+    `first event ${metrics.appFirstEventMs} ms, ${tail(metrics.appFirstEvent)}`,
+    appDial.headStart !== undefined &&
+      (appDial.headStart ? `the relay waited a head start on ${appDial.headStart} of ${appDial.of}` : "the relay started at once on each"),
+    appDial.early > 0 && `the relay's connection opened early on ${appDial.early} of ${appDial.of}`,
   );
 
   const notes = [
@@ -693,7 +742,7 @@ function report(release, signedIn) {
     ...failed.map(({ name, detail }) => `- Failed: ${name}: ${detail}`),
     relayLine && `- Relay: ${relayLine}`,
     signedIn ? accountLine && `- Signed in: ${accountLine}` : `- Signed-in test skipped: ${skipped}`,
-    signedIn && appLine && `- App dial away from home (a LAN route that doesn't answer, then the relay): ${appLine}`,
+    signedIn && appLine && `- App dial away from home (a LAN route off this computer's networks, then the relay): ${appLine}`,
   ].filter((text, index) => text || index === 1);
 
   const table = [
@@ -709,9 +758,11 @@ function report(release, signedIn) {
     "",
     "| Number | Milliseconds |",
     "| --- | --- |",
-    ...Object.entries({ ...metrics, stages: undefined, objects: undefined, ...objects })
+    ...Object.entries({ ...metrics, stages: undefined, samples: undefined, objects: undefined, ...objects })
       .filter(([, value]) => value !== undefined)
       .map(([name, value]) => `| ${name} | ${typeof value === "object" ? JSON.stringify(value) : value} |`),
+    "",
+    ...tailLines(),
     "",
   ];
 
@@ -721,6 +772,8 @@ function report(release, signedIn) {
   writeFileSync(join(options.out, "relay-probe.md"), clean(table.join("\n")));
   writeFileSync(join(options.out, "relay-probe-notes.md"), clean(`${notes.join("\n")}\n`));
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, clean(table.join("\n")));
+  const slow = tailLines();
+  if (slow.length) console.log(`\n${clean(slow.join("\n"))}`);
   console.log(`\n${clean(notes.join("\n"))}`);
   return ok;
 }
