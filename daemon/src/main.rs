@@ -576,11 +576,7 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
     if let Ok(token) = std::env::var("PLXD_RELAY_TOKEN") {
         plxd::relay::sign_in(plxd::relay::url(), token);
     }
-    let exit = |error: &remote::Error| match error {
-        remote::Error::Refused => remote::EXIT_REFUSED,
-        remote::Error::Removed => remote::EXIT_REMOVED,
-        _ => EXIT_UNAVAILABLE.into(),
-    };
+    let exit = plxd::local_dial::exit_code;
     if args.discover {
         let found = tokio::task::spawn_blocking(|| remote::discover(DISCOVER_WAIT))
             .await
@@ -642,8 +638,29 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
     if args.probe {
         return dial_probe(args, report).await;
     }
+    dial_session(args, &data_dir, report).await
+}
+
+/// `dial --remote` and `dial --account`'s session: hands it to this data folder's plxd, or dials
+/// itself, then bridges stdio to it.
+async fn dial_session(
+    args: &DialArgs,
+    data_dir: &DataDir,
+    report: &dyn Fn(&dyn std::fmt::Display),
+) -> i32 {
     // Read from the start, so the lines the app wrote as it started this can go behind the upgrade.
     let mut input = remote::Input::new(tokio::io::stdin());
+    // The plxd running in this data folder dials, so its TLS sessions outlive this process and a
+    // later dial resumes one with 0-RTT (PLX-1585). Without one, this dials itself.
+    let dial = plxd::local_dial::Dial {
+        routes: &args.addresses,
+        account: args.account.as_deref(),
+        remote: args.remote.as_deref(),
+        in_order: args.in_order,
+    };
+    if let Some(exit) = plxd::local_dial::hand_off(data_dir, &dial, &mut input, report).await {
+        return exit;
+    }
     let (routes, dir) = (&args.addresses, data_dir.root());
     let dialed = if let Some(host_id) = &args.account {
         remote::dial_account_with_input(routes, args.in_order, host_id, dir, &mut input).await
@@ -655,7 +672,7 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
         Ok(dialed) => dialed,
         Err(error) => {
             report(&format!("could not reach the paired computer: {error}"));
-            return exit(&error);
+            return plxd::local_dial::exit_code(&error);
         }
     };
     bridge_dialed(dialed, input, report).await

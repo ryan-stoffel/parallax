@@ -161,6 +161,15 @@ pub fn sign_in(url: String, token: String) {
     let _ = CLIENT.set((url, token));
 }
 
+/// The relay and Clerk session for this task's `relay:` routes: its dial's, inside a plxd that
+/// dials for `plxd dial` (PLX-1585), or else this process's.
+fn client() -> Option<(String, String)> {
+    match crate::local_dial::current() {
+        Some(scope) => scope.relay(),
+        None => CLIENT.get().cloned(),
+    }
+}
+
 /// The relay's scheme, host, and port.
 struct Base {
     tls: bool,
@@ -972,6 +981,9 @@ fn pipe_into(
 static CLIENT_STREAM_END: OnceLock<EndSlot> = OnceLock::new();
 
 fn client_slot() -> EndSlot {
+    if let Some(scope) = crate::local_dial::current() {
+        return scope.end();
+    }
     Arc::clone(CLIENT_STREAM_END.get_or_init(EndSlot::default))
 }
 
@@ -1003,12 +1015,12 @@ const FIRST_BYTES: Duration = Duration::from_millis(100);
     reason = "callers await it, and the stream opens behind the one it answers (PLX-1568)"
 )]
 pub async fn open_stream(host_id: &str) -> Result<ClientStream, Error> {
-    let Some((url, token)) = CLIENT.get() else {
+    let Some((url, token)) = client() else {
         return Err(Error::Protocol(
             "the relay route needs a sign-in (PLXD_RELAY_TOKEN)".to_owned(),
         ));
     };
-    Ok(stream_at(url, token, host_id))
+    Ok(stream_at(&url, &token, host_id))
 }
 
 /// [`open_stream`] through the relay at `url`, signed in with `token`. It answers at once and opens
@@ -1024,7 +1036,8 @@ fn stream_at(url: &str, token: &str, host_id: &str) -> ClientStream {
     let (url, token, host_id) = (url.to_owned(), token.to_owned(), host_id.to_owned());
     let failed = Arc::clone(&failure);
     let stopped = stop.clone();
-    tokio::spawn(async move {
+    let (end, scope) = (client_slot(), crate::local_dial::current());
+    tokio::spawn(crate::local_dial::within(scope, async move {
         let opened = tokio::select! {
             // The caller dropped the stream, as a race does to a route that lost.
             () = stopped.cancelled() => return,
@@ -1032,7 +1045,6 @@ fn stream_at(url: &str, token: &str, host_id: &str) -> ClientStream {
         };
         match opened {
             Ok(socket) => {
-                let end = client_slot();
                 *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
                 pipe_into(socket, None, end, ours);
             }
@@ -1041,7 +1053,7 @@ fn stream_at(url: &str, token: &str, host_id: &str) -> ClientStream {
                 *failed.lock().unwrap_or_else(PoisonError::into_inner) = Some(error.to_string());
             }
         }
-    });
+    }));
     ClientStream {
         inner: theirs,
         failure,
@@ -1159,6 +1171,21 @@ impl AsyncWrite for ClientStream {
     ) -> std::task::Poll<io::Result<usize>> {
         let wrote = std::task::ready!(std::pin::Pin::new(&mut self.inner).poll_write(cx, buf));
         std::task::Poll::Ready(wrote.map_err(|error| self.failed().unwrap_or(error)))
+    }
+
+    /// In one write, so TLS records written together go as one frame: a resumed `ClientHello`
+    /// and its early data behind the relay's request (PLX-1585).
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let joined: Vec<u8> = bufs.iter().flat_map(|buf| buf.iter().copied()).collect();
+        self.poll_write(cx, &joined)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
     }
 
     fn poll_flush(

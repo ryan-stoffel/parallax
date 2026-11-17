@@ -24,7 +24,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
 use tracing::debug;
 
-use super::{Base, CLIENT, Roots, Stream};
+use super::{Base, Roots, Stream};
 use crate::remote::Error;
 
 /// How long the relay route waits for the relay to answer its upgrade over an early connection
@@ -78,17 +78,18 @@ impl Connecting {
 /// Runs `race`, a race of routes whose `relay:` ones start after a head start, with a connection to
 /// the signed-in relay opening beside it from now, for the first relay route to take.
 pub(crate) async fn ahead<F: Future>(race: F) -> F::Output {
-    let Some((url, _)) = CLIENT.get() else {
+    let Some((url, _)) = super::client() else {
         return race.await;
     };
-    let Ok(base) = Base::parse(url) else {
+    let Ok(base) = Base::parse(&url) else {
         return race.await;
     };
-    let connecting = Connecting(tokio::spawn(
-        async move { base.connect(Roots::WithOs).await },
-    ));
+    let scope = crate::local_dial::current();
+    let connecting = Connecting(tokio::spawn(crate::local_dial::within(scope, async move {
+        base.connect(Roots::WithOs).await
+    })));
     let early = Early {
-        url: url.clone(),
+        url,
         connecting: Arc::new(Mutex::new(Some(connecting))),
     };
     EARLY.scope(early, race).await
@@ -110,7 +111,10 @@ pub(super) fn take(url: &str) -> Option<Connecting> {
         })
         .ok()
         .flatten()
-        .inspect(|_| TOOK.store(true, Ordering::Relaxed))
+        .inspect(|_| match crate::local_dial::current() {
+            Some(scope) => scope.took_head_start(),
+            None => TOOK.store(true, Ordering::Relaxed),
+        })
 }
 
 /// [`super::upgrade`] to the relay at `url`, over `early` when it's open first. A new connection

@@ -29,13 +29,14 @@
 //! the first to present the pinned certificate gets the credential. [`bridge`] joins the WebSocket
 //! to `plxd dial`'s stdio. Its credential stays in its data folder, readable only by this user.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -57,6 +58,10 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+
+mod tickets;
+
+pub use tickets::LIFETIME as TICKET_LIFETIME;
 
 /// The TCP port plxd listens on while `remote` is on (decision 0065).
 pub const PORT: u16 = 7341;
@@ -117,6 +122,10 @@ fn alpn_protocols() -> Vec<Vec<u8>> {
 /// under the 16 KiB of one TLS record, so a host that refuses the upgrade has read all of it and
 /// closes cleanly, and the client still reads the refusal.
 const MAX_EARLY_FRAMES: usize = 8 * 1024;
+
+/// How much early data the listener takes from a resumed client: an upgrade request with its
+/// proof, and [`MAX_EARLY_FRAMES`] of frames behind it, with room (PLX-1585).
+const MAX_EARLY_DATA: u32 = 16 * 1024;
 
 /// The largest JSON-RPC message a WebSocket carries: 0007's frame limit.
 #[must_use]
@@ -465,7 +474,8 @@ impl HostKey {
     }
 
     /// The TLS server's configuration: this certificate, TLS 1.3 (the only version built), no
-    /// client certificates, and [`EARLY_WS`] for a client that offers it.
+    /// client certificates, [`EARLY_WS`] for a client that offers it, and 0-RTT for a client that
+    /// resumes with a ticket it issued ([`tickets`]).
     ///
     /// # Errors
     ///
@@ -480,17 +490,20 @@ impl HostKey {
                 )
             })
             .map_err(io::Error::other)?;
-        // No session tickets: plxd's client makes a new config for each connect, so it never
-        // resumes. The tickets were a write of their own just before the 101, which a hop on the
-        // relay's path that leaves Nagle on held for the client's delayed ACK, 40 ms (PLX-1512).
-        config.send_tls13_tickets = 0;
+        // One single-use ticket per handshake, kept in memory, for a dial's 0-RTT (PLX-1585).
+        // The listener writes it with the 101, not just before it (PLX-1512).
+        config.session_storage = Arc::new(tickets::Issued::default());
+        config.send_tls13_tickets = 1;
+        config.max_early_data_size = MAX_EARLY_DATA;
+        // The 101 to an upgrade that came with early data goes before the client's Finished.
+        config.send_half_rtt_data = true;
         config.alpn_protocols = alpn_protocols();
         Ok(Arc::new(config))
     }
 }
 
 /// Which certificate a connection accepts.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pin {
     /// Any, while pairing with a code, for SPAKE2 to vouch for.
     Any,
@@ -1074,14 +1087,31 @@ pub async fn open_pinned(
     route: &str,
     pin: &Pin,
 ) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
-    let stream: crate::relay::Stream = if let Some(host_id) = route.strip_prefix(RELAY_ROUTE) {
+    tls_over(route_stream(route).await?, pin).await
+}
+
+/// The byte stream to `route`: a relay stream, or TCP.
+async fn route_stream(route: &str) -> Result<crate::relay::Stream, Error> {
+    Ok(if let Some(host_id) = route.strip_prefix(RELAY_ROUTE) {
         Box::new(crate::relay::open_stream(host_id).await?)
     } else {
         let tcp = TcpStream::connect(with_port(route)).await?;
         let _ = tcp.set_nodelay(true);
         Box::new(tcp)
-    };
-    tls_over(stream, pin).await
+    })
+}
+
+/// A failed TLS handshake as [`Error::WrongHost`] when the pin refused the certificate.
+fn handshake_error(error: io::Error) -> Error {
+    let pinned = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .is_some_and(|e| matches!(e, rustls::Error::InvalidCertificate(_)));
+    if pinned {
+        Error::WrongHost
+    } else {
+        Error::Io(error)
+    }
 }
 
 /// TLS over `stream` to the certificate `pin` accepts, and the fingerprint it presented.
@@ -1108,17 +1138,7 @@ async fn tls_over(
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
         .connect(name, stream)
         .await
-        .map_err(|error| {
-            let pinned = error
-                .get_ref()
-                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-                .is_some_and(|e| matches!(e, rustls::Error::InvalidCertificate(_)));
-            if pinned {
-                Error::WrongHost
-            } else {
-                Error::Io(error)
-            }
-        })?;
+        .map_err(handshake_error)?;
     crate::connect_timing::mark("pinned_tls_ready");
     let presented = seen
         .lock()
@@ -1126,6 +1146,115 @@ async fn tls_over(
         .take()
         .unwrap_or_default();
     Ok((tls, presented))
+}
+
+/// Whether this process keeps TLS tickets past a connection, for a later dial's 0-RTT: only a
+/// plxd that dials for `plxd dial` does (PLX-1585). A `plxd dial` on its own ends with its
+/// connection, so it keeps none and dials as before.
+static KEEPS_TICKETS: AtomicBool = AtomicBool::new(false);
+
+/// Makes this process keep the tickets its dials get, in memory, for its later dials.
+pub fn keep_tickets() {
+    KEEPS_TICKETS.store(true, Ordering::Relaxed);
+}
+
+/// The client configuration for each pinned key, each holding only that pin's tickets, so a ticket
+/// is never offered to another host. rustls resumes a session only with the configuration that
+/// made it, so it's kept for the process.
+static RESUMING: LazyLock<Mutex<HashMap<Pin, Arc<rustls::ClientConfig>>>> =
+    LazyLock::new(Mutex::default);
+
+/// The configuration [`open_dial`] resumes with for `pin`, made the first time.
+pub(crate) fn resuming_config(pin: &Pin) -> io::Result<Arc<rustls::ClientConfig>> {
+    let mut configs = RESUMING.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(config) = configs.get(pin) {
+        return Ok(Arc::clone(config));
+    }
+    let provider = provider();
+    let verifier = Pinned {
+        pin: pin.clone(),
+        seen: Arc::default(),
+        algorithms: provider.signature_verification_algorithms,
+    };
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(io::Error::other)?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    config.alpn_protocols = alpn_protocols();
+    config.resumption = rustls::client::Resumption::store(Arc::new(tickets::Held::default()));
+    config.enable_early_data = true;
+    let config = Arc::new(config);
+    configs.insert(pin.clone(), Arc::clone(&config));
+    Ok(config)
+}
+
+/// What a dial sends with its `ClientHello` when a ticket lets it (PLX-1585): the upgrade with the
+/// session's token and a proof by `key`, and `frames`, the first `lines` input lines, behind it.
+struct EarlyUpgrade<'a> {
+    token: &'a str,
+    key: &'a DpopKey,
+    frames: &'a [u8],
+    lines: usize,
+}
+
+/// The upgrade [`open_dial`] sent with the handshake: the `Sec-WebSocket-Accept` its 101 carries,
+/// and how many input lines went behind it.
+struct SentEarly {
+    accept: String,
+    lines: usize,
+}
+
+/// TLS to `route` for a dial, as [`open_pinned`] opens it, except in a process that
+/// [`keep_tickets`]: there it resumes with a ticket from this pin when it has one, and sends
+/// `upgrade` with the `ClientHello` as 0-RTT early data. Then the host answers the upgrade with its
+/// first flight, a round trip sooner. A host that refuses the early data, such as after a restart,
+/// gets it again after the handshake, and the dial goes on as a full one.
+async fn open_dial(
+    route: &str,
+    pin: &Pin,
+    upgrade: &EarlyUpgrade<'_>,
+) -> Result<(TlsStream<crate::relay::Stream>, Option<SentEarly>), Error> {
+    if !KEEPS_TICKETS.load(Ordering::Relaxed) || *pin == Pin::Any {
+        return Ok((open_pinned(route, pin).await?.0, None));
+    }
+    let stream = route_stream(route).await?;
+    crate::connect_timing::mark("pinned_tls_start");
+    let name = ServerName::try_from("parallax").expect("a DNS name");
+    let mut tls = tokio_rustls::TlsConnector::from(resuming_config(pin)?)
+        .early_data(true)
+        .connect(name, stream)
+        .await
+        .map_err(handshake_error)?;
+    if !tls.get_ref().1.is_handshaking() {
+        crate::connect_timing::mark("pinned_tls_ready");
+        return Ok((tls, None));
+    }
+    crate::connect_timing::mark("ws_upgrade_start");
+    let (flight, accept) = upgrade_request(route, upgrade.token, upgrade.key, upgrade.frames)?;
+    tls.write_all(&flight).await.map_err(handshake_error)?;
+    // Finishes the handshake, and sends the flight again after it when the host refused it early.
+    tls.flush().await.map_err(handshake_error)?;
+    crate::connect_timing::mark("pinned_tls_ready");
+    let session = tls.get_ref().1;
+    let accepted = session.is_early_data_accepted();
+    crate::connect_timing::mark(if accepted {
+        "early_data_accepted"
+    } else {
+        "early_data_refused"
+    });
+    if accepted && upgrade.lines > 0 {
+        crate::connect_timing::mark("early_data_lines");
+    }
+    // A host from before PLX-1483 drops frames behind a request, and they went already.
+    if !accepted && upgrade.lines > 0 && session.alpn_protocol() != Some(EARLY_WS) {
+        return Err(Error::Protocol(
+            "the computer dropped what was sent with the upgrade; connect again".to_owned(),
+        ));
+    }
+    let lines = upgrade.lines;
+    Ok((tls, Some(SentEarly { accept, lines })))
 }
 
 /// One HTTPS request to `route`, on a connection of its own: its status and body.
@@ -1956,6 +2085,23 @@ pub type Opened = (String, TlsStream<crate::relay::Stream>, String);
 ///
 /// The last route's error when none answered with the pinned certificate.
 pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened, Error> {
+    let opened = race_by(routes, in_order, |route| async move {
+        open_pinned(&route, pin).await
+    });
+    let (route, (tls, fingerprint)) = opened.await?;
+    Ok((route, tls, fingerprint))
+}
+
+/// [`race`], opening each route with `open`.
+async fn race_by<T, F, Opening>(
+    routes: &[String],
+    in_order: bool,
+    open: F,
+) -> Result<(String, T), Error>
+where
+    F: Fn(String) -> Opening,
+    Opening: Future<Output = Result<T, Error>>,
+{
     let networks = own_networks();
     // Without this computer's networks, every route may answer, as before PLX-1553.
     let holds = |route: &str| {
@@ -1963,16 +2109,12 @@ pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened
             .as_deref()
             .is_none_or(|networks| may_answer(route, networks))
     };
-    let racing = first(routes, in_order, holds, |route| async move {
-        open_pinned(&route, pin).await
-    });
-    let opened = if relay_waits(routes, in_order, holds) {
+    let racing = first(routes, in_order, holds, open);
+    if relay_waits(routes, in_order, holds) {
         crate::relay::warm::ahead(racing).await
     } else {
         racing.await
-    };
-    let (route, (tls, fingerprint)) = opened?;
-    Ok((route, tls, fingerprint))
+    }
 }
 
 /// An address one of this computer's interfaces holds, and its netmask.
@@ -2160,16 +2302,28 @@ pub struct Input<I> {
 impl<I: AsyncRead + Unpin> Input<I> {
     /// Reads `input`'s lines.
     pub fn new(input: I) -> Self {
+        Self::with_waiting(input, Vec::new())
+    }
+
+    /// Reads `waiting`, lines read already elsewhere, and then `input`'s lines.
+    pub fn with_waiting(input: I, waiting: Vec<String>) -> Self {
         Input {
             lines: tokio::io::BufReader::new(input).lines(),
-            ahead: VecDeque::new(),
+            ahead: waiting.into(),
             failed: None,
         }
     }
 
+    /// Takes the lines that are there now, to send them on: what a plxd that dials for
+    /// `plxd dial` starts its [`Input::with_waiting`] with (PLX-1585).
+    pub fn take_waiting(&mut self) -> Vec<String> {
+        self.fill();
+        self.ahead.drain(..).collect()
+    }
+
     /// Takes the lines that are there now, without waiting, until it holds an upgrade's worth. The
     /// first call starts the read, so a later one finds what came since.
-    fn fill(&mut self) {
+    pub fn fill(&mut self) {
         use futures_util::FutureExt as _;
         // A line counts its newline, so empty ones reach the limit too.
         let held =
@@ -2206,19 +2360,78 @@ impl<I: AsyncRead + Unpin> Input<I> {
         (frames, lines)
     }
 
+    /// The lines waiting now that may go as 0-RTT early data, as [`Input::early`] gives them: those
+    /// from the first that [`EarlyGate`] admits (PLX-1585). The rest go after the 101.
+    fn zero_rtt(&mut self) -> (Vec<u8>, usize) {
+        self.fill();
+        let mut gate = EarlyGate::default();
+        let mut frames = Vec::new();
+        let mut lines = 0;
+        for line in &self.ahead {
+            let mut frame = Vec::new();
+            if !line.trim().is_empty() {
+                if !gate.admits(line) {
+                    break;
+                }
+                text_frame(line, &mut frame);
+            }
+            if frames.len() + frame.len() > MAX_EARLY_FRAMES {
+                break;
+            }
+            frames.append(&mut frame);
+            lines += 1;
+        }
+        (frames, lines)
+    }
+
     /// Forgets the first `lines` lines: they went behind an upgrade the host accepted.
     fn sent(&mut self, lines: usize) {
         self.ahead.drain(..lines);
     }
 
     /// The next line, or `None` at the end of the input.
-    async fn next(&mut self) -> io::Result<Option<String>> {
+    ///
+    /// # Errors
+    ///
+    /// The input's.
+    pub async fn next(&mut self) -> io::Result<Option<String>> {
         if let Some(line) = self.ahead.pop_front() {
             return Ok(Some(line));
         }
         match self.failed.take() {
             Some(error) => Err(error),
             None => self.lines.next_line().await,
+        }
+    }
+}
+
+/// Which messages may go, and run, as 0-RTT early data, which a captured `ClientHello` could carry
+/// again (PLX-1585): `initialize` and the first `events/subscribe`, both reads in plxd's own list
+/// (`methods/read_only.rs`). A ticket is taken on first use, so a replay gets no early data, and
+/// anything else waits for the handshake anyway.
+#[derive(Debug, Default)]
+pub struct EarlyGate {
+    subscribed: bool,
+}
+
+impl EarlyGate {
+    /// Whether the JSON-RPC `message` may run on early data, counting it.
+    pub fn admits(&mut self, message: &str) -> bool {
+        use parallax_protocol::methods::{EventsSubscribe, Initialize, RequestMethod as _};
+        #[derive(Deserialize)]
+        struct Called {
+            method: Option<String>,
+        }
+        let method = serde_json::from_str::<Called>(message)
+            .ok()
+            .and_then(|called| called.method);
+        match method.as_deref() {
+            Some(Initialize::NAME) => true,
+            Some(EventsSubscribe::NAME) if !self.subscribed => {
+                self.subscribed = true;
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -2317,18 +2530,37 @@ async fn dial_pinned<I: AsyncRead + Unpin>(
         .ok()
         .and_then(|pkcs8| DpopKey::from_pkcs8(&pkcs8))
         .ok_or_else(|| Error::Protocol("the saved DPoP key is damaged".to_owned()))?;
-    let (route, tls, _) = race(routes, in_order, pin).await?;
-    let token = &credential.token;
-    // Only this handshake's answer says the host keeps them. Any other host drops what it read of
-    // them with the request, so it gets none.
-    let (early, lines) = if tls.get_ref().1.alpn_protocol() == Some(EARLY_WS) {
-        input.early()
-    } else {
-        (Vec::new(), 0)
+    let token = credential.token.as_str();
+    let (frames, lines) = input.zero_rtt();
+    let early = EarlyUpgrade {
+        token,
+        key: &key,
+        frames: &frames,
+        lines,
     };
-    crate::connect_timing::mark("ws_upgrade_start");
-    let upgraded = tokio::time::timeout(REQUEST_TIMEOUT, upgrade(&route, tls, token, &key, &early));
-    let socket = match upgraded.await.map_err(|_| timed_out(&route))? {
+    let early = &early;
+    let opened = race_by(routes, in_order, |route| async move {
+        open_dial(&route, pin, early).await
+    });
+    let (route, (tls, sent)) = opened.await?;
+    let answered = async {
+        if let Some(sent) = sent {
+            return Ok((read_upgrade(tls, &sent.accept).await?, sent.lines));
+        }
+        // Only this handshake's answer says the host keeps them. Any other host drops what it
+        // read of them with the request, so it gets none.
+        let (early, lines) = if tls.get_ref().1.alpn_protocol() == Some(EARLY_WS) {
+            input.early()
+        } else {
+            (Vec::new(), 0)
+        };
+        crate::connect_timing::mark("ws_upgrade_start");
+        Ok((upgrade(&route, tls, token, &key, &early).await?, lines))
+    };
+    let socket = match tokio::time::timeout(REQUEST_TIMEOUT, answered)
+        .await
+        .map_err(|_| timed_out(&route))?
+    {
         // A host from before 0091 takes only a ticket, and says whether the session still works.
         // A refused upgrade's frames were dropped unread, so their lines stay in `input`.
         Err(Error::Refused) => {
@@ -2336,7 +2568,7 @@ async fn dial_pinned<I: AsyncRead + Unpin>(
             ticketed.await.map_err(|_| timed_out(&route))??
         }
         other => {
-            let socket = other?;
+            let (socket, lines) = other?;
             input.sent(lines);
             socket
         }
@@ -2356,10 +2588,23 @@ async fn upgrade(
     key: &DpopKey,
     early: &[u8],
 ) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+    let (flight, accept) = upgrade_request(route, token, key, early)?;
+    tls.write_all(&flight).await?;
+    tls.flush().await?;
+    read_upgrade(tls, &accept).await
+}
+
+/// The `/ws` upgrade request to `route` with the session `token` and a `DPoP` proof by `key`, with
+/// `early` behind it, and the `Sec-WebSocket-Accept` its 101 must carry.
+fn upgrade_request(
+    route: &str,
+    token: &str,
+    key: &DpopKey,
+    early: &[u8],
+) -> Result<(Vec<u8>, String), Error> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     use tokio_tungstenite::tungstenite::handshake::client::generate_request;
     use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-    use tokio_tungstenite::tungstenite::protocol::Role;
     let bad = |e: &dyn std::fmt::Display| Error::Protocol(format!("the WebSocket failed: {e}"));
     let mut request = format!("wss://{}/ws", with_port(route))
         .into_client_request()
@@ -2370,10 +2615,18 @@ async fn upgrade(
         headers.insert(name, value.parse().map_err(|_| bad(&"a bad header"))?);
     }
     let (mut flight, nonce) = generate_request(request).map_err(|e| bad(&e))?;
-    let accept = derive_accept_key(nonce.as_bytes());
     flight.extend_from_slice(early);
-    tls.write_all(&flight).await?;
-    tls.flush().await?;
+    Ok((flight, derive_accept_key(nonce.as_bytes())))
+}
+
+/// Reads the answer to an upgrade request sent over `tls`, and opens the WebSocket on a 101 that
+/// carries `accept`.
+async fn read_upgrade(
+    mut tls: TlsStream<crate::relay::Stream>,
+    accept: &str,
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    let bad = |e: &dyn std::fmt::Display| Error::Protocol(format!("the WebSocket failed: {e}"));
     let mut answer = Vec::new();
     let mut chunk = [0; 1024];
     let length = loop {
@@ -2575,6 +2828,39 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the leading `initialize` and first `events/subscribe` go as 0-RTT early data, and the
+    /// lines after them wait for the 101 (PLX-1585).
+    #[tokio::test]
+    async fn only_initialize_and_the_first_subscribe_go_as_early_data() {
+        let call = |id: u32, method: &str| {
+            format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}","params":{{}}}}"#)
+        };
+        let lines = [
+            call(1, "initialize"),
+            call(2, "events/subscribe"),
+            call(3, "events/subscribe"),
+            call(4, "thread/list"),
+        ];
+        let waiting = lines.join("\n") + "\n";
+        let mut input = Input::new(waiting.as_bytes());
+        let (frames, sent) = input.zero_rtt();
+        assert_eq!(sent, 2);
+        let mut expected = Vec::new();
+        for line in &lines[..2] {
+            let mut frame = Vec::new();
+            text_frame(line, &mut frame);
+            // Masks differ, so compare sizes: the same two frames.
+            expected.extend(frame);
+        }
+        assert_eq!(frames.len(), expected.len());
+        input.sent(sent);
+        assert_eq!(input.next().await.unwrap(), Some(lines[2].clone()));
+
+        let mut gate = EarlyGate::default();
+        assert!(!gate.admits(&call(1, "host/settings/set")));
+        assert!(!gate.admits("not json"));
+    }
 
     #[test]
     fn a_new_device_key_deletes_only_what_the_old_one_held() {

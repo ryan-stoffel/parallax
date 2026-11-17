@@ -846,27 +846,46 @@ impl Peer {
 }
 
 impl Accepted<'_> {
-    /// Serves `stream` if `peer` is this user; only this user's processes may connect.
-    fn spawn<S>(&self, stream: S, id: u64, peer: Peer)
+    /// Serves `stream` if `peer` is this user; only this user's processes may connect. A
+    /// connection that opens with `plxd dial`'s preface is a dial plxd runs for it (PLX-1585), and
+    /// any other is a JSON-RPC connection, whose first byte already tells it apart.
+    fn spawn<S>(&self, mut stream: S, id: u64, peer: Peer)
     where
-        S: AsyncRead + AsyncWrite + Send + Sync + 'static,
+        S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
     {
         let span = info_span!("connection", id);
         match peer {
             Peer::ThisUser => {
-                let serve = connection::serve(
-                    stream,
-                    Arc::clone(self.daemon),
-                    self.stop_reading.clone(),
-                    self.abort.child_token(),
-                    false,
-                    false,
-                    false,
-                    false,
-                );
-                self.connections.spawn(
-                    async move { serve.await.log(connection::Route::Local) }.instrument(span),
-                );
+                let daemon = Arc::clone(self.daemon);
+                let stop_reading = self.stop_reading.clone();
+                let closing = self.abort.child_token();
+                let serve = async move {
+                    let sniffed = tokio::select! {
+                        sniffed = crate::local_dial::sniff(&mut stream) => sniffed,
+                        () = stop_reading.cancelled() => return,
+                    };
+                    let Ok((read, dialing)) = sniffed else {
+                        return;
+                    };
+                    if dialing {
+                        let root = daemon.data_dir.root().to_owned();
+                        return crate::local_dial::serve(stream, &root, stop_reading).await;
+                    }
+                    let stream = crate::local_dial::Prefixed::new(read, stream);
+                    connection::serve(
+                        stream,
+                        daemon,
+                        stop_reading,
+                        closing,
+                        false,
+                        false,
+                        false,
+                        false,
+                    )
+                    .await
+                    .log(connection::Route::Local);
+                };
+                self.connections.spawn(serve.instrument(span));
             }
             Peer::Other(peer) => {
                 warn!(parent: &span, %peer, "refused a connection from another user");

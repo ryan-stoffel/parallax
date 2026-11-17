@@ -79,6 +79,7 @@ pub mod keystore;
 pub mod launch_agent;
 mod linked;
 mod load;
+pub mod local_dial;
 pub mod logging;
 pub mod mcp;
 mod methods;

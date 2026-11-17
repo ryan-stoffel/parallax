@@ -20,7 +20,11 @@ pub fn enabled() -> bool {
 
 /// A fixed code-defined checkpoint, in milliseconds since the first instrumented entry.
 /// At most 64 lines per process, including retries and concurrent routes.
+/// Inside a plxd that dials for `plxd dial`, the mark goes back to that `dial` (PLX-1585).
 pub fn mark(stage: &'static str) {
+    if let Some(scope) = crate::local_dial::current() {
+        return scope.mark(false, stage, None);
+    }
     if !enabled() || LINES.fetch_add(1, Ordering::Relaxed) >= 64 {
         return;
     }
@@ -67,6 +71,12 @@ pub fn server(value: &str) {
         let Ok(ms) = duration.parse::<f64>() else {
             continue;
         };
+        if let Some(scope) = crate::local_dial::current() {
+            if ms.is_finite() && (0.0..=60_000.0).contains(&ms) {
+                scope.mark(true, name, Some(ms));
+            }
+            continue;
+        }
         if enabled()
             && ms.is_finite()
             && (0.0..=60_000.0).contains(&ms)
@@ -75,6 +85,41 @@ pub fn server(value: &str) {
             eprintln!("connect-server-timing {name} {ms:.3}");
         }
     }
+}
+
+/// Milliseconds since the first instrumented entry, when timings are on.
+#[must_use]
+pub fn elapsed_ms() -> Option<f64> {
+    if !enabled() {
+        return None;
+    }
+    START
+        .get()
+        .copied()
+        .flatten()
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+}
+
+/// Prints a mark the plxd that dialed for this `plxd dial` kept (PLX-1585): a checkpoint at `ms`
+/// since this process's first entry, or the relay's duration with `server`. Like the others, only
+/// a plain name and a bounded finite number.
+pub fn replay(server: bool, name: &str, ms: f64) {
+    let plain =
+        (1..=40).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    if !enabled()
+        || !plain
+        || !ms.is_finite()
+        || !(0.0..=60_000.0).contains(&ms)
+        || LINES.fetch_add(1, Ordering::Relaxed) >= 64
+    {
+        return;
+    }
+    let kind = if server {
+        "connect-server-timing"
+    } else {
+        "connect-timing"
+    };
+    eprintln!("{kind} {name} {ms:.3}");
 }
 
 #[cfg(test)]

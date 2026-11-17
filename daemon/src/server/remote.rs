@@ -48,8 +48,9 @@
 //! accepted, and `remote/revoke` closes a session's own.
 
 pub(crate) mod access;
+mod tls;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
@@ -69,7 +70,6 @@ use tokio::io::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::time;
-use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
@@ -472,7 +472,7 @@ fn advertise(name: &str, port: u16) -> Option<mdns_sd::ServiceDaemon> {
 struct Bound {
     listener: TcpListener,
     key: Arc<HostKey>,
-    tls: TlsAcceptor,
+    tls: Arc<rustls::ServerConfig>,
     /// Closes every connection this listener accepted. A child of the server's abort token.
     closing: CancellationToken,
     /// The web client's files on their way.
@@ -580,7 +580,7 @@ async fn bind(serving: &Serving) -> Option<Bound> {
         }
     };
     let tls = match key.server_config() {
-        Ok(config) => TlsAcceptor::from(config),
+        Ok(config) => config,
         Err(error) => {
             warn!(%error, "could not use the remote certificate");
             return None;
@@ -886,6 +886,14 @@ async fn respond_kept<S: AsyncWrite + Unpin>(
     }
 }
 
+/// Whether `request` is a `/ws` upgrade a session's token and proof open, which may come as 0-RTT
+/// early data: its checks change nothing but the proof's replay record (PLX-1585).
+fn opens_with_proof(request: &Request) -> bool {
+    request.method == "GET"
+        && request.path.split('?').next() == Some("/ws")
+        && request.query("wsTicket").is_none()
+}
+
 fn refused(why: &str) -> (u16, serde_json::Value) {
     (
         401,
@@ -909,14 +917,21 @@ impl Serving {
         let daemon = Arc::clone(&self.daemon);
         let stop_reading = self.stop_reading.clone();
         let key = Arc::clone(&bound.key);
-        let tls = bound.tls.clone();
+        let tls = Arc::clone(&bound.tls);
         let closing = bound.closing.clone();
         let files = bound.files.clone();
         self.connections.spawn(
             async move {
                 let read = async {
-                    let mut stream = tls.accept(stream).await?;
+                    let mut stream = tls::accept(tls, stream).await?;
                     let request = read_request(&mut stream).await?;
+                    // Only a session's `/ws` upgrade runs on 0-RTT early data. Anything else
+                    // waits for the client's Finished, which a replay never sends (PLX-1585).
+                    if let Some(request) = &request
+                        && !opens_with_proof(request)
+                    {
+                        stream.finish().await?;
+                    }
                     Ok::<_, io::Error>(request.map(|request| (stream, request)))
                 };
                 let read = tokio::select! {
@@ -1242,7 +1257,7 @@ async fn lists(dir: &Path, name: &str) -> bool {
 /// It streams in [`FILE_CHUNK`]s, and gives up on a reader that takes none of one for
 /// [`remote::REQUEST_TIMEOUT`].
 async fn serve_file(
-    mut stream: tokio_rustls::server::TlsStream<TcpStream>,
+    mut stream: tls::Stream<TcpStream>,
     daemon: &Daemon,
     file: &str,
     peer: SocketAddr,
@@ -1363,7 +1378,7 @@ async fn authorize(
 /// the WebSocket only after every check passed and the 101 went out, so it's handled as frames
 /// sent later are, read-only level included. Every refusal returns first, which drops it unread.
 async fn serve_socket(
-    mut stream: tokio_rustls::server::TlsStream<TcpStream>,
+    mut stream: tls::Stream<TcpStream>,
     request: &Request,
     daemon: Arc<Daemon>,
     stop_reading: CancellationToken,
@@ -1408,6 +1423,9 @@ async fn serve_socket(
         return;
     }
     info!(%peer, "accepted a remote WebSocket");
+    // Before the client's Finished, what the socket reads came as early data (PLX-1585).
+    let handshake = stream.handshake();
+    let handshake = (!handshake.done()).then_some(handshake);
     let (early, config) = (request.early.clone(), Some(remote::websocket_config()));
     let socket = WebSocketStream::from_partially_read(stream, early, Role::Server, config).await;
     let relay_stream = daemon.relay.joined(peer);
@@ -1426,7 +1444,13 @@ async fn serve_socket(
         over_relay,
         true,
     );
-    let pumped = pump(socket, local_in, local_out, over_relay.then_some(&ended));
+    let pumped = pump(
+        socket,
+        local_in,
+        local_out,
+        over_relay.then_some(&ended),
+        handshake,
+    );
     let (mut closed, (pumped, socket_end)) = tokio::join!(serve, pumped);
     if let Err(error) = pumped {
         debug!(%peer, %error, "a remote WebSocket failed");
@@ -1559,49 +1583,24 @@ impl Window {
 /// the connection closes. A client's close ends what the connection reads, so it still answers
 /// what it read. Answers with how the socket ended, if it did first. Over the relay, `relay` is the
 /// connection's `closing`, and what's sent waits for the client's pongs ([`Window`]) until then.
+/// With `early`, the TLS handshake isn't done yet: until it is, only what [`remote::EarlyGate`]
+/// admits goes on, and the rest waits for it, in order (PLX-1585).
 async fn pump<S, I, O>(
     socket: WebSocketStream<S>,
     local_in: I,
     mut local_out: O,
     relay: Option<&CancellationToken>,
+    early: Option<Arc<tls::Handshake>>,
 ) -> (io::Result<()>, Option<SocketEnd>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
     I: AsyncRead + Unpin,
     O: AsyncWrite + Unpin,
 {
-    let (mut sink, mut frames) = socket.split();
+    let (mut sink, frames) = socket.split();
     let window = Window::default();
     let over_relay = relay.is_some();
-    let incoming = async {
-        let mut end = SocketEnd::Ended;
-        while let Some(frame) = frames.next().await {
-            match frame {
-                Ok(Message::Text(text)) => {
-                    window.handing(true);
-                    let handed = async {
-                        local_out.write_all(text.as_bytes()).await?;
-                        local_out.write_all(b"\n").await
-                    };
-                    let handed = handed.await;
-                    window.handing(false);
-                    handed?;
-                }
-                Ok(Message::Pong(payload)) if over_relay => window.pong(&payload),
-                Ok(Message::Close(_)) => {
-                    end = SocketEnd::Closed;
-                    break;
-                }
-                Err(error) => {
-                    end = SocketEnd::Failed(error.to_string());
-                    break;
-                }
-                Ok(_) => {}
-            }
-        }
-        local_out.shutdown().await?;
-        Ok::<_, io::Error>(end)
-    };
+    let incoming = incoming(frames, &mut local_out, &window, over_relay, early);
     let outgoing = async {
         let ping = |sent: u64| Message::Ping(sent.to_be_bytes().to_vec().into());
         if over_relay {
@@ -1653,6 +1652,90 @@ where
             }
         }
     }
+}
+
+/// [`pump`]'s frames from the client to the connection, until the client closes: how it ended.
+async fn incoming<S, O>(
+    mut frames: futures_util::stream::SplitStream<WebSocketStream<S>>,
+    local_out: &mut O,
+    window: &Window,
+    over_relay: bool,
+    early: Option<Arc<tls::Handshake>>,
+) -> io::Result<SocketEnd>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    O: AsyncWrite + Unpin,
+{
+    let mut end = SocketEnd::Ended;
+    let mut gate = remote::EarlyGate::default();
+    // Messages that came before the handshake was done and wait for it, oldest first.
+    let mut held: VecDeque<String> = VecDeque::new();
+    loop {
+        let waiting = early
+            .as_ref()
+            .filter(|handshake| !held.is_empty() && !handshake.done())
+            .cloned();
+        let frame = tokio::select! {
+            frame = frames.next() => frame,
+            () = async move {
+                match waiting {
+                    Some(handshake) => handshake.wait().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                for text in held.drain(..) {
+                    hand(window, local_out, &text).await?;
+                }
+                continue;
+            }
+        };
+        let Some(frame) = frame else {
+            if early.as_ref().is_none_or(|handshake| handshake.done()) {
+                for text in held.drain(..) {
+                    hand(window, local_out, &text).await?;
+                }
+            }
+            break;
+        };
+        match frame {
+            Ok(Message::Text(text)) => {
+                let waits = early.as_ref().is_some_and(|handshake| !handshake.done());
+                if waits && (!held.is_empty() || !gate.admits(&text)) {
+                    held.push_back(text.to_string());
+                    continue;
+                }
+                for text in held.drain(..) {
+                    hand(window, local_out, &text).await?;
+                }
+                hand(window, local_out, &text).await?;
+            }
+            Ok(Message::Pong(payload)) if over_relay => window.pong(&payload),
+            Ok(Message::Close(_)) => {
+                end = SocketEnd::Closed;
+                break;
+            }
+            Err(error) => {
+                end = SocketEnd::Failed(error.to_string());
+                break;
+            }
+            Ok(_) => {}
+        }
+    }
+    // What waited for a handshake that never finished never runs.
+    local_out.shutdown().await?;
+    Ok(end)
+}
+
+/// Hands one message from a client to its connection, as a line.
+async fn hand<O: AsyncWrite + Unpin>(window: &Window, out: &mut O, text: &str) -> io::Result<()> {
+    window.handing(true);
+    let handed = async {
+        out.write_all(text.as_bytes()).await?;
+        out.write_all(b"\n").await
+    };
+    let handed = handed.await;
+    window.handing(false);
+    handed
 }
 
 /// A session as `host_settings.remote_sessions` keeps it.
@@ -2115,6 +2198,46 @@ mod tests {
 
     /// A `pump` over the relay: the client's socket, the input of what's sent to it, the
     /// connection's `closing`, and the pump.
+    /// Before the TLS handshake is done, only `initialize` and the first `events/subscribe` reach
+    /// the connection. A write, and what follows it, wait for the handshake, in order (PLX-1585).
+    #[tokio::test]
+    async fn early_data_runs_only_initialize_and_the_first_subscribe_before_the_handshake() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let (_input, local_in) = tokio::io::duplex(64 * 1024);
+        let (local_out, handed) = tokio::io::duplex(64 * 1024);
+        let handshake = Arc::new(super::tls::Handshake::default());
+        let early = Some(Arc::clone(&handshake));
+        tokio::spawn(async move {
+            let _ = super::pump(server, local_in, local_out, None, early).await;
+        });
+        let call = |id: u32, method: &str| {
+            format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}","params":{{}}}}"#)
+        };
+        for (id, method) in [
+            (1, "initialize"),
+            (2, "events/subscribe"),
+            (3, "host/settings/set"),
+            (4, "events/subscribe"),
+            (5, "thread/list"),
+        ] {
+            client.send(Message::text(call(id, method))).await.unwrap();
+        }
+        let mut handed = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(handed));
+        let mut next = async || {
+            let line = time::timeout(Duration::from_secs(1), handed.next_line()).await;
+            line.ok().map(|line| line.unwrap().unwrap())
+        };
+        assert_eq!(next().await, Some(call(1, "initialize")));
+        assert_eq!(next().await, Some(call(2, "events/subscribe")));
+        assert_eq!(next().await, None, "a write ran on early data");
+        handshake.finish();
+        assert_eq!(next().await, Some(call(3, "host/settings/set")));
+        assert_eq!(next().await, Some(call(4, "events/subscribe")));
+        assert_eq!(next().await, Some(call(5, "thread/list")));
+    }
+
     struct RelayPump {
         client: WebSocketStream<DuplexStream>,
         input: DuplexStream,
@@ -2131,7 +2254,7 @@ mod tests {
         let closing = CancellationToken::new();
         let token = closing.clone();
         let pump = tokio::spawn(async move {
-            let _ = super::pump(server, local_in, tokio::io::sink(), Some(&token)).await;
+            let _ = super::pump(server, local_in, tokio::io::sink(), Some(&token), None).await;
         });
         RelayPump {
             client,
@@ -2212,7 +2335,7 @@ mod tests {
         let (local_out, mut requests) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
             let closing = CancellationToken::new();
-            let _ = super::pump(server, local_in, local_out, Some(&closing)).await;
+            let _ = super::pump(server, local_in, local_out, Some(&closing), None).await;
         });
         answer_once(&mut client).await;
 
@@ -2270,7 +2393,7 @@ mod tests {
         let (local_out, mut requests) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
             let closing = CancellationToken::new();
-            let _ = super::pump(server, local_in, local_out, Some(&closing)).await;
+            let _ = super::pump(server, local_in, local_out, Some(&closing), None).await;
         });
         answer_once(&mut client).await;
         client.send(Message::text("request")).await.unwrap();
