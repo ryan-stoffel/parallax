@@ -18,10 +18,12 @@
 // always has, so it compares with earlier runs and with T3. `appConnect` dials as the desktop app
 // does away from home (PLX-1549): a home LAN route that doesn't answer, then the relay. The LAN
 // route is a private address on none of this computer's networks, 10.255.255.1:7341 unless this
-// computer is on 10/8, checked at start (PLX-1571). A plxd from PLX-1553 on starts the relay at
-// once beside such a route, so `appConnect` sits near `connect`. An older plxd gives the LAN route
-// a 200 ms head start, and one from PLX-1549 opens the relay's connection during it. `appDial`
-// counts those early connections and, with --timings, the dials whose relay waited a head start.
+// computer is on 10/8, checked at start (PLX-1571). On macOS and Linux a plxd from PLX-1553 on
+// starts the relay at once beside such a route, so `appConnect` sits near `connect`. On Windows,
+// where plxd reads no interfaces, and with an older plxd, the LAN route gets a 200 ms head start,
+// and a plxd from PLX-1549 opens the relay's connection during it. `appDial` counts those early
+// connections and, with --timings, the dials that mark the relay's turn and those whose relay
+// waited a head start. A plxd from before PLX-1549 marks no turn.
 //
 // Each counted connect prints a line with its start offset, its times, and, with --timings, its
 // slowest stage gap and relay stage, and relay-probe.json keeps every connect and round trip in
@@ -572,6 +574,7 @@ async function checkSignedIn(release) {
       const [connect, firstEvent, appConnect, appFirstEvent, trips] = [[], [], [], [], []];
       let appEarly = 0;
       let appHeadStart = 0;
+      let appMarked = 0;
       const stageSamples = [];
       // Every counted dial in attempt order, so index i is stageSamples[i], and every round trip,
       // each with its start offset from here (PLX-1584).
@@ -599,8 +602,13 @@ async function checkSignedIn(release) {
               appFirstEvent.push(opened.firstEventMs);
               if (opened.early) appEarly++;
               // The relay route's turn against the dial's start: about 0, or the 200 ms head start.
+              // A plxd from before PLX-1549 marks no turn, so its dials count toward neither.
               const at = (name) => stages.find((row) => row.kind === "connect-timing" && row.stage === name)?.ms;
-              if (at("relay_route_start") - at("dial_start") >= 100) appHeadStart++;
+              const [turn, start] = [at("relay_route_start"), at("dial_start")];
+              if (turn !== undefined && start !== undefined) {
+                appMarked++;
+                if (turn - start >= 100) appHeadStart++;
+              }
               app.close();
               continue;
             }
@@ -634,7 +642,7 @@ async function checkSignedIn(release) {
           }
         }
         if (appConnect.length) {
-          metrics.appDial = { early: appEarly, of: appConnect.length, route: lanRoute, ...(options.timings && { headStart: appHeadStart }) };
+          metrics.appDial = { early: appEarly, of: appConnect.length, route: lanRoute, ...(options.timings && { marked: appMarked, headStart: appHeadStart }) };
         }
       }
       return `medians of ${STREAMS} streams of each dial and ${ROUND_TRIPS} round trips`;
@@ -726,13 +734,22 @@ function report(release, signedIn) {
   // The app's dial away from home, which T3 has no counterpart for. Its own line, so `connect`
   // above stays the relay-only dial every earlier run timed (PLX-1549).
   const appDial = metrics.appDial;
-  // A plxd from PLX-1553 on starts the relay at once beside the stand-in, so no head start and no
-  // early connection is what it should show (PLX-1571).
+  // On macOS and Linux a plxd from PLX-1553 on starts the relay at once beside the stand-in, so no
+  // head start and no early connection is what it should show (PLX-1571). Only dials that mark the
+  // relay's turn say whether it waited.
+  const { marked, headStart } = appDial ?? {};
+  const turnLine =
+    marked === 0
+      ? "this plxd doesn't mark the relay's turn, so whether it waited a head start isn't known"
+      : marked !== undefined &&
+        line(
+          headStart ? `the relay waited a head start on ${headStart} of ${marked}` : `the relay started at once on each of ${marked}`,
+          marked < appDial.of && `${appDial.of - marked} of ${appDial.of} didn't mark the relay's turn`,
+        );
   const appLine = metrics.appConnect && line(
     `connect ${metrics.appConnectMs} ms, ${tail(metrics.appConnect)}`,
     `first event ${metrics.appFirstEventMs} ms, ${tail(metrics.appFirstEvent)}`,
-    appDial.headStart !== undefined &&
-      (appDial.headStart ? `the relay waited a head start on ${appDial.headStart} of ${appDial.of}` : "the relay started at once on each"),
+    turnLine,
     appDial.early > 0 && `the relay's connection opened early on ${appDial.early} of ${appDial.of}`,
   );
 
