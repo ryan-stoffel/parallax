@@ -375,6 +375,11 @@ export const settingsIndex: SettingEntry[] = [
       msg("Inbox, by activity, or Traditional, in a folder per repo"),
       msg("sidebar inbox traditional classic beta folders repos group nav pinned projects"),
     ],
+    [
+      msg("Rounded corners"),
+      msg("Round the workspace's corners beside the sidebar"),
+      msg("square radius curve edge card shape"),
+    ],
     [msg("Projects"), msg("In the sidebar's head, or under More"), msg("sidebar nav pages edit")],
     [
       msg("Pull requests"),

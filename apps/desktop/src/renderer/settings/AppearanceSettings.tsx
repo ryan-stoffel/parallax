@@ -440,11 +440,12 @@ const modes: { value: SidebarMode; name: string }[] = [
 ];
 
 /**
- * Appearance's Sidebar (0094): which sidebar shows, where Traditional's pages show (0090), and
- * the Working and Archived drawers' behavior.
+ * Appearance's Sidebar (0094): which sidebar shows, whether the workspace beside it has round
+ * corners, where Traditional's pages show (0090), and the Working and Archived drawers' behavior.
  */
 function SidebarSettings() {
   const mode = sidebarMode.use();
+  const { roundedCorners } = useAppearance();
   const nav = { ...navDefaults, ...sidebarNav.use() };
   const choices = useNavChoices();
   const prefs = sidebarPrefs.use();
@@ -463,6 +464,19 @@ function SidebarSettings() {
           onChange={(next) => sidebarMode.set(next)}
         />
       </Row>
+      {/* Linux's workspace is always square (index.css). */}
+      {window.parallax.platform !== "linux" && (
+        <Row
+          title={t("Rounded corners")}
+          description={t("Round the workspace's corners beside the sidebar. Off, they're square.")}
+        >
+          <Switch
+            label={t("Rounded corners")}
+            checked={roundedCorners}
+            onChange={(next) => setAppearance({ roundedCorners: next })}
+          />
+        </Row>
+      )}
       {/* Traditional's head rows. They show in Inbox too, so search finds them, and apply on switching. */}
       {choices.map(({ id, label }) => (
         <Row
