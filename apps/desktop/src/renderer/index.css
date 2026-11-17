@@ -811,6 +811,36 @@ body {
   }
 }
 
+/* The side panel slides in from the right and the terminal drawer up from the bottom, as the
+   sidebar does. Only the margin moves, so dragging either to resize stays instant. An expanded
+   side panel takes the main pane's place without a slide. */
+#side-panel:not([data-expanded]) {
+  transition:
+    margin-right 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    display 240ms allow-discrete;
+}
+#side-panel:not([data-expanded])[hidden] {
+  margin-right: calc(-1 * var(--side-panel-width));
+  pointer-events: none;
+}
+#terminal-drawer {
+  transition:
+    margin-bottom 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    display 240ms allow-discrete;
+}
+#terminal-drawer[hidden] {
+  margin-bottom: calc(-1 * var(--drawer-height));
+  pointer-events: none;
+}
+@starting-style {
+  #side-panel:not([data-expanded]):not([hidden]) {
+    margin-right: calc(-1 * var(--side-panel-width));
+  }
+  #terminal-drawer:not([hidden]) {
+    margin-bottom: calc(-1 * var(--drawer-height));
+  }
+}
+
 /* With Settings › Beta's Tabs off (App.tsx), the workspace is one surface beside the sidebar,
    including an expanded side panel. */
 .workspace-shell[data-sidebar-open="true"] {
