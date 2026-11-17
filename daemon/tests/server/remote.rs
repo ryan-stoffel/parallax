@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -1480,5 +1481,254 @@ async fn frames_behind_a_ws_upgrade_refused_for_its_ticket_key_or_origin_are_dro
     assert_eq!(refused_upgrade(elsewhere), (403, forbidden));
 
     assert_eq!(device_name(&mut client).await, before);
+    server.stop().await;
+}
+
+/// A dial `plxd dial` hands to the plxd at `socket`, whose data folder holds the session for
+/// `fingerprint`, with `lines` waiting from the app (PLX-1585): plxd's answer, and the
+/// connection's lines and writer.
+async fn dial_through(
+    socket: &Path,
+    route: &str,
+    fingerprint: &str,
+    lines: &[&str],
+) -> (
+    Value,
+    tokio::io::Lines<BufReader<tokio::io::ReadHalf<plxd::transport::Stream>>>,
+    tokio::io::WriteHalf<plxd::transport::Stream>,
+) {
+    let stream = plxd::transport::connect(socket).await.unwrap();
+    let (read, mut write) = tokio::io::split(stream);
+    let mut read = BufReader::new(read).lines();
+    write.write_all(b"PLXD-DIAL/1\n").await.unwrap();
+    let hello: Value = serde_json::from_str(&read.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(hello["dial"], 1, "{hello}");
+    let request = serde_json::json!({
+        "routes": [route],
+        "remote": fingerprint,
+        "timings": true,
+        "lines": lines,
+    });
+    write
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let answer = timeout(PATIENCE, read.next_line()).await.unwrap();
+    let answer: Value = serde_json::from_str(&answer.unwrap().unwrap()).unwrap();
+    (answer, read, write)
+}
+
+/// The names of the timing marks plxd kept for a dial.
+fn stages(answer: &Value) -> Vec<String> {
+    answer["connected"]["timings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("not connected: {answer}"))
+        .iter()
+        .map(|mark| mark[1].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_dial_through_the_local_plxd_resumes_with_early_data_until_the_host_restarts() {
+    let port = free_port();
+    let dir = temp_dir();
+    let host_config = || {
+        let mut config = InProcess::config(dir.path());
+        config.remote_address = Some(LOOPBACK);
+        config.remote_port = port;
+        config
+    };
+    let host = InProcess::start(host_config());
+    let mut client = Client::ready(&host.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let laptop = temp_dir();
+    let code = new_code(&mut client).await;
+    let route = format!("127.0.0.1:{port}");
+    let paired = remote::pair(std::slice::from_ref(&route), &code, "laptop", laptop.path())
+        .await
+        .unwrap();
+    // The laptop's own plxd, which dials for its `plxd dial`.
+    let local = InProcess::start(InProcess::config(laptop.path()));
+    let subscribe = r#"{"jsonrpc":"2.0","id":2,"method":"events/subscribe","params":{"after":0}}"#;
+    let dial = async |expected: Option<&str>| {
+        let lines = [INITIALIZE, subscribe];
+        let (answer, mut read, write) =
+            dial_through(&local.socket, &route, &paired.fingerprint, &lines).await;
+        let stages = stages(&answer);
+        let early = ["early_data_accepted", "early_data_refused"];
+        let sent = stages.iter().find(|stage| early.contains(&stage.as_str()));
+        assert_eq!(sent.map(String::as_str), expected, "{stages:?}");
+        // One more round trip, so the ticket the host sent after the client's Finished is in.
+        let list = r#"{"jsonrpc":"2.0","id":3,"method":"thread/list","params":{}}"#;
+        let mut write = write;
+        write
+            .write_all(format!("{list}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut answered = Vec::new();
+        while answered.len() < 3 {
+            let line = timeout(PATIENCE, read.next_line()).await.unwrap();
+            let message: Value = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
+            if let Some(id) = message["id"].as_u64() {
+                assert!(message["error"].is_null(), "{message}");
+                answered.push(id);
+            }
+        }
+        assert_eq!(answered, [1, 2, 3]);
+        drop((read, write));
+    };
+    // A full handshake gets a ticket, and the next dial sends its upgrade, `initialize`, and
+    // subscription with the `ClientHello`.
+    dial(None).await;
+    dial(Some("early_data_accepted")).await;
+    dial(Some("early_data_accepted")).await;
+    // A restarted host has no tickets: it refuses the early data and the dial goes on in full.
+    drop(client);
+    host.stop().await;
+    let host = InProcess::start(host_config());
+    wait_listening(port, true).await;
+    dial(Some("early_data_refused")).await;
+    dial(Some("early_data_accepted")).await;
+    local.stop().await;
+    host.stop().await;
+}
+
+/// Accepts any certificate, for a test client that only needs a session to resume.
+#[derive(Debug)]
+struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        let algorithms = &self.0.signature_verification_algorithms;
+        rustls::crypto::verify_tls12_signature(message, cert, dss, algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        let algorithms = &self.0.signature_verification_algorithms;
+        rustls::crypto::verify_tls13_signature(message, cert, dss, algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// Reads what the host sends within `wait`, processing it, and gives back the plaintext.
+fn read_for(
+    conn: &mut rustls::ClientConnection,
+    tcp: &mut std::net::TcpStream,
+    wait: Duration,
+) -> Vec<u8> {
+    use std::io::Read as _;
+    tcp.set_read_timeout(Some(wait)).unwrap();
+    let mut plain = Vec::new();
+    loop {
+        match conn.read_tls(tcp) {
+            Ok(0) => break,
+            Ok(_) => {
+                conn.process_new_packets().unwrap();
+                let _ = conn.reader().read_to_end(&mut plain);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+    plain
+}
+
+/// Only a session's `/ws` upgrade runs on 0-RTT early data. Any other request sent there, here the
+/// descriptor, is answered only once the client's Finished checked out (PLX-1585).
+#[tokio::test]
+async fn a_request_other_than_ws_in_early_data_waits_for_the_handshake() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let answered = tokio::task::spawn_blocking(move || {
+        use std::io::{Read as _, Write as _};
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        config.enable_early_data = true;
+        let config = Arc::new(config);
+        let name = rustls::pki_types::ServerName::try_from("parallax").unwrap();
+        let request = format!(
+            "GET /.well-known/parallax HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        // A full handshake, for a ticket.
+        let mut conn = rustls::ClientConnection::new(Arc::clone(&config), name.clone()).unwrap();
+        let mut tcp = std::net::TcpStream::connect((LOOPBACK, port)).unwrap();
+        let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+        tls.write_all(request.as_bytes()).unwrap();
+        let mut first = Vec::new();
+        let _ = tls.read_to_end(&mut first);
+        assert!(first.starts_with(b"HTTP/1.1 200"), "{}", String::from_utf8_lossy(&first));
+
+        // The request as early data, with the ClientHello, and no Finished yet.
+        let mut conn = rustls::ClientConnection::new(config, name).unwrap();
+        conn.early_data()
+            .expect("the ticket allows early data")
+            .write_all(request.as_bytes())
+            .unwrap();
+        let mut tcp = std::net::TcpStream::connect((LOOPBACK, port)).unwrap();
+        while conn.wants_write() {
+            conn.write_tls(&mut tcp).unwrap();
+        }
+        let before = read_for(&mut conn, &mut tcp, Duration::from_millis(500));
+        assert!(conn.is_early_data_accepted());
+        assert!(before.is_empty(), "answered before the Finished");
+        // The Finished, and then the answer.
+        while conn.wants_write() {
+            conn.write_tls(&mut tcp).unwrap();
+        }
+        read_for(&mut conn, &mut tcp, PATIENCE)
+    })
+    .await
+    .unwrap();
+    assert!(
+        answered.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&answered)
+    );
+    drop(client);
     server.stop().await;
 }

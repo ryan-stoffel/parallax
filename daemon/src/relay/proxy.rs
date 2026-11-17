@@ -26,13 +26,17 @@ pub(super) struct Proxy {
 }
 
 impl Proxy {
-    /// The proxy for `host:port` this process's environment names, if any.
+    /// The proxy for `host:port` this process's environment names, if any. Inside a plxd that
+    /// dials for `plxd dial`, that `dial`'s environment counts (PLX-1585).
     ///
     /// # Errors
     ///
     /// When the variable is set but plxd can't use it. plxd doesn't go direct then, since a proxy
     /// is usually a network's policy.
     pub(super) fn from_env(host: &str, port: u16) -> io::Result<Option<Self>> {
+        if let Some(scope) = crate::local_dial::current() {
+            return Self::choose(host, port, |name| scope.proxy_setting(name));
+        }
         Self::choose(host, port, |name| std::env::var(name).ok())
     }
 

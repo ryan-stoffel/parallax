@@ -8,9 +8,14 @@ use std::time::Instant;
 static START: OnceLock<Option<Instant>> = OnceLock::new();
 static LINES: AtomicUsize = AtomicUsize::new(0);
 
-/// Whether this process explicitly enabled timings. Cached before a dial starts.
+/// Whether this process explicitly enabled timings, or the dial this task runs for `plxd dial`
+/// did. Cached before a dial starts.
 #[must_use]
 pub fn enabled() -> bool {
+    // Inside a plxd that dials for `plxd dial`, that `dial` decides (PLX-1585).
+    if let Some(scope) = crate::local_dial::current() {
+        return scope.timings();
+    }
     START
         .get_or_init(|| {
             (std::env::var("PLXD_CONNECT_TIMINGS").as_deref() == Ok("1")).then(Instant::now)
@@ -20,7 +25,11 @@ pub fn enabled() -> bool {
 
 /// A fixed code-defined checkpoint, in milliseconds since the first instrumented entry.
 /// At most 64 lines per process, including retries and concurrent routes.
+/// Inside a plxd that dials for `plxd dial`, the mark goes back to that `dial` (PLX-1585).
 pub fn mark(stage: &'static str) {
+    if let Some(scope) = crate::local_dial::current() {
+        return scope.mark(false, stage, None);
+    }
     if !enabled() || LINES.fetch_add(1, Ordering::Relaxed) >= 64 {
         return;
     }
@@ -67,6 +76,12 @@ pub fn server(value: &str) {
         let Ok(ms) = duration.parse::<f64>() else {
             continue;
         };
+        if let Some(scope) = crate::local_dial::current() {
+            if ms.is_finite() && (0.0..=60_000.0).contains(&ms) {
+                scope.mark(true, name, Some(ms));
+            }
+            continue;
+        }
         if enabled()
             && ms.is_finite()
             && (0.0..=60_000.0).contains(&ms)
@@ -75,6 +90,41 @@ pub fn server(value: &str) {
             eprintln!("connect-server-timing {name} {ms:.3}");
         }
     }
+}
+
+/// Milliseconds since the first instrumented entry, when timings are on.
+#[must_use]
+pub fn elapsed_ms() -> Option<f64> {
+    if !enabled() {
+        return None;
+    }
+    START
+        .get()
+        .copied()
+        .flatten()
+        .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+}
+
+/// Prints a mark the plxd that dialed for this `plxd dial` kept (PLX-1585): a checkpoint at `ms`
+/// since this process's first entry, or the relay's duration with `server`. Like the others, only
+/// a plain name and a bounded finite number.
+pub fn replay(server: bool, name: &str, ms: f64) {
+    let plain =
+        (1..=40).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    if !enabled()
+        || !plain
+        || !ms.is_finite()
+        || !(0.0..=60_000.0).contains(&ms)
+        || LINES.fetch_add(1, Ordering::Relaxed) >= 64
+    {
+        return;
+    }
+    let kind = if server {
+        "connect-server-timing"
+    } else {
+        "connect-timing"
+    };
+    eprintln!("{kind} {name} {ms:.3}");
 }
 
 #[cfg(test)]
