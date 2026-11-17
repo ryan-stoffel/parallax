@@ -2013,6 +2013,7 @@ export function App() {
                   hosts={hosts}
                   settingsClosed={settingsClosed.count}
                   onOpenTrackers={(hostId) => openSettings("issueTrackers", hostId)}
+                  onOpenSourceControl={(hostId) => openSettings("sourceControl", hostId)}
                   onStartThread={({ hostId, issue }, body) => {
                     // A GitHub issue in the repository of its name on its computer, else No repo.
                     // Another tracker's in the repository open there, else No repo.

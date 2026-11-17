@@ -119,6 +119,68 @@ export function sortIssues(entries: readonly IssueEntry[], sort: IssueSort): Iss
   return [...entries].sort(by[sort]);
 }
 
+/** A tracker account's key among every computer's: its computer, then its id. */
+export const accountKey = (a: ConnectionEntry) => `${a.hostId}\n${a.connection.id}`;
+
+/** A place New issue can file in, as its second dropdown lists it. */
+export interface ContainerChoice {
+  /** The account's key, then the container's id. */
+  value: string;
+  label: string;
+  /** Its account's site or workspace, as a heading, when the tracker has several accounts. */
+  group?: string;
+  account: ConnectionEntry;
+  containerId: string;
+}
+
+/**
+ * Every repository, team, or project of `accounts`, one tracker's, from each account's
+ * `containers` once read, by `accountKey`. With several accounts, as two Jira sites or two Linear
+ * workspaces have, each account's are under its site, or its name where it has none, and under
+ * its computer's name too when two computers hold an account of that name.
+ */
+export function containerChoices(
+  accounts: readonly ConnectionEntry[],
+  containers: Readonly<Record<string, readonly { id: string; name: string }[]>>,
+  hostNames: Readonly<Record<string, string>> = {},
+): ContainerChoice[] {
+  const name = (a: ConnectionEntry) => a.connection.site ?? a.connection.account;
+  const group = (a: ConnectionEntry) =>
+    accounts.length < 2
+      ? undefined
+      : accounts.some((b) => b !== a && name(b) === name(a))
+        ? `${name(a)} · ${hostNames[a.hostId] ?? a.hostId}`
+        : name(a);
+  return accounts.flatMap((account) =>
+    (containers[accountKey(account)] ?? []).map((c) => ({
+      value: `${accountKey(account)}\n${c.id}`,
+      label: c.name,
+      group: group(account),
+      account,
+      containerId: c.id,
+    })),
+  );
+}
+
+/** The tracker and the place New issue last filed in, which it opens on. */
+export interface IssuePick {
+  provider?: IssueProvider;
+  /** A `ContainerChoice`'s value. */
+  container?: string;
+}
+
+/** The tracker New issue opens on: the last one picked while it's connected, else the first connected. */
+export const pickedProvider = (saved: IssuePick, connected: readonly IssueProvider[]) =>
+  saved.provider && connected.includes(saved.provider) ? saved.provider : connected[0];
+
+/**
+ * The place New issue starts on among `choices`: the last one picked while it's still there, else
+ * the only one, else none.
+ */
+export const pickedContainer = (saved: IssuePick, choices: readonly ContainerChoice[]) =>
+  choices.find((c) => c.value === saved.container)?.value ??
+  (choices.length === 1 ? choices[0]!.value : "");
+
 /** The Board's columns, in order. Canceled issues have none. */
 export const boardColumns = [
   { id: "backlog", label: msg("Backlog") },

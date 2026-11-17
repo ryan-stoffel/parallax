@@ -43,6 +43,7 @@ import { IssueView } from "./IssueView";
 import { NewIssueDialog } from "./NewIssueDialog";
 import { notify } from "./notifications";
 import { keyTaken, Menu } from "./PullRequestsPage";
+import { TrackerSetupDialog } from "./settings/TrackerSetupDialog";
 import { age } from "./Sidebar";
 import { stored } from "./stored";
 import { TrackerLogo } from "./TrackerLogo";
@@ -74,11 +75,13 @@ const issuesView = stored<IssuesView>("parallax.issuesView", "list", (raw, fallb
  * couldn't be read says so above the rows, which still show the others'. A row opens its issue on
  * the page. J and K move between rows. Board shows the same issues as cards in a column per kind
  * of state (IssueBoard): dragging a card to another column moves its issue there on its tracker.
+ * With no tracker connected, the page offers each one's set-up, which opens over it.
  */
 export function IssuesPage({
   hosts,
   settingsClosed,
   onOpenTrackers,
+  onOpenSourceControl,
   onStartThread,
 }: {
   hosts: Host[];
@@ -87,6 +90,8 @@ export function IssuesPage({
   settingsClosed: number;
   /** Opens Settings › Issue trackers, on `hostId` when given. */
   onOpenTrackers: (hostId?: string) => void;
+  /** Opens Settings › Source control on a computer, where GitHub signs in. */
+  onOpenSourceControl: (hostId: string) => void;
   /** Opens New thread on the entry's computer with a draft of the issue and its `body`. */
   onStartThread: (entry: IssueEntry, body: string) => void;
 }) {
@@ -106,6 +111,8 @@ export function IssuesPage({
   const [chosen, setChosen] = useState<ReadonlySet<IssueProvider>>(new Set());
   const [open, setOpen] = useState<IssueEntry>();
   const [creating, setCreating] = useState(false);
+  // The tracker whose set-up is open over the page, from its empty state.
+  const [settingUp, setSettingUp] = useState<IssueProvider>();
   const view = issuesView.use();
   // The board's cards as dragged (issueMoves.ts), over what the computers last listed: a card
   // shows in its new column at once, and one moved to Done, which `issue/list` leaves out, stays
@@ -286,8 +293,20 @@ export function IssuesPage({
         <NewIssueDialog
           accounts={accounts}
           hosts={hosts}
+          setUpOn={supported[0]?.id}
           onCreated={(hostId) => void load([hostId])}
+          onConnected={(hostId) => void load([hostId])}
+          onSourceControl={onOpenSourceControl}
           onDone={() => setCreating(false)}
+        />
+      )}
+      {settingUp && supported[0] && (
+        <TrackerSetupDialog
+          provider={settingUp}
+          hostId={supported[0].id}
+          onSourceControl={() => onOpenSourceControl(supported[0]!.id)}
+          onConnected={() => void load([supported[0]!.id])}
+          onDone={() => setSettingUp(undefined)}
         />
       )}
       <div className={open ? "hidden" : "contents"}>
@@ -421,9 +440,19 @@ export function IssuesPage({
             title={t("No tracker connected")}
             body={t("Connect GitHub, Linear, or Jira to see the issues assigned to you.")}
             action={
-              <Button variant="outline" onClick={() => onOpenTrackers(supported[0]?.id)}>
-                {t("Connect a tracker")}
-              </Button>
+              <div className="flex gap-2">
+                {providers.map((p) => (
+                  <Button
+                    key={p}
+                    variant="outline"
+                    aria-label={t("Set up {{name}}", { name: providerNames[p] })}
+                    onClick={() => setSettingUp(p)}
+                  >
+                    <TrackerLogo provider={p} />
+                    {providerNames[p]}
+                  </Button>
+                ))}
+              </div>
             }
             className="flex-1 justify-center"
           />

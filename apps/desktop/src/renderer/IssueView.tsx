@@ -15,8 +15,9 @@ import { TrackerLogo } from "./TrackerLogo";
 import { Button, EmptyState, IconButton, Picker } from "./ui";
 
 /**
- * One issue on the Issues page, read with `issue/get` through the computer it was listed on: Back
- * to the list, or Escape; its title, where it is filed, and who has it; a picker that moves it to
+ * One issue on the Issues page, read with `issue/get` through the computer it was listed on: a
+ * breadcrumb whose Issues goes back to the list, as Escape does; its title, where it is filed, and
+ * who has it; a picker that moves it to
  * another state; Start thread, which drafts a New thread about it; Open in its tracker; then its
  * description and comments as Markdown, and a box to comment. Each write reads the issue again and
  * tells the page, which reads its list again.
@@ -108,25 +109,33 @@ export function IssueView({
   const repo = issue.provider === "github" ? issue.container.name : "";
   return (
     <>
-      {/* Laid out as the header under it, so the arrow sits on the title's left edge. */}
-      <nav aria-label={t("Issue")} className="shrink-0 px-4 pt-2">
-        <div className="mx-auto flex max-w-3xl">
-          <Button size="sm" variant="quiet" onClick={onBack} className="-ml-2.5">
-            <icons.back aria-hidden />
-            {t("Issues")}
-          </Button>
-        </div>
-      </nav>
       <div className="flex min-h-0 flex-1 flex-col">
-        <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
-          <div className="mx-auto max-w-3xl">
+        <header className="shrink-0 border-b border-border px-4 pt-5 pb-3">
+          {/* One column on the title's left edge, its four lines an even gap apart. */}
+          <div className="mx-auto flex max-w-3xl flex-col gap-2.5">
+            <nav
+              aria-label={t("Breadcrumb")}
+              className="flex min-w-0 items-center gap-1 text-meta text-muted-foreground"
+            >
+              <button
+                type="button"
+                onClick={onBack}
+                className="shrink-0 rounded-sm hover:text-foreground hover:underline"
+              >
+                {t("Issues")}
+              </button>
+              <icons.next aria-hidden className="size-3 shrink-0 text-faint-foreground" />
+              <span aria-current="page" className="truncate">
+                {issue.provider === "github" ? `${issue.container.name} ${issue.key}` : issue.key}
+              </span>
+            </nav>
             <h2
               className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
               title={issue.title}
             >
-              {issue.title} <span className="font-normal text-faint-foreground">{issue.key}</span>
+              {issue.title}
             </h2>
-            <div className="mt-2 flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
               <TrackerLogo provider={issue.provider} className="size-4 shrink-0" />
               <span className="truncate font-medium text-foreground">{issue.container.name}</span>
               {issue.assignee && <span className="shrink-0">· {issue.assignee}</span>}
@@ -134,7 +143,7 @@ export function IssueView({
                 · {t("Updated {{when}}", { when: ago(issue.updatedAt) })}
               </span>
             </div>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <Picker
                 field
                 label={t("State")}

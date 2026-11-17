@@ -3,6 +3,9 @@ import { expect, test } from "vite-plus/test";
 import type { Issue, IssueProvider } from "../protocol/generated/protocol";
 import {
   boardGroups,
+  containerChoices,
+  pickedContainer,
+  pickedProvider,
   draftGroup,
   dropState,
   issueDraft,
@@ -145,4 +148,62 @@ test("a drop moves an issue to the column's first state in the tracker's order, 
   expect(dropState(named, "backlog")?.id).toBe("b");
   expect(dropState(named, "todo")?.id).toBe("o");
   expect(dropState(named, "done")?.id).toBe("d");
+});
+
+const account = (hostId: string, id: string, site: string) => ({
+  hostId,
+  connection: { id, provider: "jira" as const, account: "ada@example.com", site },
+});
+
+test("one account's places list with no heading, and several accounts' under each site", () => {
+  const acme = account("mac", "j1", "acme.atlassian.net");
+  const other = account("mac", "j2", "other.atlassian.net");
+  const containers = {
+    "mac\nj1": [{ id: "OPS", name: "Operations" }],
+    "mac\nj2": [
+      { id: "OPS", name: "Ops" },
+      { id: "WEB", name: "Website" },
+    ],
+  };
+  expect(containerChoices([acme], containers).map((c) => [c.group, c.label])).toEqual([
+    [undefined, "Operations"],
+  ]);
+  const both = containerChoices([acme, other], containers);
+  expect(both.map((c) => [c.group, c.label])).toEqual([
+    ["acme.atlassian.net", "Operations"],
+    ["other.atlassian.net", "Ops"],
+    ["other.atlassian.net", "Website"],
+  ]);
+  // The same project key on two sites is two choices.
+  expect(new Set(both.map((c) => c.value)).size).toBe(3);
+  expect(both[1]).toMatchObject({ account: other, containerId: "OPS" });
+});
+
+test("two computers' accounts on one site are told apart by their computer", () => {
+  const groups = containerChoices(
+    [account("mac", "j1", "acme.atlassian.net"), account("mini", "j9", "acme.atlassian.net")],
+    {
+      "mac\nj1": [{ id: "OPS", name: "Operations" }],
+      "mini\nj9": [{ id: "OPS", name: "Operations" }],
+    },
+    { mac: "MacBook", mini: "Mac mini" },
+  ).map((c) => c.group);
+  expect(groups).toEqual(["acme.atlassian.net · MacBook", "acme.atlassian.net · Mac mini"]);
+});
+
+test("New issue opens on the last tracker and place picked, while they're still there", () => {
+  const choices = containerChoices([account("mac", "j1", "acme.atlassian.net")], {
+    "mac\nj1": [
+      { id: "OPS", name: "Operations" },
+      { id: "REL", name: "Release" },
+    ],
+  });
+  const saved = { provider: "jira" as const, container: "mac\nj1\nREL" };
+  expect(pickedProvider(saved, ["github", "jira"])).toBe("jira");
+  expect(pickedProvider(saved, ["github", "linear"])).toBe("github");
+  expect(pickedProvider({}, [])).toBeUndefined();
+  expect(pickedContainer(saved, choices)).toBe("mac\nj1\nREL");
+  // A place that's gone picks nothing, unless only one is left.
+  expect(pickedContainer({ container: "mac\nj1\nGONE" }, choices)).toBe("");
+  expect(pickedContainer({}, choices.slice(0, 1))).toBe("mac\nj1\nOPS");
 });

@@ -70,6 +70,10 @@ const containers: Record<string, IssueContainer[]> = {
     { id: "OPS", name: "Operations" },
     { id: "REL", name: "Release" },
   ],
+  [JIRA_OLD]: [
+    { id: "PLAT", name: "Platform" },
+    { id: "SUP", name: "Support" },
+  ],
 };
 
 const state = (provider: IssueProvider, id: string) => states[provider].find((s) => s.id === id)!;
