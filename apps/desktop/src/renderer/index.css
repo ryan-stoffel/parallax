@@ -371,7 +371,7 @@
   text-underline-offset: 2px;
 }
 
-/* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
+/* A nightly build (appearance.ts sets .nightly, unless Settings > Appearance turns it off): a sky at the top of the sidebar, with stars and
    cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons. A dev
    build (.dev, 0103) has blueprint paper there instead, with a grid and drafting marks. .stage is
    either, for what the two share.

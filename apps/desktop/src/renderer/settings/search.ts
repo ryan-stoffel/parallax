@@ -310,6 +310,11 @@ export const settingsIndex: SettingEntry[] = [
     [msg("Light theme"), msg("Shown in light mode"), msg("theme colors vs code")],
     [msg("Dark theme"), msg("Shown in dark mode"), msg("theme colors vs code")],
     [
+      msg("Nightly style"),
+      msg("The nightly sky, or dev blueprint, over the sidebar and on Send"),
+      msg("dev blueprint banner stars sky send button art"),
+    ],
+    [
       msg("Installed themes"),
       msg("VS Code themes from Open VSX"),
       msg("open vsx vscode extensions add theme"),

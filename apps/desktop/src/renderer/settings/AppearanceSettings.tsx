@@ -8,7 +8,7 @@ import {
   type WindowMaterial,
 } from "../../preload/bridge";
 import { msg } from "../../i18n";
-import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
+import { buildKind, seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
 import { chatPrefs, setChatPrefs, type ChatPrefs } from "../prefs";
 import { useNavChoices } from "../SidebarNav";
@@ -227,6 +227,18 @@ export function AppearanceSettings({
         <Row title={t("Dark theme")} description={t("Shown in dark mode.")}>
           {themePicker("dark")}
         </Row>
+        {buildKind() && (
+          <Row
+            title={t("Nightly style")}
+            description={t("The nightly sky, or dev blueprint, over the sidebar and on Send.")}
+          >
+            <Switch
+              label={t("Nightly style")}
+              checked={appearance.buildArt}
+              onChange={(buildArt) => setAppearance({ buildArt })}
+            />
+          </Row>
+        )}
         <div data-setting="installed-themes" className="px-4 py-3">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">

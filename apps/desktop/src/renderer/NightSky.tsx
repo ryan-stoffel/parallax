@@ -2,7 +2,7 @@ import { useId } from "react";
 
 // A nightly build's stars, glow, and clouds in the sidebar's top row, or a dev build's blueprint
 // grid and dimension lines (0103). index.css shows the box only under .stage and the build's own
-// art in it, by .nightly or .dev, which main.tsx sets. Drawn 640 by 56 and cropped to the sidebar,
+// art in it, by .nightly or .dev, which appearance.ts sets. Drawn 640 by 56 and cropped to the sidebar,
 // so they never scale. The sky or paper behind them is the sidebar's own background
 // (.night-sky-host in index.css).
 // Nothing here animates: Chromium repaints an animated SVG on every frame, which cost an idle
