@@ -431,7 +431,8 @@ export function IssuesPage({
                 ...projects.map((c) => ({ value: c.value, label: c.label, group: c.group })),
               ]}
               search={projects.length > 8 ? t("Search") : undefined}
-              className="h-7 max-w-64 py-0"
+              // Shaped as the chips beside it, and on, as they are, while a project is picked.
+              className={`h-7 max-w-64 rounded-full! border py-0! pr-2! pl-2.5! text-meta! ${filters.project ? "border-transparent bg-selected text-foreground!" : "border-border"}`}
             />
             {filtered && (
               <Button
