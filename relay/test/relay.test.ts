@@ -1456,6 +1456,59 @@ describe("standby spare object (PLX-1574)", () => {
     }
   });
 
+  it("keeps the standby when the host's object hibernates between two spares", async () => {
+    const { ids, spy } = asked();
+    try {
+      const { host, token, control } = await online();
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const first = JSON.parse((await control.next()) as string) as Open;
+      await expect.poll(() => ids.length).toBe(1);
+      opened(await join(host, first));
+      // Idle between connects, the host's object hibernates and loses its memory.
+      await evictDurableObject(hosts.get(hosts.idFromName(host.id)));
+      expect(await (opened(await connect(host, token))).next()).toBe("ready");
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true, stream: ids[0] });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("gives a spare request that replaces one still arming the standby, and closes the replaced one", async () => {
+    const { ids, spy } = asked();
+    const arm = StreamRelay.prototype.arm;
+    let held = "";
+    let release!: () => void;
+    const resume = new Promise<void>((resolve) => (release = resolve));
+    const arming = vi.spyOn(StreamRelay.prototype, "arm").mockImplementation(async function (this: StreamRelay, args) {
+      if (!held) {
+        held = args.stream;
+        await resume;
+      }
+      return arm.call(this, args);
+    });
+    try {
+      const { host, control } = await online();
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      await expect.poll(() => held).not.toBe("");
+      await expect.poll(() => ids.length).toBe(1);
+      // As plxd does after doubting its link: it drops the unannounced spare and asks again.
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      expect(open).toMatchObject({ spare: true, stream: ids[0] });
+      release();
+      await vi.waitFor(async () => expect(await openStreams(host)).toEqual({ [ids[0]!]: { spare: true } }));
+      // The replaced spare was never announced, and its object keeps nothing.
+      await vi.waitFor(async () =>
+        expect(await runInDurableObject(streamObject(held), (_, state) => state.storage.list())).toEqual(new Map()),
+      );
+    } finally {
+      release();
+      arming.mockRestore();
+      spy.mockRestore();
+    }
+  });
+
   it("leaves the standby to spares: a client with no spare gets a new object", async () => {
     const { ids, spy } = asked();
     try {

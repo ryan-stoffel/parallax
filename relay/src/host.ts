@@ -159,11 +159,6 @@ export class HostRelay extends DurableObject<Env> {
   private delivering = false;
   /** Today's bytes through this host's streams, as saved. */
   private traffic?: { day: string; bytes: number };
-  /** The object the next spare stream uses, made one spare ahead (PLX-1574). A stream object
-   *  Cloudflare made a moment ago is sometimes slow to reach for its first seconds, and a client
-   *  that takes a spare right after the last one would otherwise join one that new. Nothing is
-   *  stored in it until it's armed, so losing it with this object's memory costs nothing. */
-  private standby?: DurableObjectId;
   /** When plxd's control socket last closed or was replaced. In memory: an object evicted since then has been
    *  without plxd for longer than [`RECONNECT_WINDOW`]. */
   private hostLeft = 0;
@@ -230,10 +225,13 @@ export class HostRelay extends DurableObject<Env> {
       const streams = await this.streams();
       if (Object.keys(streams).length >= MAX_STREAMS)
         return { status: 429, error: "too_many_streams" } as Refusal;
-      const stream = (spare ? this.nextSpare() : this.env.STREAMS.newUniqueId()).toString();
+      const standby = spare ? await this.nextSpare() : undefined;
+      const stream = standby?.id ?? this.env.STREAMS.newUniqueId().toString();
       // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
       streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
-      await this.ctx.storage.put<Streams>("streams", streams);
+      // The next standby goes in the same write, so a spare still costs one confirmation.
+      if (standby) await this.ctx.storage.put({ streams, standby: standby.next });
+      else await this.ctx.storage.put<Streams>("streams", streams);
       return { stream, owner, host, proof };
     });
     if ("error" in reserved) return reserved;
@@ -277,19 +275,21 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /**
-   * The id for a spare: [`standby`] when there is one, else a new object. Makes the next standby
-   * now, with a call that stores nothing, so it has aged by the time a spare needs it.
+   * The id for a spare and the next standby (PLX-1574). A stream object Cloudflare made a moment
+   * ago is sometimes slow to reach for its first seconds, so each spare takes the standby the last
+   * spare made, saved as `standby`, else a new object. The next standby is made now, with a call
+   * that stores nothing, so it has aged by the time a spare needs it. The caller saves `next`.
+   * A standby holds nothing, no socket and no alarm, so one that's never used costs nothing.
    */
-  private nextSpare() {
-    const id = this.standby ?? this.env.STREAMS.newUniqueId();
+  private async nextSpare() {
+    const saved = await this.ctx.storage.get<string>("standby");
     const next = this.env.STREAMS.newUniqueId();
-    this.standby = next;
     this.ctx.waitUntil(
       this.env.STREAMS.get(next)
         .hostJoined()
         .catch((error) => logError("host.standby", this.context(), error)),
     );
-    return id;
+    return { id: saved ?? this.env.STREAMS.newUniqueId().toString(), next: next.toString() };
   }
 
   /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
