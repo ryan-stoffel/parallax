@@ -74,6 +74,7 @@ mod github;
 mod graph;
 mod images;
 mod importer;
+mod issues;
 mod json;
 pub mod keystore;
 pub mod launch_agent;

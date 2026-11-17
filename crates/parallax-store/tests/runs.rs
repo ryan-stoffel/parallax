@@ -205,8 +205,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // and 43), the project computer
     // column (PLX-909's migration 48), the board items table (PLX-940's migration 49), the
     // orchestrator sessions table (PLX-937's migration 51), the You entries table (PLX-946's
-    // migration 52), the pull request guides table (PLX-1188's migration 58), or the saved secrets table
-    // (PLX-1558's migration 64).
+    // migration 52), the pull request guides table (PLX-1188's migration 58), the saved secrets table
+    // (PLX-1558's migration 64), or the issue connections table (PLX-1594's migration 65).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -226,7 +226,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE thread_runs; DROP TABLE run_attempts; DROP TABLE nodes;
              DROP TABLE runtime_requests; DROP TABLE graph_imports;
              DROP TABLE thread_lineage; DROP TABLE context_transfers; DROP TABLE secret_refs;
-             DROP TABLE saved_secrets;
+             DROP TABLE saved_secrets; DROP TABLE issue_connections;
              ALTER TABLE worktrees DROP COLUMN git_dir;
              ALTER TABLE worktrees DROP COLUMN base_dirty;
              ALTER TABLE projects DROP COLUMN icon_name;
