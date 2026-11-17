@@ -386,6 +386,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "hubs",
     "inbox",
     "integrationBranch",
+    "issues",
     "landing",
     "memory",
     "openPr",

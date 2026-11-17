@@ -334,7 +334,7 @@ pub(crate) async fn answer(
 }
 
 /// Refuses on a host with no keystore (Windows, PLX-23).
-fn need_keystore() -> Result<(), ErrorObject> {
+pub(crate) fn need_keystore() -> Result<(), ErrorObject> {
     if cfg!(any(target_os = "macos", target_os = "linux")) {
         return Ok(());
     }

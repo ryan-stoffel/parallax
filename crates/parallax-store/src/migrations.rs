@@ -1002,6 +1002,22 @@ const MIGRATIONS: &[Migration] = &[
             expires_at TEXT
         );",
     },
+    // Issue trackers (0107, PLX-1594): a Linear or Jira account `issue/connect` saved.
+    // `identity` is the tracker's stable ids for the account, which a rename doesn't change, and
+    // `account` and `site` are its names to show: the user and workspace on Linear, the email and
+    // site host on Jira. The token is in the host's keystore under the id, never here.
+    Migration {
+        version: 65,
+        sql: "CREATE TABLE issue_connections (
+            id TEXT NOT NULL PRIMARY KEY,
+            provider TEXT NOT NULL,
+            identity TEXT NOT NULL,
+            account TEXT NOT NULL,
+            site TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE (provider, identity)
+        );",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

@@ -32,7 +32,9 @@
 //! `check-ignore`, `ls-tree`, `cat-file`, and `diff` between two commits, none of which reads a file
 //! through a filter, all with hooks, the filesystem monitor, and any fetch for a partial clone's
 //! missing object off, and a diff with external diff, textconv, and nested submodule diffs off too.
-//! `gh` with fixed arguments outside any repository. `tailscale status`.
+//! `gh` with fixed arguments outside any repository, and with an issue's repository and number as
+//! `gh api graphql` variables. `tailscale status`. `curl` with a config on stdin, to Linear's API
+//! or a connected Jira site.
 
 use parallax_protocol::ErrorKind;
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -124,6 +126,11 @@ fn is_read(method: RequestName) -> bool {
         | M::GithubStatusGet
         | M::RemoteSessions
         | M::RelayId
+        // Issues assigned to the host's own tracker accounts, read with `gh` or `curl`.
+        | M::IssueConnections
+        | M::IssueList
+        | M::IssueGet
+        | M::IssueContainers
         // Opens only what its thread's readers can already read (0100), and a read-only phone
         // still gets notifications.
         | M::RelayPushKey
@@ -300,6 +307,11 @@ fn is_read(method: RequestName) -> bool {
         | M::SecretSave
         | M::SecretDelete
         | M::SecretUse
+        | M::IssueConnect
+        | M::IssueDisconnect
+        | M::IssueCreate
+        | M::IssueSetState
+        | M::IssueAddComment
         | M::OrchestrationDispatch
         | M::BundlePrepare
         | M::BundleRead

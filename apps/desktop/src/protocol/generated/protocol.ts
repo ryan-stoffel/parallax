@@ -1108,6 +1108,44 @@ export type ParallaxRequests = {
 	 */
 	"secret/use": { params: SecretUseParams, result: SecretUseResult },
 	/**
+	 * `issue/connections`: the issue trackers plxd reads on this computer (0107, PLX-1594).
+	 * Gated on the `issues` capability, like every method below through `issue/comment`.
+	 */
+	"issue/connections": { params: IssueConnectionsParams, result: IssueConnectionsResult },
+	/**
+	 * `issue/connect`: saves a Linear or Jira account once the tracker accepts its token.
+	 * Refused with `keychainUnavailable` on a host with no keystore.
+	 */
+	"issue/connect": { params: IssueConnectParams, result: IssueConnectResult },
+	/**
+	 * `issue/disconnect`: removes a saved account and its token.
+	 */
+	"issue/disconnect": { params: IssueDisconnectParams, result: IssueDisconnectResult },
+	/**
+	 * `issue/list`: the open issues assigned to you, on one connection or all of them.
+	 */
+	"issue/list": { params: IssueListParams, result: IssueListResult },
+	/**
+	 * `issue/get`: an issue's body, comments, and the states it can move to.
+	 */
+	"issue/get": { params: IssueGetParams, result: IssueDetail },
+	/**
+	 * `issue/containers`: the repositories, teams, or projects an issue can be filed in.
+	 */
+	"issue/containers": { params: IssueContainersParams, result: IssueContainersResult },
+	/**
+	 * `issue/create`: files an issue, assigned to you.
+	 */
+	"issue/create": { params: IssueCreateParams, result: Issue },
+	/**
+	 * `issue/setState`: moves an issue to another state.
+	 */
+	"issue/setState": { params: IssueSetStateParams, result: Issue },
+	/**
+	 * `issue/comment`: comments on an issue.
+	 */
+	"issue/comment": { params: IssueCommentParams, result: IssueComment },
+	/**
 	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
 	 * its `commandId`. Gated on the `orchestration` capability, like every
 	 * `orchestration/*` method.
@@ -1407,6 +1445,15 @@ export const REQUEST_METHODS = [
 	"secret/save",
 	"secret/delete",
 	"secret/use",
+	"issue/connections",
+	"issue/connect",
+	"issue/disconnect",
+	"issue/list",
+	"issue/get",
+	"issue/containers",
+	"issue/create",
+	"issue/setState",
+	"issue/comment",
 	"orchestration/dispatch",
 	"orchestration/subscribeShell",
 	"orchestration/subscribeThread",
@@ -12193,6 +12240,369 @@ export type SecretUseResult = {
 	 * 24 hours.
 	 */
 	file: string,
+};
+
+/**
+ * Params of `issue/connections`.
+ */
+export type IssueConnectionsParams = Record<symbol, never>;
+
+/**
+ * Result of `issue/connections`: GitHub while `gh` is signed in, then every saved connection.
+ */
+export type IssueConnectionsResult = {
+	/**
+	 * The connections.
+	 */
+	connections: Array<IssueConnection>,
+};
+
+/**
+ * A tracker account plxd reads issues from on this computer.
+ */
+export type IssueConnection = {
+	/**
+	 * `github` for `gh`'s sign-in, else a UUID.
+	 */
+	id: string,
+	/**
+	 * The tracker.
+	 */
+	provider: IssueProvider,
+	/**
+	 * Who it is signed in as: a GitHub login, a Linear user's name, or a Jira account's email.
+	 */
+	account: string,
+	/**
+	 * Where: a Linear workspace's name, or a Jira site's host, such as `acme.atlassian.net`.
+	 * Absent for GitHub.
+	 */
+	site?: string,
+};
+
+/**
+ * A tracker plxd reads issues from.
+ *
+ * A newer plxd may send a provider this version does not know; skip its connections and issues.
+ */
+export type IssueProvider = "github" | "linear" | "jira";
+
+/**
+ * Params of `issue/connect`: an account to save, which plxd checks with the tracker first.
+ * Connecting an account already saved replaces its token.
+ *
+ * A newer client may send a provider this version does not know; plxd refuses it.
+ */
+export type IssueConnectParams = { "provider": "linear",
+	/**
+	 * The key, from Linear's Settings › Security & access.
+	 */
+	apiKey: string, } | { "provider": "jira",
+	/**
+	 * The site, such as `acme.atlassian.net`, with or without `https://`.
+	 */
+	site: string,
+	/**
+	 * The account's email.
+	 */
+	email: string,
+	/**
+	 * An API token from id.atlassian.com.
+	 */
+	apiToken: string,
+};
+
+/**
+ * Result of `issue/connect`.
+ */
+export type IssueConnectResult = {
+	/**
+	 * The saved connection.
+	 */
+	connection: IssueConnection,
+};
+
+/**
+ * Params of `issue/disconnect`: removes a saved connection and its token. `github` and an
+ * unknown id change nothing.
+ */
+export type IssueDisconnectParams = {
+	/**
+	 * The connection's id.
+	 */
+	id: string,
+};
+
+/**
+ * Result of `issue/disconnect`.
+ */
+export type IssueDisconnectResult = Record<symbol, never>;
+
+/**
+ * Params of `issue/list`.
+ */
+export type IssueListParams = {
+	/**
+	 * Only this connection's issues. Absent reads every connection.
+	 */
+	connectionId?: string,
+};
+
+/**
+ * Result of `issue/list`: the open issues assigned to you, most recently updated first, up to
+ * 100 per connection.
+ */
+export type IssueListResult = {
+	/**
+	 * The issues.
+	 */
+	issues: Array<Issue>,
+	/**
+	 * The connections that failed, whose issues are missing.
+	 */
+	errors: Array<IssueConnectionError>,
+};
+
+/**
+ * An issue.
+ */
+export type Issue = {
+	/**
+	 * The connection it was read through.
+	 */
+	connectionId: string,
+	/**
+	 * Its tracker.
+	 */
+	provider: IssueProvider,
+	/**
+	 * What `issue/get` and the writes take: `owner/repo#12` on GitHub, the issue's id on
+	 * Linear, and its key on Jira.
+	 */
+	id: string,
+	/**
+	 * What people call it: `#12`, `PLX-12`, or `ABC-12`.
+	 */
+	key: string,
+	/**
+	 * Its title.
+	 */
+	title: string,
+	/**
+	 * Its page on the tracker.
+	 */
+	url: string,
+	/**
+	 * Its state.
+	 */
+	state: IssueState,
+	/**
+	 * Where it is filed.
+	 */
+	container: IssueContainer,
+	/**
+	 * Who it is assigned to, by name. Absent while it is unassigned.
+	 */
+	assignee?: string,
+	/**
+	 * When it last changed.
+	 */
+	updatedAt: string,
+};
+
+/**
+ * Where issues are filed: a GitHub repository, a Linear team, or a Jira project.
+ */
+export type IssueContainer = {
+	/**
+	 * What `issue/create` takes: `owner/repo`, a Linear team's id, or a Jira project's key.
+	 */
+	id: string,
+	/**
+	 * Its name: `owner/repo`, or a Linear team's or Jira project's name.
+	 */
+	name: string,
+};
+
+/**
+ * An issue's state, or one it can move to.
+ */
+export type IssueState = {
+	/**
+	 * Its id, the same in an issue and in [`IssueDetail::states`], and what `issue/setState`
+	 * takes: `open`, `completed`, or `notPlanned` on GitHub, a workflow state's id on Linear,
+	 * and a status's id on Jira, which plxd moves to through the transition that leads there.
+	 */
+	id: string,
+	/**
+	 * Its name, such as `In Progress`.
+	 */
+	name: string,
+	/**
+	 * Which way it leans.
+	 */
+	category: IssueStateCategory,
+	/**
+	 * The tracker's color for it, as `#rrggbb`. Absent where the tracker has none.
+	 */
+	color?: string,
+};
+
+/**
+ * Which way an issue's state leans, across trackers.
+ *
+ * A newer plxd may send a category this version does not know; treat it as `todo`.
+ */
+export type IssueStateCategory = "backlog" | "todo" | "inProgress" | "done" | "canceled";
+
+/**
+ * A connection `issue/list` couldn't read.
+ */
+export type IssueConnectionError = {
+	/**
+	 * The connection.
+	 */
+	connectionId: string,
+	/**
+	 * Why, for the user.
+	 */
+	message: string,
+};
+
+/**
+ * Params of `issue/get`.
+ */
+export type IssueGetParams = {
+	/**
+	 * The connection.
+	 */
+	connectionId: string,
+	/**
+	 * The issue's [`Issue::id`].
+	 */
+	id: string,
+};
+
+/**
+ * Result of `issue/get`: an issue with its body, comments, and the states it can move to.
+ */
+export type IssueDetail = {
+	/**
+	 * The issue.
+	 */
+	issue: Issue,
+	/**
+	 * Its description, as Markdown. Jira's rich text is converted.
+	 */
+	body: string,
+	/**
+	 * Its comments, oldest first.
+	 */
+	comments: Array<IssueComment>,
+	/**
+	 * The states `issue/setState` can move it to, its own included.
+	 */
+	states: Array<IssueState>,
+};
+
+/**
+ * A comment on an issue.
+ */
+export type IssueComment = {
+	/**
+	 * The tracker's id for it.
+	 */
+	id: string,
+	/**
+	 * Who wrote it, by name.
+	 */
+	author: string,
+	/**
+	 * Its text, as Markdown.
+	 */
+	body: string,
+	/**
+	 * When it was written.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Params of `issue/containers`.
+ */
+export type IssueContainersParams = {
+	/**
+	 * The connection.
+	 */
+	connectionId: string,
+};
+
+/**
+ * Result of `issue/containers`: where you can file an issue, by name.
+ */
+export type IssueContainersResult = {
+	/**
+	 * The repositories, teams, or projects.
+	 */
+	containers: Array<IssueContainer>,
+};
+
+/**
+ * Params of `issue/create`: files an issue, assigned to you.
+ */
+export type IssueCreateParams = {
+	/**
+	 * The connection.
+	 */
+	connectionId: string,
+	/**
+	 * The [`IssueContainer::id`] to file it in.
+	 */
+	containerId: string,
+	/**
+	 * Its title.
+	 */
+	title: string,
+	/**
+	 * Its description, as Markdown. Empty leaves it blank.
+	 */
+	body: string,
+};
+
+/**
+ * Params of `issue/setState`.
+ */
+export type IssueSetStateParams = {
+	/**
+	 * The connection.
+	 */
+	connectionId: string,
+	/**
+	 * The issue's [`Issue::id`].
+	 */
+	id: string,
+	/**
+	 * One of [`IssueDetail::states`]' ids.
+	 */
+	stateId: string,
+};
+
+/**
+ * Params of `issue/comment`.
+ */
+export type IssueCommentParams = {
+	/**
+	 * The connection.
+	 */
+	connectionId: string,
+	/**
+	 * The issue's [`Issue::id`].
+	 */
+	id: string,
+	/**
+	 * The comment, as Markdown.
+	 */
+	body: string,
 };
 
 /**

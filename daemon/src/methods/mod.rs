@@ -535,6 +535,15 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         SecretSave => |p| crate::secrets::save_named(daemon, p),
         SecretDelete => |p| crate::secrets::delete(daemon, p),
         SecretUse => |p| crate::secrets::use_saved(daemon, p),
+        IssueConnections => |_| crate::issues::connections(daemon),
+        IssueConnect => |p| crate::issues::connect(daemon, p),
+        IssueDisconnect => |p| crate::issues::disconnect(daemon, p),
+        IssueList => |p| crate::issues::list(daemon, p),
+        IssueGet => |p| crate::issues::get(daemon, p),
+        IssueContainers => |p| crate::issues::containers(daemon, p),
+        IssueCreate => |p| crate::issues::create(daemon, p),
+        IssueSetState => |p| crate::issues::set_state(daemon, p),
+        IssueAddComment => |p| crate::issues::comment(daemon, p),
         RepoSaveScripts => |p| crate::setup_scripts::save(daemon, p),
     })
 }
