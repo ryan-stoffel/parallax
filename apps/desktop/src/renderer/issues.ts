@@ -119,16 +119,6 @@ export function sortIssues(entries: readonly IssueEntry[], sort: IssueSort): Iss
 }
 
 /**
- * The state in `states` an issue is in now, which the picker shows as chosen and never sends to
- * `issue/setState`: by id, or by name where a tracker lists it under a move's id.
- */
-export const currentState = <S extends { id: string; name: string }>(
-  issue: Issue,
-  states: readonly S[],
-): S | undefined =>
-  states.find((s) => s.id === issue.state.id) ?? states.find((s) => s.name === issue.state.name);
-
-/**
  * The repository a thread about `issue` starts in: on GitHub, the computer's repository named as
  * the issue's, and `fallback` otherwise.
  */

@@ -6,7 +6,7 @@ import type { IssueDetail } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { icons } from "./icons";
 import { StateIcon } from "./IssueParts";
-import { currentState, providerNames, type IssueEntry } from "./issues";
+import { providerNames, type IssueEntry } from "./issues";
 import { notify } from "./notifications";
 import { GithubMarkdown } from "./pr/GithubMarkdown";
 import { ago } from "./pr/parts";
@@ -68,8 +68,8 @@ export function IssueView({
     onChanged();
   };
   const setState = async (stateId: string) => {
-    // Its own state is listed to show as chosen, and on Jira isn't a move plxd can make.
-    if (stateId === issue.state.id || stateId === currentState(issue, states)?.id) return;
+    // Its own state is listed to show as chosen, and isn't a move.
+    if (stateId === issue.state.id) return;
     setBusy(true);
     const answer = await window.parallax.request(hostId, "issue/setState", {
       connectionId,
@@ -139,7 +139,7 @@ export function IssueView({
                 field
                 label={t("State")}
                 disabled={busy || states.length === 0}
-                value={currentState(issue, states)?.id ?? ""}
+                value={issue.state.id}
                 placeholder={issue.state.name}
                 onChange={(stateId) => void setState(stateId)}
                 options={states.map((s) => ({
