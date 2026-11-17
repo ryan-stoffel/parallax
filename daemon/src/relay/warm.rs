@@ -12,19 +12,30 @@
 //! fails after its handshake, or that sends no answer to the upgrade within [`EARLY_ANSWER`], as a
 //! connection left on a network the computer moved off would, also gives way to a new one, which
 //! costs the connect that long. One that no relay route takes is closed when the race ends.
+//!
+//! Between dials, the plxd a `plxd dial` hands its dial to (PLX-1585) also keeps one such connection
+//! open, so a relay route that doesn't wait, or doesn't wait long enough, finds one ready (PLX-1586).
+//! It's TCP and TLS to the relay and nothing more, so it holds nothing of an account, and one serves
+//! every dial to that relay with the same proxy settings. Cloudflare closes a connection that sent
+//! no request 15 s after it opened, so the kept one is replaced every [`REPLACE_AFTER`], and it's
+//! dropped when the computer changes networks or wakes. A relay route takes it the way it takes an
+//! early connection, with the same fallbacks, and a new one opens at once for the next dial. It's
+//! kept only for [`KEEP_FOR`] after the last dial that connected over the relay, and a wake ends
+//! that, so a plxd whose dials don't use the relay, as at home, opens nothing.
 
 use std::future::Future;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, SystemTime};
 
 use futures_util::FutureExt as _;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::WebSocketStream;
 use tracing::debug;
 
-use super::{Base, Roots, Stream};
+use super::{Base, Link, Outward, Roots, Stream};
+use crate::local_dial::Scope;
 use crate::remote::Error;
 
 /// How long the relay route waits for the relay to answer its upgrade over an early connection
@@ -84,6 +95,10 @@ pub(crate) async fn ahead<F: Future>(race: F) -> F::Output {
     let Ok(base) = Base::parse(&url) else {
         return race.await;
     };
+    // The relay route takes the one this plxd keeps open instead.
+    if kept_for(&KEPT, &url) {
+        return race.await;
+    }
     let scope = crate::local_dial::current();
     let connecting = Connecting(tokio::spawn(crate::local_dial::within(scope, async move {
         base.connect(Roots::WithOs).await
@@ -95,8 +110,13 @@ pub(crate) async fn ahead<F: Future>(race: F) -> F::Output {
     EARLY.scope(early, race).await
 }
 
-/// The early connection to the relay at `url`, if this task's race has one no route took yet.
+/// The early connection to the relay at `url`, if this task's race has one no route took yet, or
+/// else the one this plxd keeps open for its dials ([`take_kept`]).
 pub(super) fn take(url: &str) -> Option<Connecting> {
+    take_early(url).or_else(|| take_kept(&KEPT, url))
+}
+
+fn take_early(url: &str) -> Option<Connecting> {
     EARLY
         .try_with(|early| {
             let mut connecting = early
@@ -115,6 +135,190 @@ pub(super) fn take(url: &str) -> Option<Connecting> {
             Some(scope) => scope.took_head_start(),
             None => TOOK.store(true, Ordering::Relaxed),
         })
+}
+
+/// How long after the last dial through this plxd that connected over the relay it keeps a
+/// connection to that relay open.
+/// Each [`REPLACE_AFTER`] it's kept costs a TCP connection and a TLS handshake, so at most 30.
+const KEEP_FOR: Duration = Duration::from_mins(5);
+
+/// How old a kept connection gets before a new one replaces it. Cloudflare closes a connection
+/// that sent no request 15 s after it opened, measured on 2026-11-17 against staging and
+/// production. Its documented 400 s idle limit applies only after a request.
+const REPLACE_AFTER: Duration = Duration::from_secs(10);
+
+/// The oldest kept connection a relay route takes, should the keeper be late to replace it.
+const FRESH_FOR: Duration = Duration::from_secs(12);
+
+/// What the plxd that dials for `plxd dial` keeps for its relay dials (PLX-1586).
+type Slot = Mutex<Option<Keeping>>;
+
+static KEPT: Slot = Mutex::new(None);
+
+/// A relay this plxd keeps a connection to, since a dial used it lately.
+struct Keeping {
+    url: String,
+    /// What the connection opens in: the dials' proxy settings, and no sign-in or timing marks.
+    scope: Arc<Scope>,
+    /// When a relay dial last went through this plxd, by the wall clock, so sleep counts.
+    used: SystemTime,
+    kept: Option<Kept>,
+    /// The task that replaces `kept` and ends the keeping ([`keep`]).
+    keeper: JoinHandle<()>,
+}
+
+/// A kept connection, opening or open, with nothing sent on it.
+struct Kept {
+    connecting: Connecting,
+    /// When it started to open, by the wall clock, so sleep counts.
+    opened: SystemTime,
+    /// The route to the internet then.
+    outward: Outward,
+}
+
+impl Keeping {
+    /// Whether this keeps a connection for a dial in `scope` to the relay at `url`.
+    fn serves(&self, url: &str, scope: &Scope) -> bool {
+        self.url == url && self.scope.proxy() == scope.proxy()
+    }
+
+    /// Opens a connection to keep, on the route to the internet `outward`.
+    fn open(&self, outward: Outward) -> Kept {
+        let (url, scope) = (self.url.clone(), Arc::clone(&self.scope));
+        let connecting = Connecting(tokio::spawn(crate::local_dial::within(
+            Some(scope),
+            async move { Base::parse(&url)?.connect(Roots::WithOs).await },
+        )));
+        Kept {
+            connecting,
+            opened: SystemTime::now(),
+            outward,
+        }
+    }
+}
+
+impl Kept {
+    /// How old it is at `now`, if a relay route may still take it there: not past [`FRESH_FOR`],
+    /// and on the same route to the internet, `outward`.
+    fn fresh(&self, now: SystemTime, outward: Outward) -> Option<Duration> {
+        let age = now.duration_since(self.opened).ok()?;
+        (age < FRESH_FOR && self.outward == outward).then_some(age)
+    }
+}
+
+fn lock(slot: &Slot) -> MutexGuard<'_, Option<Keeping>> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Notes that the dial this task runs for `plxd dial` connected over the relay, so this plxd keeps
+/// a connection to that relay for the next [`KEEP_FOR`]. A dial outside a plxd keeps none, since its
+/// process ends with it.
+pub(crate) fn dialed() {
+    dialed_in(&KEPT);
+}
+
+fn dialed_in(slot: &'static Slot) {
+    let (Some(scope), Some((url, _))) = (crate::local_dial::current(), super::client()) else {
+        return;
+    };
+    if Base::parse(&url).is_err() {
+        return;
+    }
+    let mut keeping = lock(slot);
+    match keeping.as_mut() {
+        Some(keeping) if keeping.serves(&url, &scope) => keeping.used = SystemTime::now(),
+        _ => {
+            if let Some(old) = keeping.take() {
+                old.keeper.abort();
+            }
+            *keeping = Some(Keeping {
+                url,
+                scope: Arc::new(scope.for_keeping()),
+                used: SystemTime::now(),
+                kept: None,
+                keeper: tokio::spawn(keep(slot)),
+            });
+        }
+    }
+}
+
+/// Keeps a fresh connection in `slot` until [`KEEP_FOR`] after the last dial: replaces it every
+/// [`REPLACE_AFTER`], and when the computer changes networks or wakes, which also ends the keeping
+/// once the wake shows [`KEEP_FOR`] passed.
+async fn keep(slot: &'static Slot) {
+    let mut link = Link::new(Box::new(super::outward));
+    loop {
+        let Some(wait) = refresh(slot, link.outward) else {
+            return;
+        };
+        tokio::select! {
+            () = link.changed() => {
+                if let Some(keeping) = lock(slot).as_mut() {
+                    keeping.kept = None;
+                }
+            }
+            () = tokio::time::sleep(wait) => {}
+        }
+    }
+}
+
+/// Ends the keeping in `slot` once [`KEEP_FOR`] passed since the last dial, or else opens a new
+/// connection when the kept one is due, on the route to the internet `outward`: how long until the
+/// next is due.
+fn refresh(slot: &Slot, outward: Outward) -> Option<Duration> {
+    let mut keeping = lock(slot);
+    let now = SystemTime::now();
+    let used = keeping.as_ref()?.used;
+    if now.duration_since(used).unwrap_or_default() >= KEEP_FOR {
+        debug!("no relay dial lately, so the kept relay connection closes");
+        *keeping = None;
+        return None;
+    }
+    let keeping = keeping.as_mut()?;
+    let due = keeping
+        .kept
+        .as_ref()
+        .and_then(|kept| kept.fresh(now, outward))
+        .and_then(|age| REPLACE_AFTER.checked_sub(age))
+        .filter(|due| !due.is_zero());
+    if due.is_none() {
+        keeping.kept = Some(keeping.open(outward));
+    }
+    Some(due.unwrap_or(REPLACE_AFTER))
+}
+
+/// Whether `slot` keeps a fresh connection to the relay at `url` for the dial this task runs.
+fn kept_for(slot: &Slot, url: &str) -> bool {
+    let Some(scope) = crate::local_dial::current() else {
+        return false;
+    };
+    let outward = super::outward();
+    lock(slot)
+        .as_ref()
+        .filter(|keeping| keeping.serves(url, &scope))
+        .and_then(|keeping| keeping.kept.as_ref())
+        .is_some_and(|kept| kept.fresh(SystemTime::now(), outward).is_some())
+}
+
+/// The connection `slot` keeps to the relay at `url`, for the dial this task runs, if it's fresh.
+/// A new one opens in its place at once, so the next dial finds one too.
+fn take_kept(slot: &Slot, url: &str) -> Option<Connecting> {
+    let scope = crate::local_dial::current()?;
+    let outward = super::outward();
+    let mut keeping = lock(slot);
+    let keeping = keeping
+        .as_mut()
+        .filter(|keeping| keeping.serves(url, &scope))?;
+    let now = SystemTime::now();
+    keeping.used = now;
+    let kept = keeping
+        .kept
+        .take()
+        .filter(|kept| kept.fresh(now, outward).is_some());
+    keeping.kept = Some(keeping.open(outward));
+    let kept = kept?;
+    scope.took_kept();
+    Some(kept.connecting)
 }
 
 /// [`super::upgrade`] to the relay at `url`, over `early` when it's open first. A new connection
@@ -166,6 +370,7 @@ async fn open(early: Connecting, base: &Base) -> io::Result<(Stream, bool)> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::IpAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -330,5 +535,129 @@ mod tests {
                 assert!(take("http://127.0.0.1:1").is_none(), "taken once");
             })
             .await;
+    }
+
+    /// Waits up to 5 s for `accepted` to reach `count`.
+    async fn accepts(accepted: &AtomicUsize, count: usize) {
+        for _ in 0..500 {
+            if accepted.load(Ordering::SeqCst) >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "the relay accepted {} connections, not {count}",
+            accepted.load(Ordering::SeqCst)
+        );
+    }
+
+    /// A dial's scope inside plxd, signed in to the relay at `url`.
+    fn dial_scope(url: &str) -> Arc<Scope> {
+        let relay = Some((url.to_owned(), "tok".to_owned()));
+        Arc::new(Scope::new(relay, Vec::new(), false))
+    }
+
+    /// A slot of its own, so tests don't share [`KEPT`].
+    fn slot() -> &'static Slot {
+        Box::leak(Box::new(Mutex::new(None)))
+    }
+
+    #[tokio::test]
+    async fn a_relay_dial_takes_the_kept_connection_and_another_opens_for_the_next() {
+        let (url, accepted) = relay(First::Answers).await;
+        crate::local_dial::within(Some(dial_scope(&url)), async {
+            dialed();
+            accepts(&accepted, 1).await;
+            let opened = |slot: &Slot| lock(slot).as_ref().unwrap().kept.as_ref().unwrap().opened;
+            let before = opened(&KEPT);
+            echoes(super::super::stream_at(&url, "tok", "h")).await;
+            accepts(&accepted, 2).await;
+            assert_ne!(
+                opened(&KEPT),
+                before,
+                "a new one replaced the one the dial took"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(
+                accepted.load(Ordering::SeqCst),
+                2,
+                "the dial went over the kept connection, not a new one"
+            );
+        })
+        .await;
+        if let Some(keeping) = lock(&KEPT).take() {
+            keeping.keeper.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_kept_connection_the_relay_closed_gives_way_to_a_new_one_at_once() {
+        let (url, accepted) = relay(First::Closes).await;
+        let slot = slot();
+        crate::local_dial::within(Some(dial_scope(&url)), async {
+            dialed_in(slot);
+            accepts(&accepted, 1).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let kept = take_kept(slot, &url).expect("a fresh kept connection");
+            let started = std::time::Instant::now();
+            let path = "/v1/hosts/h/connect";
+            upgrade(kept, &url, path, &[], &[]).await.unwrap();
+            assert!(
+                started.elapsed() < EARLY_ANSWER,
+                "it didn't wait for an answer"
+            );
+        })
+        .await;
+        lock(slot).take().unwrap().keeper.abort();
+    }
+
+    #[tokio::test]
+    async fn a_kept_connection_too_old_or_from_another_network_isnt_taken() {
+        let outward = (Some(IpAddr::from([192, 168, 1, 2])), None);
+        let kept = |age: u64| Kept {
+            connecting: Connecting(tokio::spawn(std::future::pending())),
+            opened: SystemTime::now() - Duration::from_secs(age),
+            outward,
+        };
+        let now = SystemTime::now();
+        assert!(kept(9).fresh(now, outward).is_some());
+        assert!(
+            kept(13).fresh(now, outward).is_none(),
+            "Cloudflare closes it at 15 s"
+        );
+        let moved = (Some(IpAddr::from([10, 0, 0, 5])), None);
+        assert!(kept(1).fresh(now, moved).is_none());
+    }
+
+    #[tokio::test]
+    async fn the_keeper_replaces_the_connection_at_10_s_and_stops_after_5_minutes() {
+        let slot = slot();
+        let outward = (Some(IpAddr::from([192, 168, 1, 2])), None);
+        let ago = |secs: u64| SystemTime::now() - Duration::from_secs(secs);
+        *lock(slot) = Some(Keeping {
+            url: "http://127.0.0.1:1".to_owned(),
+            scope: Arc::new(Scope::new(None, Vec::new(), false)),
+            used: ago(60),
+            kept: Some(Kept {
+                connecting: Connecting(tokio::spawn(std::future::pending())),
+                opened: ago(4),
+                outward,
+            }),
+            keeper: tokio::spawn(async {}),
+        });
+        let wait = refresh(slot, outward).unwrap();
+        assert!(wait <= Duration::from_secs(6), "due at 10 s, in {wait:?}");
+
+        lock(slot).as_mut().unwrap().kept.as_mut().unwrap().opened = ago(10);
+        assert_eq!(refresh(slot, outward), Some(REPLACE_AFTER));
+        let opened = lock(slot).as_ref().unwrap().kept.as_ref().unwrap().opened;
+        assert!(opened > ago(1), "a new one opened");
+
+        lock(slot).as_mut().unwrap().used = ago(KEEP_FOR.as_secs());
+        assert_eq!(refresh(slot, outward), None);
+        assert!(
+            lock(slot).is_none(),
+            "nothing is kept once no dial used the relay for a while"
+        );
     }
 }
