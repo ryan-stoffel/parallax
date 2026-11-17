@@ -14,6 +14,7 @@ import type {
 } from "../protocol/generated/protocol";
 import { bindingOf, resetBindings, setWhen, whenOf } from "./keybindings";
 import type { SettingsSection } from "./App";
+import { applyAppearance, currentAppearance } from "./appearance";
 import { Notifications } from "./notifications";
 import {
   behaviorDefaults,
@@ -400,6 +401,25 @@ test("Appearance's Chat keeps its settings on this computer, and search finds ea
   expect(chatPrefs.get()).toEqual({ richComposer: true, math: false, toolCalls: "zen" });
   expect(JSON.parse(localStorage.getItem("parallax.chat")!)).toEqual(chatPrefs.get());
   chatPrefs.set(chatDefaults);
+});
+
+test("Appearance's Sidebar turns the workspace's rounded corners off and keeps it (PLX-1589)", async () => {
+  await renderSettings("appearance");
+  const found = searchSettings("Rounded corners")[0]!;
+  expect(found).toMatchObject({ section: "appearance", place: "Appearance › Sidebar" });
+  const corners = document.querySelector<HTMLElement>(
+    'section[aria-label="Sidebar"] [role="switch"][aria-label="Rounded corners"]',
+  )!;
+  expect(corners.getAttribute("aria-checked")).toBe("true");
+
+  await click(corners);
+  expect(JSON.parse(localStorage.getItem("parallax.appearance")!).roundedCorners).toBe(false);
+  applyAppearance(currentAppearance());
+  expect(document.documentElement.classList.contains("square-corners")).toBe(true);
+
+  await click(corners);
+  applyAppearance(currentAppearance());
+  expect(document.documentElement.classList.contains("square-corners")).toBe(false);
 });
 
 test("Worktrees sets each cleanup rule as its picker or switch, where plxd has the rules", async () => {

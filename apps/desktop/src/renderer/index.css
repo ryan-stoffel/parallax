@@ -938,19 +938,21 @@ body {
 [data-platform="linux"] .tab-cap {
   bottom: 1px;
 }
-/* With Tabs off, the workspace is square too and meets the window's edges, which the desktop
+/* With Tabs off, the workspace is square too, as it is anywhere Settings › Appearance › Sidebar's
+   Rounded corners is off (.square-corners), and meets the window's edges, which the desktop
    outlines, so its only line is the one by the sidebar. */
-:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"] {
+:root:is([data-platform="linux"], .square-corners) .workspace-shell[data-sidebar-open="true"] {
   border-radius: 0;
 }
-:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"]::after {
+:root:is([data-platform="linux"], .square-corners)
+  .workspace-shell[data-sidebar-open="true"]::after {
   border-block: 0;
 }
 /* No round corners for the sidebar to fill behind, which would show through a see-through window. */
-:root[data-platform="linux"]:not(.tabs-beta) #sidebar::before {
+:root:is([data-platform="linux"], .square-corners):not(.tabs-beta) #sidebar::before {
   content: none;
 }
-:root.stage[data-platform="linux"]:not(.tabs-beta) #sidebar > .night-sky {
+:root.stage:is([data-platform="linux"], .square-corners):not(.tabs-beta) #sidebar > .night-sky {
   right: 0;
   mask: none;
 }

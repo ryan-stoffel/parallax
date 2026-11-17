@@ -58,6 +58,8 @@ export type Appearance = {
   backgroundOpacity: number;
   /** A nightly's night sky or a dev build's blueprint over the sidebar and on Send (index.css). */
   buildArt: boolean;
+  /** The workspace's round corners beside the sidebar. Linux's are square either way. */
+  roundedCorners: boolean;
 };
 
 export const defaults: Appearance = {
@@ -79,6 +81,7 @@ export const defaults: Appearance = {
   windowMaterial: "opaque",
   backgroundOpacity: 75,
   buildArt: true,
+  roundedCorners: true,
 };
 
 /** How much of a diff color a changed line's background mixes in, by `diffIntensity`. */
@@ -265,7 +268,7 @@ const family = (name: string) => name.replace(/["';{}\\]/g, "").trim();
 
 /**
  * Paints `appearance` on <html>: the fonts as variables index.css reads, and classes for
- * the color theme, contrast, motion, and diff colors. `onboarding` ignores the OS's Reduce
+ * the color theme, contrast, motion, diff colors, and corners. `onboarding` ignores the OS's Reduce
  * motion, which Windows reports whenever its Animation effects are off (PLX-881), so the tour
  * plays unless Parallax's own setting asks for less.
  */
@@ -303,6 +306,7 @@ export function applyAppearance(appearance: Appearance, onboarding = false) {
   paintBuild(appearance.buildArt);
   root.classList.toggle("focus-strong", appearance.focusRings);
   root.classList.toggle("underline-links", appearance.underlineLinks);
+  root.classList.toggle("square-corners", !appearance.roundedCorners);
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
   const through = seesThrough(appearance.windowMaterial);
   root.classList.toggle("translucent", through);
