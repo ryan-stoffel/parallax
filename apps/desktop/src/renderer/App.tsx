@@ -515,6 +515,10 @@ export function App() {
   useEffect(() => {
     if (hasProject && projectsBeta.get() === undefined) projectsBeta.set(true);
   }, [hasProject]);
+  // Turning them off leaves the Projects page, which Settings opens over.
+  useEffect(() => {
+    if (!projectsOn) setMainPage((page) => (page === "projects" ? undefined : page));
+  }, [projectsOn]);
   const groups = groupThreads(threads.state);
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
@@ -1944,7 +1948,7 @@ export function App() {
             hidden={expanded}
             className={`flex min-w-0 flex-1 flex-col ${tabsOn ? "" : "bg-pane"}`}
           >
-            {mainPage === "projects" && projectsOn ? (
+            {mainPage === "projects" ? (
               <div className={tabsOn ? pageCard : pagePlain}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
