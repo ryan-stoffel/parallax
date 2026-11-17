@@ -5,12 +5,16 @@ import {
   ArrowUpRight,
   Bot,
   Check,
+  Circle,
   ChevronDown,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
+  CircleDot,
+  CircleDotDashed,
   CircleMinus,
   CircleX,
   Columns2,
@@ -150,6 +154,14 @@ export const icons = {
   files: Paperclip,
   /** Instructions a Project gives its threads. */
   instructions: ScrollText,
+  /** An issue on a tracker: GitHub, Linear, or Jira. */
+  issue: CircleDot,
+  /** An issue not planned yet. */
+  issueBacklog: CircleDashed,
+  /** An issue planned and not started. */
+  issueTodo: Circle,
+  /** An issue someone has started. */
+  issueStarted: CircleDotDashed,
   /** The order a list sorts in. */
   sort: ArrowDownUp,
 } as const satisfies Record<string, LucideIcon>;

@@ -97,6 +97,7 @@ import { OrchestratorSettings } from "./settings/OrchestratorSettings";
 import { ProjectSettings } from "./settings/ProjectSettings";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
+import { IssueTrackerSettings } from "./settings/IssueTrackerSettings";
 import { SecretSettings } from "./settings/SecretSettings";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
@@ -118,8 +119,10 @@ interface SettingsProps {
   listed: { host: Host; view: ThreadsView }[];
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
-  /** The host Source control opens on, as Set up GitHub picks it (PLX-423). */
+  /** The host Source control or Issue trackers opens on, as Set up GitHub picks it (PLX-423). */
   sourceControlHost?: string;
+  /** Opens Source control on a host, from Issue trackers' GitHub card. */
+  onSourceControl: (hostId: string) => void;
   /** The host the window has open, which Settings > Providers opens on. */
   openHost: string;
   /** The setting search picked, scrolled to and flashed once it shows. */
@@ -219,6 +222,7 @@ export function Settings({
   theme,
   onThemeChange,
   sourceControlHost,
+  onSourceControl,
   openHost,
   focus,
 }: SettingsProps & { onSection?: (section: SettingsSection) => void }) {
@@ -256,6 +260,12 @@ export function Settings({
           <ProjectSettings listed={listed} focus={focus} />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
+        ) : section === "issueTrackers" ? (
+          <IssueTrackerSettings
+            key={sourceControlHost}
+            hostId={sourceControlHost}
+            onSourceControl={onSourceControl}
+          />
         ) : section === "worktrees" ? (
           <WorktreeSettings onProjects={() => onSection?.("projects")} focus={focus} />
         ) : section === "computerUse" ? (

@@ -18,6 +18,7 @@ import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
 import type { SettingsSection } from "./App";
 import type { HostThreads } from "./Sidebar";
+import { icons } from "./icons";
 import type { NavRow } from "./sidebarPrefs";
 import { IconButton, Menu, menuItem } from "./ui";
 
@@ -102,6 +103,11 @@ export function ProfileButton({
               GitPullRequest,
               t("Pull requests"),
               closing(() => onOpenPage("pullRequests")),
+            )}
+            {item(
+              icons.issue,
+              t("Issues"),
+              closing(() => onOpenPage("issues")),
             )}
             {item(
               ChartNoAxesColumn,

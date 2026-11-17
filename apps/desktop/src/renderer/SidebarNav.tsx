@@ -31,6 +31,7 @@ const navCurrent = "bg-selected text-foreground [&>svg]:text-foreground";
 export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
   { id: "projects", label: msg("Projects"), Icon: LayoutGrid },
   { id: "pullRequests", label: msg("Pull requests"), Icon: GitPullRequest },
+  { id: "issues", label: msg("Issues"), Icon: icons.issue },
   { id: "usage", label: msg("Usage"), Icon: ChartNoAxesColumn },
 ];
 

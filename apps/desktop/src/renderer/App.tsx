@@ -85,6 +85,9 @@ import { useOrchestratorContext } from "./ContextPanel";
 import { OrchestratorChat } from "./OrchestratorChat";
 import { OrchestratorHome, waitingCount } from "./OrchestratorHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
+import { icons } from "./icons";
+import { draftGroup, issueDraft } from "./issues";
+import { IssuesPage } from "./IssuesPage";
 import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
 import { projectEntries, projectsBeta, useProjectsOn, type ProjectEntry } from "./projectList";
@@ -213,6 +216,7 @@ export type SettingsSection =
   | "devices"
   | "projects"
   | "sourceControl"
+  | "issueTrackers"
   | "worktrees"
   | "computerUse"
   | "schedules"
@@ -320,9 +324,9 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
+  // The page shown in place of the chat, if any: Projects, Pull requests, Issues, or Usage. Opening a
   // thread closes it.
-  const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
+  const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "issues" | "usage">();
   // A page takes the whole workspace: the thread's side panel, browser, and terminal drawer stay
   // shut on it, and come back as they were with the thread (PLX-1242, PLX-1271).
   const panelsAllowed = !mainPage;
@@ -1231,6 +1235,14 @@ export function App() {
       run: () => openMainPage("pullRequests"),
     },
     {
+      id: "issues",
+      label: t("Issues"),
+      text: t("Issues"),
+      keywords: "tickets github linear jira",
+      icon: <icons.issue />,
+      run: () => openMainPage("issues"),
+    },
+    {
       id: "usage",
       label: t("Usage"),
       text: t("Usage"),
@@ -1869,6 +1881,7 @@ export function App() {
           theme={theme}
           onThemeChange={setTheme}
           sourceControlHost={settingsHost}
+          onSourceControl={(hostId) => openSettings("sourceControl", hostId)}
           openHost={host.id}
           focus={settingsFocus}
           onSection={(section, anchor) => {
@@ -1990,6 +2003,29 @@ export function App() {
                     setCompose({ text, send });
                   }}
                   onSetUpGithub={(e) => openSettings("sourceControl", e.hostId)}
+                />
+              </div>
+            ) : mainPage === "issues" ? (
+              <div className={tabsOn ? pageCard : pagePlain}>
+                {/* The page's own heading names it, so the bar doesn't. */}
+                <TopBar className={topBarInset}>{showSidebar}</TopBar>
+                <IssuesPage
+                  hosts={hosts}
+                  onOpenTrackers={(hostId) => openSettings("issueTrackers", hostId)}
+                  onStartThread={({ hostId, issue }, body) => {
+                    // In the repository of the issue's name on its computer, else the one open
+                    // there, else Chat.
+                    const state = (views[hostId] ?? idleThreads).state;
+                    const fallback = hostId === host.id && !group.project ? group.id : noRepo;
+                    const draft = issueDraft(
+                      hostId,
+                      draftGroup(issue, groupThreads(state), fallback),
+                      issue,
+                      body,
+                    );
+                    drafts.put(draft);
+                    openOnHost(hostId, { kind: "new", groupId: draft.groupId, draft: draft.id });
+                  }}
                 />
               </div>
             ) : (

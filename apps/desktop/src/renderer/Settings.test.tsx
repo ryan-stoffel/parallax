@@ -134,6 +134,7 @@ async function renderSettings(
           listed={listed}
           theme="system"
           onThemeChange={() => {}}
+          onSourceControl={() => {}}
           openHost={openHost}
           focus={focus}
         />
@@ -285,6 +286,7 @@ test("search opens an orchestrator's pane for what only it has", async () => {
           listed={listed}
           theme="system"
           onThemeChange={() => {}}
+          onSourceControl={() => {}}
           openHost="local"
           focus={focus}
         />,

@@ -91,6 +91,12 @@ export const settingsSections: {
     keywords: msg("git github pull request"),
   },
   {
+    id: "issueTrackers",
+    name: msg("Issue trackers"),
+    group: msg("Code"),
+    keywords: msg("issues tickets github linear jira atlassian api key token"),
+  },
+  {
     id: "worktrees",
     name: msg("Worktrees"),
     group: msg("Code"),
@@ -526,6 +532,13 @@ export const settingsIndex: SettingEntry[] = [
       msg("Saved secrets"),
       msg("Secrets every agent can use without asking"),
       msg("password sudo api key token env expire keychain"),
+    ],
+  ]),
+  ...entries("issueTrackers", undefined, [
+    [
+      msg("Trackers"),
+      msg("The accounts a computer reads your issues with"),
+      msg("issues tickets github linear jira atlassian api key token"),
     ],
   ]),
   ...entries("sourceControl", undefined, [
