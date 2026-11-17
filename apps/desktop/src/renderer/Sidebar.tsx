@@ -2700,8 +2700,8 @@ function ScopeMenu({
 }
 
 /**
- * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), and at the far end Update when `updatable` (Update.tsx), where it has always
+ * The footer's buttons: Profile, which shows the account's picture or initials and its name and
+ * opens its menu (ProfileMenu.tsx), and at the far end Update when `updatable` (Update.tsx), where it has always
  * been.
  */
 function Footer({

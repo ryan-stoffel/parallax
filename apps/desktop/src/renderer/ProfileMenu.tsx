@@ -20,14 +20,15 @@ import type { SettingsSection } from "./App";
 import type { HostThreads } from "./Sidebar";
 import { icons } from "./icons";
 import type { NavRow } from "./sidebarPrefs";
-import { IconButton, Menu, menuItem } from "./ui";
+import { IconButton, Menu, menuItem, useModHeld } from "./ui";
 
 /**
- * The sidebar footer's Profile button (0067): the account's picture or initials, which opens a
- * menu above it. The menu always offers Settings, and in the Inbox sidebar Pull requests, Issues, and
- * Usage first. Signed in, it shows the account with Manage account, which opens the Account dialog, and
- * Sign out. Signed out, it offers Sign in and Create an account, which open Clerk's pages in the
- * browser.
+ * The sidebar footer's Profile button (0067): the account's picture or initials beside its name
+ * (or its email when it has none), which opens a menu above it. Settings' shortcut shows in the
+ * menu only while Mod is held. The menu always offers Settings, and in the Inbox sidebar Pull
+ * requests, Issues, and Usage first. Signed in, it shows the account with Manage account, which
+ * opens the Account dialog, and Sign out. Signed out, it offers Sign in and Create an account,
+ * which open Clerk's pages in the browser.
  */
 export function ProfileButton({
   listed,
@@ -41,6 +42,7 @@ export function ProfileButton({
 }) {
   const id = useId();
   const settingsKeys = useShortcutLabel("settings");
+  const modHeld = useModHeld();
   const menu = useRef<HTMLDivElement>(null);
   const profile = useProfile();
   const [managing, setManaging] = useState(false);
@@ -69,9 +71,21 @@ export function ProfileButton({
 
   return (
     <>
-      <IconButton label={profile?.name || t("Profile")} popoverTarget={id} aria-haspopup="menu">
-        {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
-      </IconButton>
+      {profile ? (
+        <button
+          type="button"
+          popoverTarget={id}
+          aria-haspopup="menu"
+          className="flex h-7 min-w-0 items-center gap-2 rounded-md pr-2 pl-[3px] text-body font-medium text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+        >
+          <Avatar profile={profile} size={22} />
+          <span className="truncate">{profile.name || profile.email}</span>
+        </button>
+      ) : (
+        <IconButton label={t("Profile")} popoverTarget={id} aria-haspopup="menu">
+          <CircleUser />
+        </IconButton>
+      )}
       <Menu ref={menu} id={id} label={t("Account")} className="w-64 p-1">
         {profile !== undefined && (
           <>
@@ -124,7 +138,7 @@ export function ProfileButton({
         >
           <Settings aria-hidden className="text-muted-foreground" />
           {t("Settings")}
-          {settingsKeys && (
+          {modHeld && settingsKeys && (
             <span className="ml-auto text-meta text-faint-foreground">{settingsKeys}</span>
           )}
         </button>
