@@ -13,8 +13,8 @@ const FADE_MS = 300;
 /**
  * The app's mark centered on the window's background while the app launches, as T3 Code does
  * (PLX-1109): its circles' overlap light in dark mode and dark in light mode. A nightly or dev
- * build shows its whole app icon instead, sky or blueprint tile and all (main.tsx sets `.nightly`
- * or `.dev`, and `.stage` for both). It fades out
+ * build shows its whole app icon instead, sky or blueprint tile and all (appearance.ts sets `.nightly`
+ * or `.dev`, and `.stage` for both, unless Nightly style is off). It fades out
  * once `ready`, the open host's list loaded or its connection failed, and goes away when faded.
  */
 export function Splash({ ready }: { ready: boolean }) {

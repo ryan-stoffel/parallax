@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { preloadParser } from "react-native-enriched-markdown";
 
 import { App } from "./App";
+import { setBuild } from "./appearance";
 import { CrashBoundary } from "./Crash";
 import { startLanguage } from "./language";
 import { applyTheme } from "./theme";
@@ -53,13 +54,8 @@ applyTheme();
 // (MarkdownText). It loads in a few milliseconds, before any thread opens.
 void preloadParser();
 // A nightly build wears a night sky in the sidebar and on its send buttons, and a dev build
-// (0103) blueprint paper (index.css). `.stage` is either.
-void window.parallax.version().then((version) => {
-  const { classList } = document.documentElement;
-  classList.toggle("nightly", version.includes("-nightly"));
-  classList.toggle("dev", version.endsWith("-dev"));
-  classList.toggle("stage", version.includes("-nightly") || version.endsWith("-dev"));
-});
+// (0103) blueprint paper (index.css), unless Settings > Appearance turns it off.
+void window.parallax.version().then(setBuild);
 
 // The language loads first, so the first frame is in it.
 void startLanguage().then(() =>

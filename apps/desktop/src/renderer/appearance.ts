@@ -56,6 +56,8 @@ export type Appearance = {
    * Windows' blur it covers 2/5 of this (`tint`).
    */
   backgroundOpacity: number;
+  /** A nightly's night sky or a dev build's blueprint over the sidebar and on Send (index.css). */
+  buildArt: boolean;
 };
 
 export const defaults: Appearance = {
@@ -76,6 +78,7 @@ export const defaults: Appearance = {
   underlineLinks: false,
   windowMaterial: "opaque",
   backgroundOpacity: 75,
+  buildArt: true,
 };
 
 /** How much of a diff color a changed line's background mixes in, by `diffIntensity`. */
@@ -205,6 +208,26 @@ export const currentAppearance = appearance.get;
 /** The appearance, kept current. */
 export const useAppearance = appearance.use;
 
+let build: "nightly" | "dev" | undefined;
+
+/** Whether this is a nightly or dev build (0103), with art of its own; undefined for a release. */
+export const buildKind = () => build;
+
+/** Reads this build's kind from its version, once at startup (main.tsx), and paints its art. */
+export function setBuild(version: string) {
+  build = version.includes("-nightly") ? "nightly" : version.endsWith("-dev") ? "dev" : undefined;
+  paintBuild(currentAppearance().buildArt);
+}
+
+// `.nightly` or `.dev` on <html>, and `.stage` for either, which index.css draws the art by.
+function paintBuild(on: boolean) {
+  const kind = on ? build : undefined;
+  const { classList } = document.documentElement;
+  classList.toggle("nightly", kind === "nightly");
+  classList.toggle("dev", kind === "dev");
+  classList.toggle("stage", kind !== undefined);
+}
+
 /** The theme each mode shows: the picked one, or Parallax's where it's no longer added. */
 export function shownThemes(appearance: Appearance, added: AddedExtension[]): Record<Mode, string> {
   const ids = new Set(added.flatMap((e) => e.themes.map((t) => t.id)));
@@ -277,6 +300,7 @@ export function applyAppearance(appearance: Appearance, onboarding = false) {
     custom ? appearance.diffCustom.removed : "initial",
   );
   root.style.setProperty("--diff-tint", diffTints[appearance.diffIntensity]);
+  paintBuild(appearance.buildArt);
   root.classList.toggle("focus-strong", appearance.focusRings);
   root.classList.toggle("underline-links", appearance.underlineLinks);
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
