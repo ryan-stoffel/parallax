@@ -1,5 +1,6 @@
 // The Traditional sidebar's head (0090, 0094): New thread, New project (Add repository while
-// Projects are off), and Search as rows, then the pages Settings shows there and More. Its Pinned section, which folds, sits atop the list.
+// Projects are off), and Search as rows, then the pages Settings shows there and More. Its Pinned
+// section, which folds, sits atop the list.
 import { t } from "i18next";
 import {
   ChartNoAxesColumn,

@@ -515,10 +515,11 @@ export function App() {
   useEffect(() => {
     if (hasProject && projectsBeta.get() === undefined) projectsBeta.set(true);
   }, [hasProject]);
-  // Turning them off leaves the Projects page, which Settings opens over.
+  // Off, the Projects page doesn't stay open: Settings opens over it, and a Project's header still
+  // links back to it.
   useEffect(() => {
-    if (!projectsOn) setMainPage((page) => (page === "projects" ? undefined : page));
-  }, [projectsOn]);
+    if (!projectsOn && mainPage === "projects") setMainPage(undefined);
+  }, [projectsOn, mainPage]);
   const groups = groupThreads(threads.state);
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
