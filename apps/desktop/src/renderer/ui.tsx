@@ -647,7 +647,7 @@ export function Breadcrumb({ items, tight }: { items: Crumb[]; tight?: boolean }
               <Tag
                 {...(onClick && { type: "button", onClick })}
                 aria-current={current ? "page" : undefined}
-                className={`flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "hover:bg-hover hover:text-foreground" : ""}`}
+                className={`flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-semibold text-foreground" : "font-medium text-muted-foreground"} ${onClick ? "hover:bg-hover hover:text-foreground" : ""}`}
               >
                 {icon}
                 <span className="truncate" title={label}>

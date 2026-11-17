@@ -238,7 +238,7 @@ interface SidebarProps {
   /** Keeps a peek shown, docked beside the workspace. */
   onDock?: () => void;
   onNewThread: () => void;
-  /** Back and Forward, at the end of its top row. */
+  /** Back and Forward, beside the app's name. */
   history?: ReactNode;
   children: ReactNode;
 }
@@ -246,7 +246,7 @@ interface SidebarProps {
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread, and Back and Forward. A nightly build paints a sky behind that row and the Search row under it, as
+ * open a new thread, and Back and Forward beside them. A nightly build paints a sky behind that row and the Search row under it, as
  * the column's own background (index.css), with stars and clouds (NightSky.tsx), and a dev build
  * blueprint paper with a grid and drafting marks.
  */
@@ -305,7 +305,7 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNewThread}
-          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-reading font-semibold tracking-tight text-foreground hover:bg-hover"
+          className="flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-reading font-semibold tracking-tight text-foreground hover:bg-hover"
         >
           <ParallaxMark className="size-5" />
           Parallax

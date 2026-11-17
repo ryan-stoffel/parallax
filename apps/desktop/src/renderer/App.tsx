@@ -884,13 +884,12 @@ export function App() {
   };
 
   // With tabs, the top right names only what leads elsewhere or isn't plain: the tab and sidebar say
-  // which thread and repository this is. The classic top bar leads with the computer and the
-  // repository or orchestrator, whose crumb wears its sidebar icon; in a thread, the repository's opens
-  // New thread on it. Under a subagent, the orchestrator's crumb goes back to the orchestrator.
+  // which thread and repository this is. The classic top bar leads with the repository or
+  // orchestrator, whose crumb wears its sidebar icon; in a thread, the repository's opens New thread
+  // on it. Under a subagent, the orchestrator's crumb goes back to the orchestrator.
   let crumbs: Crumb[];
   if (orchestrator) {
     crumbs = [
-      ...(tabsOn ? [] : [{ label: host.name }]),
       {
         label: orchestrator.name,
         icon: <ProjectIcon icon={orchestrator.icon} />,
@@ -916,7 +915,7 @@ export function App() {
     const where: Crumb[] = tabsOn
       ? remote
       : [
-          ...(remote.length ? remote : [{ label: host.name }]),
+          ...remote,
           {
             label: addedTo?.name ?? group.name,
             icon: <RepoIcon repo={addedTo ?? threads.state.repos.find((r) => r.id === group.id)} />,
@@ -1886,7 +1885,7 @@ export function App() {
         <div aria-hidden className="sidebar-peek-edge" onMouseEnter={() => setPeek(true)} />
       )}
       <Sidebar
-        history={tabsOn && sidebarOpen && historyButtons}
+        history={sidebarOpen && historyButtons}
         width={sidebarOpen ? leftWidth : peekWidth}
         onResize={sidebarOpen ? (width) => resizePanel(0, width) : undefined}
         open={sidebarOpen || peek === true}
@@ -1998,7 +1997,6 @@ export function App() {
                 {!tabsOn && (
                   <TopBar className={`@container ${topBarInset}`}>
                     {showSidebar}
-                    <div className="-ml-1 flex shrink-0">{historyButtons}</div>
                     <Breadcrumb items={crumbs} />
                     <div className="ml-auto flex shrink-0 items-center gap-2">{panelButtons}</div>
                   </TopBar>
@@ -2012,14 +2010,7 @@ export function App() {
                         cuts={workspace.cuts}
                         onResize={(cuts) => setWorkspace((state) => ({ ...state, cuts }))}
                         maximized={!!workspace.maximized}
-                        leading={
-                          !sidebarOpen && (
-                            <>
-                              {showSidebar}
-                              {historyButtons}
-                            </>
-                          )
-                        }
+                        leading={showSidebar}
                         leadingClass={sidebarOpen ? "" : "traffic-light-inset"}
                         controls={topControls}
                         controlsClass={sidePanelOpen ? "" : "window-controls-inset"}

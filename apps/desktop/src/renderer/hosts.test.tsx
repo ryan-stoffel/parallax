@@ -155,7 +155,7 @@ test("every connected host's threads are one list, newest prompt first, each ope
   expect(asked.length).toBeGreaterThan(0);
   expect(asked.every(([host]: unknown[]) => host === mini.id)).toBe(true);
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Mac mini", "api", "Add the endpoint"]);
+  expect(crumbs.map((li) => li.textContent)).toEqual(["api", "Add the endpoint"]);
   expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
 });
 
