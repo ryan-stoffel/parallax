@@ -375,7 +375,7 @@ export function TerminalDrawer({
             id={tabTerminalId(group.folder, n)}
             label={t("Terminal")}
             folder={group.folder}
-            hidden={!open || group !== current || n !== group.active}
+            hidden={group !== current || n !== group.active}
           />
         )),
       )}
