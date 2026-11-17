@@ -353,12 +353,14 @@ export function SidePanel({
   showFiles?: object;
 }) {
   const tabbed = threadTabs.use();
-  // The layout releases the panel's width on close; keep it while the exit transition runs.
-  const lastWidth = useRef(width);
+  // The layout releases the panel's width and expansion on close; keep both while the exit
+  // transition runs, so a closing expanded panel hides at once instead of sliding.
+  const last = useRef({ width, expanded });
   useLayoutEffect(() => {
-    if (open) lastWidth.current = width;
-  }, [open, width]);
-  const shownWidth = open ? width : lastWidth.current;
+    if (open) last.current = { width, expanded };
+  }, [open, width, expanded]);
+  const shownWidth = open ? width : last.current.width;
+  const slides = !(open ? expanded : last.current.expanded);
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
   const [scopes, setScopes] = useState<Record<string, Scoped>>({});
@@ -609,7 +611,7 @@ export function SidePanel({
         e.preventDefault();
         pick(next);
       }}
-      data-expanded={expanded || undefined}
+      data-expanded={slides ? undefined : true}
       style={
         expanded
           ? undefined
