@@ -128,9 +128,16 @@ const refusal = (page: Page, id: string, method: string, params: object) =>
       .then((a) => a.error && (a.error.data?.kind ?? a.error.message))`,
   );
 
-/** Opens one of Settings' two Connections pages. */
-const openSettings = async (page: Page, name: "Computers" | "Sharing & access") => {
-  await page.getByRole("button", { name: "dev@example.com", exact: true }).click();
+/**
+ * Opens one of Settings' two Connections pages. `profile` is the Profile button's name: the
+ * account's email once signed in.
+ */
+const openSettings = async (
+  page: Page,
+  name: "Computers" | "Sharing & access",
+  profile = "Profile",
+) => {
+  await page.getByRole("button", { name: profile, exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name, exact: true }).click();
 };
@@ -203,7 +210,7 @@ test("a removed device, then a read-only one, starts over with a new key and get
   const key = () => device.evaluate<string>(`window.parallax.deviceKey()`);
   const firstKey = await key();
   // The laptop's computers, where its key's standing shows, are on Computers.
-  await openSettings(device, "Computers");
+  await openSettings(device, "Computers", "dev@example.com");
   const startOver = device.getByRole("button", { name: "Start over with a new key" });
   await expect(startOver).toHaveCount(0);
 
