@@ -1213,12 +1213,17 @@ fn resuming(pin: &Pin, offers: bool) -> io::Result<Arc<rustls::ClientConfig>> {
     Ok(config)
 }
 
-/// The route a dial offers its ticket on (PLX-1585): the first, in the order the race starts
-/// them, that holds the next ones back, since it starts first and usually wins. Away from home
-/// that's the relay route, the only one that can answer. A ticket is spent once a `ClientHello`
-/// carries it, so the routes racing beside it offer none.
+/// The route a dial offers its ticket on (PLX-1585). A `ClientHello` spends the ticket it carries
+/// even when its route loses the race, so only one route offers it. That's the relay route when
+/// there is one, where a round trip costs the most and which away from home is the only one that
+/// answers. A direct route that takes TCP and never answers TLS, as an address on a network named
+/// like home's would, would spend it on every dial. Without a relay route, it's the first route,
+/// in the order the race starts them, that may answer from this computer's networks.
 fn ticket_route(routes: &[String], in_order: bool, holds: impl Fn(&str) -> bool) -> Option<&str> {
     let relay = |route: &&String| route.starts_with(RELAY_ROUTE);
+    if let Some(route) = routes.iter().find(relay) {
+        return Some(route.as_str());
+    }
     let order: Vec<&String> = if in_order {
         routes.iter().collect()
     } else {
@@ -3223,26 +3228,19 @@ mod tests {
     }
 
     #[test]
-    fn a_dial_offers_its_ticket_on_the_route_that_starts_first_and_may_answer() {
+    fn a_dial_offers_its_ticket_on_the_relay_route_or_else_the_first_that_may_answer() {
         let routes = |list: &[&str]| {
             list.iter()
                 .map(|&route| route.to_owned())
                 .collect::<Vec<_>>()
         };
-        let home = |route: &str| route.starts_with("192.168.1.") || route.starts_with(RELAY_ROUTE);
-        let both = routes(&["relay:h", "192.168.1.5", "100.64.0.9"]);
-        assert_eq!(ticket_route(&both, false, home), Some("192.168.1.5"));
-        let away = |route: &str| route.starts_with(RELAY_ROUTE);
-        assert_eq!(ticket_route(&both, false, away), Some("relay:h"));
-        assert_eq!(
-            ticket_route(&both, true, home),
-            Some("relay:h"),
-            "in the user's order"
-        );
-        assert_eq!(
-            ticket_route(&routes(&["10.0.0.1"]), false, |_| false),
-            Some("10.0.0.1")
-        );
+        let home = |route: &str| route.starts_with("192.168.1.");
+        let both = routes(&["192.168.1.5", "100.64.0.9", "relay:h"]);
+        assert_eq!(ticket_route(&both, false, home), Some("relay:h"));
+        assert_eq!(ticket_route(&both, true, home), Some("relay:h"));
+        let direct = routes(&["10.0.0.1", "192.168.1.5"]);
+        assert_eq!(ticket_route(&direct, false, home), Some("192.168.1.5"));
+        assert_eq!(ticket_route(&direct, false, |_| false), Some("10.0.0.1"));
     }
 
     #[tokio::test(start_paused = true)]
