@@ -3,7 +3,21 @@
 import type { ChosenIcon } from "../protocol/generated/protocol";
 import { activeAt } from "./attention";
 import type { Host } from "./hosts";
+import { stored } from "./stored";
 import { projectOf, type ThreadsView } from "./threads";
+
+/**
+ * Settings › Beta's Projects switch (PLX-1582). Unset reads as off. App sets it on the first time a
+ * listed computer has a Project, so someone who made Projects before they were a beta keeps them.
+ */
+export const projectsBeta = stored<boolean | undefined>(
+  "parallax.beta.projects",
+  undefined,
+  (raw, fallback) => (typeof raw === "boolean" ? raw : fallback),
+);
+
+/** Whether the app offers Projects: New project, the Projects page, pins, and Add to a Project. */
+export const useProjectsOn = () => projectsBeta.use() === true;
 
 export interface ProjectEntry {
   /** `<host>/<id>`, as pins keep it. */

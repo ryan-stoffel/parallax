@@ -1,5 +1,6 @@
-// The Traditional sidebar's head (0090, 0094): New thread, New project, and Search as rows, then
-// the pages Settings shows there and More. Its Pinned section, which folds, sits atop the list.
+// The Traditional sidebar's head (0090, 0094): New thread, New project (Add repository while
+// Projects are off), and Search as rows, then the pages Settings shows there and More. Its Pinned
+// section, which folds, sits atop the list.
 import { t } from "i18next";
 import {
   ChartNoAxesColumn,
@@ -15,6 +16,7 @@ import { useId, type ReactNode } from "react";
 import { msg } from "../i18n";
 import { icons } from "./icons";
 import { useShortcutLabel } from "./keybindings";
+import { useProjectsOn } from "./projectList";
 import { navDefaults, sidebarNav, type NavRow } from "./sidebarPrefs";
 import { Fold } from "./SidebarParts";
 import { stored } from "./stored";
@@ -31,6 +33,12 @@ export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
   { id: "pullRequests", label: msg("Pull requests"), Icon: GitPullRequest },
   { id: "usage", label: msg("Usage"), Icon: ChartNoAxesColumn },
 ];
+
+/** `navChoices` without Projects while Settings › Beta's Projects is off (PLX-1582). */
+export function useNavChoices() {
+  const projectsOn = useProjectsOn();
+  return projectsOn ? navChoices : navChoices.filter((c) => c.id !== "projects");
+}
 
 /** Whether More is open, showing the pages Settings leaves out of the head, on this computer. */
 export const moreShown = stored("parallax.moreShown", false, (raw, fallback) =>
@@ -55,15 +63,17 @@ export function SidebarNav({
   current?: NavRow;
   onNewThread: () => void;
   onOpen: (row: NavRow) => void;
-  /** Opens the add palette: a new Project or repository. */
+  /** Opens the add palette: a new Project, while they're on, or a repository. */
   onAdd: () => void;
 }) {
   const shown = { ...navDefaults, ...sidebarNav.use() };
   const newKeys = useShortcutLabel("newThread");
   const moreList = useId();
   const moreOpen = moreShown.use();
+  const choices = useNavChoices();
+  const projectsOn = useProjectsOn();
   // A page's row, under the head or under More.
-  const page = ({ id, label, Icon }: (typeof navChoices)[number]) => (
+  const page = ({ id, label, Icon }: (typeof choices)[number]) => (
     <button
       key={id}
       type="button"
@@ -75,7 +85,7 @@ export function SidebarNav({
       {t(label)}
     </button>
   );
-  const hidden = navChoices.filter((c) => !shown[c.id]);
+  const hidden = choices.filter((c) => !shown[c.id]);
   return (
     <div className="flex flex-col px-2">
       <button type="button" onClick={onNewThread} className={navRow}>
@@ -92,10 +102,10 @@ export function SidebarNav({
       </button>
       <button type="button" onClick={onAdd} className={navRow}>
         <FolderPlus />
-        {t("New project")}
+        {projectsOn ? t("New project") : t("Add repository")}
       </button>
       {search}
-      {navChoices.filter((c) => shown[c.id]).map(page)}
+      {choices.filter((c) => shown[c.id]).map(page)}
       {/* The pages left out of the head grow in under the rest, the divider moving below them. */}
       <div
         id={moreList}

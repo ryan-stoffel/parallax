@@ -11,7 +11,7 @@ import { msg } from "../../i18n";
 import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
 import { chatPrefs, setChatPrefs, type ChatPrefs } from "../prefs";
-import { navChoices } from "../SidebarNav";
+import { useNavChoices } from "../SidebarNav";
 import {
   archivePageSize,
   navDefaults,
@@ -434,6 +434,7 @@ const modes: { value: SidebarMode; name: string }[] = [
 function SidebarSettings() {
   const mode = sidebarMode.use();
   const nav = { ...navDefaults, ...sidebarNav.use() };
+  const choices = useNavChoices();
   const prefs = sidebarPrefs.use();
   return (
     <Section title={t("Sidebar")}>
@@ -451,7 +452,7 @@ function SidebarSettings() {
         />
       </Row>
       {/* Traditional's head rows. They show in Inbox too, so search finds them, and apply on switching. */}
-      {navChoices.map(({ id, label }) => (
+      {choices.map(({ id, label }) => (
         <Row
           key={id}
           title={t(label)}

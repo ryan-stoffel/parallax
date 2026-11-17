@@ -1,11 +1,13 @@
 import { t } from "i18next";
 
+import { projectsBeta, useProjectsOn } from "../projectList";
 import { threadTabs } from "../tabState";
 import { PageTitle, Row, Section, Switch } from "./parts";
 
 /** Settings > Beta: features still taking shape, each off until turned on. */
 export function BetaSettings() {
   const tabs = threadTabs.use();
+  const projects = useProjectsOn();
   return (
     <>
       <PageTitle title={t("Beta")}>
@@ -19,6 +21,20 @@ export function BetaSettings() {
           )}
         >
           <Switch label={t("Use tabs")} checked={tabs} onChange={(next) => threadTabs.set(next)} />
+        </Row>
+      </Section>
+      <Section title={t("Threads")}>
+        <Row
+          title={t("Projects")}
+          description={t(
+            "Group threads in a Project and give each its instructions and files. On for you if you already have one.",
+          )}
+        >
+          <Switch
+            label={t("Use Projects")}
+            checked={projects}
+            onChange={(next) => projectsBeta.set(next)}
+          />
         </Row>
       </Section>
     </>

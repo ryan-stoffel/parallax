@@ -33,6 +33,7 @@ import {
   sidebarPrefs,
 } from "./sidebarPrefs";
 import { fakeWatch } from "./fakeWatch";
+import { projectsBeta } from "./projectList";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The Workspace menu's items are in the DOM either way. Showing one
@@ -108,6 +109,8 @@ beforeEach(() => {
   // These tests are Traditional's head (0090); one below covers Inbox and Traditional's list (0094).
   sidebarMode.set("traditional");
   pinnedProjects.set([]);
+  // Most of these tests cover Projects; one below covers Settings › Beta's switch (PLX-1582).
+  projectsBeta.set(true);
   moreShown.set(false);
   sectionsStore.set({});
   scopeStore.set("all");
@@ -978,6 +981,41 @@ const sidebarButton = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
     (b) => b.textContent === text,
   );
+
+test("Projects are off until Settings › Beta turns them on, or a computer lists one (PLX-1582)", async () => {
+  const essays: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    project: true,
+    createdAt: "2026-09-29T11:00:00Z",
+  };
+  capabilities = { projects: {} };
+  projectsBeta.adopt(undefined);
+  localStorage.removeItem("parallax.beta.projects");
+  await renderApp();
+  // Off: the head adds a repository, and offers no Projects page.
+  expect(sidebarButton("New project")).toBeUndefined();
+  expect(sidebarButton("Add repository")).toBeDefined();
+  expect(sidebarButton("Projects")).toBeUndefined();
+  expect(projectsBeta.get()).toBeUndefined();
+  unmount();
+
+  // Someone who already has a Project keeps them: the unset switch turns on, and stays on.
+  answers["thread/list"] = () => ({ result: { repos: [parallax, essays], threads: [], seq: 7 } });
+  await renderApp();
+  expect(projectsBeta.get()).toBe(true);
+  expect(localStorage.getItem("parallax.beta.projects")).toBe("true");
+  expect(sidebarButton("New project")).toBeDefined();
+  expect(sidebarButton("Projects")).toBeDefined();
+  unmount();
+
+  // A switch the user turned off stays off.
+  projectsBeta.set(false);
+  await renderApp();
+  expect(projectsBeta.get()).toBe(false);
+  expect(sidebarButton("Projects")).toBeUndefined();
+});
 
 test("Usage waits under More until Settings shows it in the head, and pinned Projects list by name", async () => {
   const essays: Repo = {

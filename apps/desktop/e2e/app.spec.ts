@@ -118,7 +118,17 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
 });
 
+// Settings › Beta's Projects, off on a computer that has none (PLX-1582).
+async function turnOnProjects() {
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Beta", exact: true }).click();
+  await page.getByRole("switch", { name: "Use Projects" }).check();
+  await page.getByRole("button", { name: "Close settings" }).click();
+}
+
 test("the Usage, Pull requests, and Projects pages keep the thread's panels shut, and the thread gets them back (PLX-1242, PLX-1271)", async () => {
+  await turnOnProjects();
   const sidePanel = page.locator("#side-panel");
   await page.getByRole("button", { name: "Show side panel" }).click();
   await expect(sidePanel).toBeVisible();
@@ -253,6 +263,7 @@ test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", 
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Close settings" }).click();
+  await turnOnProjects();
   // An orchestrator thread starts from New thread's picker.
   await page.locator("#sidebar").getByRole("button", { name: "New thread", exact: true }).click();
   const picker = page.getByRole("dialog", { name: "New thread in" });

@@ -14,6 +14,7 @@ import { ModelMenu } from "../ModelMenu";
 import { useCatalog, type Provider } from "../models";
 import { notify } from "../notifications";
 import { newThreadPrefs, setRepoPrefs, useRepoPrefs, type RepoPrefs } from "../prefs";
+import { useProjectsOn } from "../projectList";
 import { defaultIcon, iconColors, projectIcons } from "../projectIcons";
 import { workspaces } from "../RunTargetMenu";
 import { RepoIcon, SharedRepoIcons } from "../Sidebar";
@@ -72,7 +73,9 @@ export function ProjectSettings({
     .filter((l) => scope === allHosts || l.host.id === scope)
     .flatMap(({ host, view }) => view.state.repos.map((repo) => ({ host, view, repo })));
   const repos = entries.filter((e) => isRepository(e.repo));
-  const chats = entries.filter((e) => e.repo.project);
+  // Settings › Beta's Projects (PLX-1582).
+  const projectsOn = useProjectsOn();
+  const chats = projectsOn ? entries.filter((e) => e.repo.project) : [];
   const all = [...repos, ...chats];
   const named = new Set(all.map((e) => e.host.id)).size > 1;
   const [chosen, setChosen] = useState<string>();
