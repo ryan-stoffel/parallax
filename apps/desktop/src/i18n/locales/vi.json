@@ -2038,6 +2038,7 @@
   "Issue trackers": "Trình theo dõi issue",
   "Issues": "Issue",
   "issues tickets github linear jira atlassian api key token": "issue issues vấn đề ticket github linear jira atlassian khóa api mã thông báo",
+  "Issues: Switch List and Board": "Issue: Chuyển giữa danh sách và bảng",
   "It also notifies while closed.": "Nó cũng thông báo khi đã đóng.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Nó và các luồng con chạy mà không hỏi. Khi tắt, chúng ở chế độ Tự động, hỏi trước các lệnh rủi ro.",
   "It and its children will run without asking. This can't be turned back.": "Nó và các luồng con sẽ chạy mà không hỏi. Không thể hoàn tác.",

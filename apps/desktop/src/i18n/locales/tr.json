@@ -2172,6 +2172,7 @@
   "Issue trackers": "Sorun izleyiciler",
   "Issues": "Sorunlar",
   "issues tickets github linear jira atlassian api key token": "sorunlar issues biletler github linear jira atlassian api anahtar belirteç token",
+  "Issues: Switch List and Board": "Sorunlar: Liste ve pano arasında geçiş yap",
   "It also notifies while closed.": "Kapalıyken de bildirim gönderir.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Kendisi ve alt konuları sormadan çalışır. Kapalıyken Otomatik'te kalırlar ve riskli komutlardan önce sorarlar.",
   "It and its children will run without asking. This can't be turned back.": "Kendisi ve alt konuları sormadan çalışacak. Bu geri alınamaz.",

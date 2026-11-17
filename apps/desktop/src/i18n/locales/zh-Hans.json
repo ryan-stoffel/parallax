@@ -2038,6 +2038,7 @@
   "Issue trackers": "议题跟踪器",
   "Issues": "议题",
   "issues tickets github linear jira atlassian api key token": "议题 issues 工单 问题 github linear jira atlassian api 密钥 令牌",
+  "Issues: Switch List and Board": "议题：切换列表和看板",
   "It also notifies while closed.": "关闭时也会发送通知。",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "它及其子对话无需询问即可运行。关闭时，它们保持“自动”模式，执行有风险的命令前会询问。",
   "It and its children will run without asking. This can't be turned back.": "它及其子对话将无需询问即可运行。此设置无法撤回。",

@@ -2306,6 +2306,7 @@
   "Issue trackers": "Suivi des tickets",
   "Issues": "Tickets",
   "issues tickets github linear jira atlassian api key token": "tickets issues problèmes github linear jira atlassian clé api jeton",
+  "Issues: Switch List and Board": "Tickets : Basculer entre liste et tableau",
   "It also notifies while closed.": "Notifie aussi lorsque l’app est fermée.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Lui et ses enfants s’exécutent sans demander. Désactivé, ils restent en Auto, qui demande avant les commandes risquées.",
   "It and its children will run without asking. This can't be turned back.": "Lui et ses enfants s’exécuteront sans demander. Ce choix est irréversible.",

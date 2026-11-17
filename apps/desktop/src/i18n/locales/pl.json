@@ -2440,6 +2440,7 @@
   "Issue trackers": "Systemy zgłoszeń",
   "Issues": "Zgłoszenia",
   "issues tickets github linear jira atlassian api key token": "zgłoszenia issues tickety zadania github linear jira atlassian klucz api token",
+  "Issues: Switch List and Board": "Zgłoszenia: Przełącz listę i tablicę",
   "It also notifies while closed.": "Powiadamia również, gdy jest zamknięty.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "On i jego podrzędne działają bez pytania. Po wyłączeniu pozostają w trybie Auto, który pyta przed ryzykownymi poleceniami.",
   "It and its children will run without asking. This can't be turned back.": "On i jego podrzędne będą działać bez pytania. Tego nie można cofnąć.",

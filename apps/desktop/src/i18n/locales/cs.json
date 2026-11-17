@@ -2440,6 +2440,7 @@
   "Issue trackers": "Systémy pro úkoly",
   "Issues": "Úkoly",
   "issues tickets github linear jira atlassian api key token": "úkoly issues tikety github linear jira atlassian klíč api token",
+  "Issues: Switch List and Board": "Úkoly: Přepnout seznam a nástěnku",
   "It also notifies while closed.": "Oznamuje i po zavření.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Ono i jeho podřízená vlákna běží bez ptaní. Když je vypnuto, zůstávají v režimu Automaticky, který se před riskantními příkazy ptá.",
   "It and its children will run without asking. This can't be turned back.": "Ono i jeho podřízená vlákna poběží bez ptaní. Nelze vrátit zpět.",

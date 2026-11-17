@@ -86,6 +86,7 @@ import { OrchestratorChat } from "./OrchestratorChat";
 import { OrchestratorHome, waitingCount } from "./OrchestratorHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { icons } from "./icons";
+import { switchIssuesView } from "./issuePrefs";
 import { draftGroup, issueDraft } from "./issues";
 import { IssuesPage } from "./IssuesPage";
 import { PullRequestsPage } from "./PullRequestsPage";
@@ -1388,7 +1389,9 @@ export function App() {
         const size = uiSizes[at + (command === "textLarger" ? 1 : -1)];
         if (size) setAppearance({ uiSize: size });
       } else if (command === "usage") openMainPage("usage");
-      else if (command === "openPr") {
+      else if (command === "issuesView") {
+        if (mainPage === "issues" && !dialog) switchIssuesView();
+      } else if (command === "openPr") {
         // The open thread's latest linked pull request.
         const latest = prs.urls.at(-1);
         if (!latest) return;

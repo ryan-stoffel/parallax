@@ -2038,6 +2038,7 @@
   "Issue trackers": "ตัวติดตาม issue",
   "Issues": "Issue",
   "issues tickets github linear jira atlassian api key token": "issue issues ทิกเก็ต github linear jira atlassian คีย์ api โทเค็น",
+  "Issues: Switch List and Board": "Issue: สลับระหว่างรายการและบอร์ด",
   "It also notifies while closed.": "แจ้งเตือนแม้ขณะปิดอยู่ด้วย",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "เธรดนี้และเธรดลูกจะทำงานโดยไม่ถาม เมื่อปิด จะอยู่ในโหมดอัตโนมัติ ซึ่งถามก่อนรันคำสั่งที่มีความเสี่ยง",
   "It and its children will run without asking. This can't be turned back.": "เธรดนี้และเธรดลูกจะทำงานโดยไม่ถาม เปลี่ยนกลับไม่ได้",

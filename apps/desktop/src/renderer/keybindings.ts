@@ -23,6 +23,7 @@ export type Command =
   | "open"
   | "settings"
   | "usage"
+  | "issuesView"
   | "find"
   | "openPr"
   | "parentThread"
@@ -110,6 +111,13 @@ export const commands: {
   { id: "settingsProviders", name: msg("Settings: Open Providers"), category: "Navigation" },
   { id: "settingsProjects", name: msg("Settings: Open Projects"), category: "Navigation" },
   { id: "usage", name: msg("Usage: Open"), category: "Navigation", default: "Mod+Alt+KeyU" },
+  // On the Issues page: List to Board, or back.
+  {
+    id: "issuesView",
+    name: msg("Issues: Switch List and Board"),
+    category: "Navigation",
+    default: "Mod+Alt+KeyL",
+  },
   // The threads opened in this window, as a browser's history (PLX-789).
   { id: "back", name: msg("History: Back"), category: "Navigation", default: "Mod+BracketLeft" },
   {

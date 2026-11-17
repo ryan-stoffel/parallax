@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { Issue, IssueProvider } from "../protocol/generated/protocol";
+import type { IssueEntry } from "./issues";
 import {
   boardGroups,
   containerChoices,
@@ -9,7 +10,10 @@ import {
   draftGroup,
   dropState,
   issueDraft,
+  activeFilters,
+  matchesFilters,
   matchesIssue,
+  projectChoices,
   mergeIssues,
   sortIssues,
 } from "./issues";
@@ -206,4 +210,74 @@ test("New issue opens on the last tracker and place picked, while they're still 
   // A place that's gone picks nothing, unless only one is left.
   expect(pickedContainer({ container: "mac\nj1\nGONE" }, choices)).toBe("");
   expect(pickedContainer({}, choices.slice(0, 1))).toBe("mac\nj1\nOPS");
+});
+
+const jiraOn = (site: string, id: string, key: string): IssueEntry => ({
+  hostId: "mac",
+  issue: issue({
+    connectionId: id,
+    provider: "jira",
+    key,
+    url: `https://${site}/browse/${key}`,
+    container: { id: "OPS", name: "Operations" },
+  }),
+});
+const filterAccounts = [
+  { hostId: "mac", connection: { id: "github", provider: "github" as const, account: "octocat" } },
+  {
+    hostId: "mac",
+    connection: { id: "lin", provider: "linear" as const, account: "Ada", site: "Acme" },
+  },
+  account("mac", "j1", "acme.atlassian.net"),
+  account("mac", "j2", "other.atlassian.net"),
+];
+const filterEntries: IssueEntry[] = [
+  { hostId: "mac", issue: issue() },
+  { hostId: "mac", issue: linear },
+  jiraOn("acme.atlassian.net", "j1", "OPS-1"),
+  jiraOn("other.atlassian.net", "j2", "OPS-9"),
+];
+
+test("the Project filter lists each place once, by tracker, and by site where a tracker has two", () => {
+  const twice = [...filterEntries, { hostId: "mac", issue: issue({ url: "https://x/2" }) }];
+  expect(projectChoices(twice, filterAccounts).map((c) => [c.group, c.label])).toEqual([
+    ["GitHub", "octo/hello"],
+    ["Linear", "Engineering"],
+    ["Jira · acme.atlassian.net", "Operations"],
+    ["Jira · other.atlassian.net", "Operations"],
+  ]);
+  // Picking a tracker narrows it to that tracker's.
+  expect(projectChoices(twice, filterAccounts, ["linear"]).map((c) => c.label)).toEqual([
+    "Engineering",
+  ]);
+});
+
+test("the project filter shows one project's issues, and tells one key on two sites apart", () => {
+  const [, , acme, other] = projectChoices(filterEntries, filterAccounts);
+  const keys = (filters: Parameters<typeof matchesFilters>[2], query = "") =>
+    filterEntries
+      .filter((e) => matchesFilters(e, query, filters, filterAccounts))
+      .map((e) => e.issue.key);
+  expect(keys({ trackers: [], project: "" })).toEqual(["#12", "ENG-12", "OPS-1", "OPS-9"]);
+  expect(keys({ trackers: [], project: acme!.value })).toEqual(["OPS-1"]);
+  expect(keys({ trackers: [], project: other!.value })).toEqual(["OPS-9"]);
+  // Tracker and project together: both must hold, with the search.
+  expect(keys({ trackers: ["jira", "github"], project: "" })).toEqual(["#12", "OPS-1", "OPS-9"]);
+  expect(keys({ trackers: ["jira"], project: other!.value })).toEqual(["OPS-9"]);
+  expect(keys({ trackers: ["github"], project: other!.value })).toEqual([]);
+  expect(keys({ trackers: ["jira"], project: other!.value }, "ops-1")).toEqual([]);
+});
+
+test("a filter for a tracker with no account, or a project no longer listed, doesn't apply", () => {
+  const choices = projectChoices(filterEntries, filterAccounts, ["linear"]);
+  const saved = {
+    trackers: ["linear" as const, "jira" as const],
+    project: "jira\nacme.atlassian.net\nOPS",
+  };
+  expect(activeFilters(saved, ["github", "linear"], choices)).toEqual({
+    trackers: ["linear"],
+    project: "",
+  });
+  const all = projectChoices(filterEntries, filterAccounts);
+  expect(activeFilters(saved, ["linear", "jira"], all)).toEqual(saved);
 });

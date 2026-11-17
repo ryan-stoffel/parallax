@@ -2306,6 +2306,7 @@
   "Issue trackers": "Sisteme de tichete",
   "Issues": "Tichete",
   "issues tickets github linear jira atlassian api key token": "tichete issues probleme github linear jira atlassian cheie api token",
+  "Issues: Switch List and Board": "Tichete: Comută între listă și panou",
   "It also notifies while closed.": "Notifică și când este închisă.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "El și copiii săi rulează fără să întrebe. Dezactivat, rămân în Auto, care întreabă înainte de comenzi riscante.",
   "It and its children will run without asking. This can't be turned back.": "El și copiii săi vor rula fără să întrebe. Acest lucru nu poate fi anulat.",

@@ -2038,6 +2038,7 @@
   "Issue trackers": "이슈 트래커",
   "Issues": "이슈",
   "issues tickets github linear jira atlassian api key token": "이슈 issues 티켓 github linear jira atlassian api 키 토큰",
+  "Issues: Switch List and Board": "이슈: 목록과 보드 전환",
   "It also notifies while closed.": "닫혀 있을 때도 알립니다.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "이 스레드와 하위 스레드가 묻지 않고 실행됩니다. 끄면 위험한 명령 전에 묻는 자동 모드로 유지됩니다.",
   "It and its children will run without asking. This can't be turned back.": "이 스레드와 하위 스레드가 묻지 않고 실행됩니다. 되돌릴 수 없습니다.",

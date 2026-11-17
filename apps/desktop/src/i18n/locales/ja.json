@@ -2038,6 +2038,7 @@
   "Issue trackers": "イシュートラッカー",
   "Issues": "イシュー",
   "issues tickets github linear jira atlassian api key token": "イシュー issues チケット 課題 github linear jira atlassian api キー トークン",
+  "Issues: Switch List and Board": "イシュー: リストとボードを切り替え",
   "It also notifies while closed.": "閉じている間も通知します。",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "このスレッドと子スレッドは確認なしで実行します。オフの場合は「自動」のままで、危険なコマンドの前に確認します。",
   "It and its children will run without asking. This can't be turned back.": "このスレッドと子スレッドは確認なしで実行するようになります。元に戻すことはできません。",

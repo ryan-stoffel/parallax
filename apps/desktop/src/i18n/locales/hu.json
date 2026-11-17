@@ -2172,6 +2172,7 @@
   "Issue trackers": "Feladatkövetők",
   "Issues": "Feladatok",
   "issues tickets github linear jira atlassian api key token": "feladatok issues jegyek github linear jira atlassian api kulcs token",
+  "Issues: Switch List and Board": "Feladatok: Váltás lista és tábla között",
   "It also notifies while closed.": "Bezárt állapotban is értesít.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Ez és a gyermekei kérdezés nélkül futnak. Kikapcsolva Automatikus módban maradnak, amely kockázatos parancsok előtt rákérdez.",
   "It and its children will run without asking. This can't be turned back.": "Ez és a gyermekei kérdezés nélkül fognak futni. Ez nem vonható vissza.",

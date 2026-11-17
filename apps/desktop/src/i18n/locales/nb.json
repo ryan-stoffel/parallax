@@ -2172,6 +2172,7 @@
   "Issue trackers": "Sakssystemer",
   "Issues": "Saker",
   "issues tickets github linear jira atlassian api key token": "saker issues tickets github linear jira atlassian api nøkkel token",
+  "Issues: Switch List and Board": "Saker: Bytt mellom liste og tavle",
   "It also notifies while closed.": "Den varsler også mens den er lukket.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Den og undertrådene kjører uten å spørre. Når dette er av, forblir de i Auto, som spør før risikable kommandoer.",
   "It and its children will run without asking. This can't be turned back.": "Den og undertrådene kommer til å kjøre uten å spørre. Dette kan ikke gjøres om.",

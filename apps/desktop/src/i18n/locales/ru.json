@@ -2440,6 +2440,7 @@
   "Issue trackers": "Трекеры задач",
   "Issues": "Задачи",
   "issues tickets github linear jira atlassian api key token": "задачи issues тикеты github linear jira atlassian api ключ токен",
+  "Issues: Switch List and Board": "Задачи: Переключить список и доску",
   "It also notifies while closed.": "Уведомляет и когда закрыто.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Он и его дочерние треды работают без запроса. Если выключено, они остаются в режиме «Авто», который спрашивает перед рискованными командами.",
   "It and its children will run without asking. This can't be turned back.": "Он и его дочерние треды будут работать без запроса. Это нельзя отменить.",

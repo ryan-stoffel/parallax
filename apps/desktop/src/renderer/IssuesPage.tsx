@@ -1,5 +1,5 @@
 import { t } from "i18next";
-import { ArrowDownUp, ListFilter } from "lucide-react";
+import { ArrowDownUp } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
@@ -24,12 +24,15 @@ import {
   type Moves,
 } from "./issueMoves";
 import { connectionName, StateChip } from "./IssueParts";
+import { issueFilters, issuesView } from "./issuePrefs";
 import {
   boardColumns,
   dropState,
   issueSorts,
   knownConnections,
-  matchesIssue,
+  activeFilters,
+  matchesFilters,
+  projectChoices,
   mergeIssues,
   providerNames,
   providers,
@@ -41,13 +44,13 @@ import {
 } from "./issues";
 import { IssueView } from "./IssueView";
 import { NewIssueDialog } from "./NewIssueDialog";
+import { useShortcutLabel } from "./keybindings";
 import { notify } from "./notifications";
 import { keyTaken, Menu } from "./PullRequestsPage";
 import { TrackerSetupDialog } from "./settings/TrackerSetupDialog";
 import { age } from "./Sidebar";
-import { stored } from "./stored";
 import { TrackerLogo } from "./TrackerLogo";
-import { Button, EmptyState, IconButton, searchField, Segmented, Spinner } from "./ui";
+import { Button, EmptyState, IconButton, Picker, searchField, Segmented, Spinner } from "./ui";
 
 /** What one computer answered: its tracker accounts, its issues, and what it couldn't read. */
 interface HostRead {
@@ -60,18 +63,17 @@ interface HostRead {
 
 const keyOf = (e: IssueEntry) => e.issue.url;
 
-type IssuesView = "list" | "board";
-
-/** Whether the page shows its issues as rows or as a board, kept on this computer. */
-const issuesView = stored<IssuesView>("parallax.issuesView", "list", (raw, fallback) =>
-  raw === "list" || raw === "board" ? raw : fallback,
-);
+/** A filter row's toggle chip: quiet until it's on. */
+const filterChip =
+  "flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-meta text-muted-foreground transition-colors hover:bg-hover hover:text-foreground aria-pressed:border-transparent aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-3.5";
 
 /**
  * The Issues page, in place of the main pane (0107): the open issues assigned to you on GitHub,
  * Linear, and Jira, read with `issue/list` from every connected computer that has the `issues`
  * capability, and merged so an issue two computers read shows once. The header stays put above the
- * scrolling rows, with a search, Sort, a tracker filter, Refresh, and New issue. A tracker that
+ * scrolling rows, with the List and Board switch, a search, Sort, Refresh, and New issue, and under
+ * it the filters both views share: a chip for each connected tracker, a Project dropdown of where
+ * the loaded issues are filed, and Clear while one is on, all kept on this computer. A tracker that
  * couldn't be read says so above the rows, which still show the others'. A row opens its issue on
  * the page. J and K move between rows. Board shows the same issues as cards in a column per kind
  * of state (IssueBoard): dragging a card to another column moves its issue there on its tracker.
@@ -108,12 +110,13 @@ export function IssuesPage({
   const latest = useRef<Record<string, number>>({});
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<IssueSort>("updated");
-  const [chosen, setChosen] = useState<ReadonlySet<IssueProvider>>(new Set());
   const [open, setOpen] = useState<IssueEntry>();
   const [creating, setCreating] = useState(false);
   // The tracker whose set-up is open over the page, from its empty state.
   const [settingUp, setSettingUp] = useState<IssueProvider>();
   const view = issuesView.use();
+  // The Issues: Switch List and Board command's keys, for the switch's tooltips.
+  const viewKeys = useShortcutLabel("issuesView");
   // The board's cards as dragged (issueMoves.ts), over what the computers last listed: a card
   // shows in its new column at once, and one moved to Done, which `issue/list` leaves out, stays
   // until Refresh. The ref holds the same moves, for a drop to check before the next render.
@@ -164,7 +167,15 @@ export function IssuesPage({
     r.connections.map((connection) => ({ hostId: host.id, connection })),
   );
   const entries = mergeIssues(reads.map(({ host, read: r }) => ({ hostId: host.id, ...r })));
-  const matching = (e: IssueEntry) => matchesIssue(e.issue, query, chosen);
+  // The filters, as List and Board both show them: the trackers with an account as chips, and the
+  // places the loaded issues are filed in, narrowed to the chosen trackers.
+  const withAccount = providers.filter((p) => accounts.some((a) => a.connection.provider === p));
+  const saved = issueFilters.use();
+  const trackers = saved.trackers.filter((p) => withAccount.includes(p));
+  const projects = projectChoices(boardEntries(entries, moves), accounts, trackers);
+  const filters = activeFilters(saved, withAccount, projects);
+  const filtered = filters.trackers.length > 0 || !!filters.project;
+  const matching = (e: IssueEntry) => matchesFilters(e, query, filters, accounts);
   const rows = sortIssues(listEntries(entries, moves).filter(matching), sort);
   const boardRows = sortIssues(boardEntries(entries, moves).filter(matching), sort);
   // Moves a dragged card's issue to `column`, one move per card at a time: the card goes there at
@@ -242,11 +253,13 @@ export function IssuesPage({
     ]),
   ];
 
-  const toggle = (provider: IssueProvider) => {
-    const next = new Set(chosen);
-    if (!next.delete(provider)) next.add(provider);
-    setChosen(next);
-  };
+  const toggle = (provider: IssueProvider) =>
+    issueFilters.set({
+      ...filters,
+      trackers: filters.trackers.includes(provider)
+        ? filters.trackers.filter((p) => p !== provider)
+        : [...filters.trackers, provider],
+    });
 
   const opened = !!open;
   useEffect(() => {
@@ -315,6 +328,33 @@ export function IssuesPage({
           <h1 className="flex h-8 items-center text-heading font-semibold">{t("Issues")}</h1>
           {accounts.length > 0 && (
             <>
+              <Segmented
+                label={t("View")}
+                value={view}
+                onChange={(next) => issuesView.set(next)}
+                options={[
+                  {
+                    value: "list",
+                    title: viewKeys ? `${t("List")} (${viewKeys})` : t("List"),
+                    name: (
+                      <>
+                        <icons.list aria-hidden />
+                        {t("List")}
+                      </>
+                    ),
+                  },
+                  {
+                    value: "board",
+                    title: viewKeys ? `${t("Board")} (${viewKeys})` : t("Board"),
+                    name: (
+                      <>
+                        <icons.board aria-hidden />
+                        {t("Board")}
+                      </>
+                    ),
+                  },
+                ]}
+              />
               <label className={`ml-auto w-72 ${searchField}`}>
                 <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
                 <input
@@ -337,33 +377,6 @@ export function IssuesPage({
                   onPick: () => setSort(s.id),
                 }))}
                 closeOnPick
-              />
-              <Menu
-                label={
-                  chosen.size ? t("Filters ({{count}})", { count: chosen.size }) : t("Filters")
-                }
-                icon={<ListFilter aria-hidden />}
-                items={providers.map((p) => ({
-                  id: p,
-                  group: t("Tracker"),
-                  icon: <TrackerLogo provider={p} />,
-                  label: providerNames[p],
-                  checked: chosen.has(p),
-                  onPick: () => toggle(p),
-                }))}
-              />
-              <Segmented
-                label={t("View")}
-                value={view}
-                onChange={(next) => issuesView.set(next)}
-                options={[
-                  { value: "list", title: t("List"), name: <icons.list aria-label={t("List")} /> },
-                  {
-                    value: "board",
-                    title: t("Board"),
-                    name: <icons.board aria-label={t("Board")} />,
-                  },
-                ]}
               />
             </>
           )}
@@ -391,6 +404,46 @@ export function IssuesPage({
             </Button>
           )}
         </header>
+        {accounts.length > 0 && (
+          <div
+            role="group"
+            aria-label={t("Filters")}
+            className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-8 pb-3"
+          >
+            {withAccount.map((p) => (
+              <button
+                key={p}
+                type="button"
+                aria-pressed={filters.trackers.includes(p)}
+                onClick={() => toggle(p)}
+                className={filterChip}
+              >
+                <TrackerLogo provider={p} />
+                {providerNames[p]}
+              </button>
+            ))}
+            <Picker
+              label={t("Project")}
+              value={filters.project}
+              onChange={(project) => issueFilters.set({ ...filters, project })}
+              options={[
+                { value: "", label: t("All projects") },
+                ...projects.map((c) => ({ value: c.value, label: c.label, group: c.group })),
+              ]}
+              search={projects.length > 8 ? t("Search") : undefined}
+              className="h-7 max-w-64 py-0"
+            />
+            {filtered && (
+              <Button
+                size="sm"
+                onClick={() => issueFilters.set({ trackers: [], project: "" })}
+                aria-label={t("Clear filters")}
+              >
+                {t("Clear", { context: "filters" })}
+              </Button>
+            )}
+          </div>
+        )}
         {notes.length > 0 && supported.length > 0 && (
           <ul className="mx-auto w-full max-w-5xl px-6 pb-2">
             {notes.map((note) => (

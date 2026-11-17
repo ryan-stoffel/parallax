@@ -2306,6 +2306,7 @@
   "Issue trackers": "Trackers de issues",
   "Issues": "Issues",
   "issues tickets github linear jira atlassian api key token": "issues tickets tarefas github linear jira atlassian chave api token",
+  "Issues: Switch List and Board": "Issues: Alternar entre lista e quadro",
   "It also notifies while closed.": "Também notifica enquanto está fechado.",
   "It and its children run without asking. Off, they stay in Auto, which asks before risky commands.": "Ele e os filhos dele são executados sem perguntar. Desativado, ficam em Automático, que pergunta antes de comandos arriscados.",
   "It and its children will run without asking. This can't be turned back.": "Ele e os filhos dele serão executados sem perguntar. Isso não pode ser revertido.",

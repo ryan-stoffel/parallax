@@ -83,6 +83,99 @@ export function matchesIssue(
     .every((term) => haystack.includes(term));
 }
 
+/** The Issues page's filters, shared by List and Board. */
+export interface IssueFilters {
+  /** The trackers shown. None shows them all. */
+  trackers: readonly IssueProvider[];
+  /** The one repository, team, or project shown, as a `ProjectChoice`'s value. Empty shows them all. */
+  project: string;
+}
+
+/** The site or workspace of the account an issue was read with. Empty where it has none, as GitHub. */
+const siteOf = (entry: IssueEntry, accounts: readonly ConnectionEntry[]) =>
+  accounts.find((a) => a.hostId === entry.hostId && a.connection.id === entry.issue.connectionId)
+    ?.connection.site ?? "";
+
+/**
+ * The key of the repository, team, or project `entry` is filed in: its tracker, its account's
+ * site, and the container's id, so one Jira key on two sites is two projects.
+ */
+export const projectOf = (entry: IssueEntry, accounts: readonly ConnectionEntry[]) =>
+  [entry.issue.provider, siteOf(entry, accounts), entry.issue.container.id].join("\n");
+
+/** A repository, team, or project the Project filter offers. */
+export interface ProjectChoice {
+  value: string;
+  label: string;
+  /** Its tracker, and its account's site too when the tracker has several accounts. */
+  group: string;
+  provider: IssueProvider;
+}
+
+/**
+ * The repositories, teams, and projects `entries` are filed in, once each, by tracker in the
+ * trackers' order and then by name. With `trackers` chosen, only theirs.
+ */
+export function projectChoices(
+  entries: readonly IssueEntry[],
+  accounts: readonly ConnectionEntry[],
+  trackers: readonly IssueProvider[] = [],
+): ProjectChoice[] {
+  const sites = (p: IssueProvider) =>
+    new Set(accounts.filter((a) => a.connection.provider === p).map((a) => a.connection.site));
+  const byValue = new Map<string, ProjectChoice>();
+  for (const entry of entries) {
+    const { provider, container } = entry.issue;
+    if (trackers.length > 0 && !trackers.includes(provider)) continue;
+    const site = siteOf(entry, accounts);
+    const value = projectOf(entry, accounts);
+    if (!byValue.has(value))
+      byValue.set(value, {
+        value,
+        label: container.name,
+        group:
+          sites(provider).size > 1 && site
+            ? `${providerNames[provider]} · ${site}`
+            : providerNames[provider],
+        provider,
+      });
+  }
+  return [...byValue.values()].sort(
+    (a, b) =>
+      providers.indexOf(a.provider) - providers.indexOf(b.provider) ||
+      a.group.localeCompare(b.group, locale()) ||
+      a.label.localeCompare(b.label, locale()),
+  );
+}
+
+/**
+ * Whether `entry` passes the search and the filters: `matchesIssue` for the search and the
+ * trackers, and filed in the filters' project when they name one.
+ */
+export const matchesFilters = (
+  entry: IssueEntry,
+  query: string,
+  filters: IssueFilters,
+  accounts: readonly ConnectionEntry[],
+) =>
+  matchesIssue(entry.issue, query, new Set(filters.trackers)) &&
+  (!filters.project || projectOf(entry, accounts) === filters.project);
+
+/**
+ * `filters` as they apply now: without a tracker that has no account in `connected`, and without a
+ * project that isn't among `choices`, as one of a tracker just filtered out isn't.
+ */
+export function activeFilters(
+  filters: IssueFilters,
+  connected: readonly IssueProvider[],
+  choices: readonly ProjectChoice[],
+): IssueFilters {
+  return {
+    trackers: filters.trackers.filter((p) => connected.includes(p)),
+    project: choices.some((c) => c.value === filters.project) ? filters.project : "",
+  };
+}
+
 export type IssueSort = "updated" | "state" | "title";
 
 export const issueSorts: { id: IssueSort; label: string }[] = [
