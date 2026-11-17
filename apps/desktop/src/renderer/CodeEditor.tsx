@@ -442,7 +442,6 @@ function findBar(view: EditorView): Panel {
   };
 }
 
-/** Where each view sends its cursor, since a state moves between views. */
 /**
  * CodeMirror's keymaps the editor loads, under its own Mod+S. An app shortcut takes its key from
  * these (the keydown handler below), so a new default must not be one of theirs.
@@ -456,6 +455,7 @@ export const editorKeymaps: readonly KeyBinding[] = [
   indentWithTab,
 ];
 
+/** Where each view sends its cursor, since a state moves between views. */
 const cursorReports = new WeakMap<EditorView, (update: ViewUpdate) => void>();
 
 const language = new Compartment();
