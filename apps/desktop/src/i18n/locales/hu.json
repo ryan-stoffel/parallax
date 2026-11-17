@@ -369,6 +369,7 @@
   "{{size}} KB": "{{size}} KB",
   "{{size}} MB": "{{size}} MB",
   "{{size}}. Parallax can't show this kind of file, but you can download it.": "{{size}}. A Parallax nem tudja megjeleníteni ezt a fájltípust, de letöltheti.",
+  "{{source}}: {{message}}": "{{source}}: {{message}}",
   "{{state}}:": "{{state}}:",
   "{{status}} · steer": "{{status}} · terelés",
   "{{status}} in {{time}}": "{{status}}, {{time}}",

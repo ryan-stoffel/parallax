@@ -6,7 +6,7 @@
 //   #orchestrator=parallax&panel=Agents  and a side panel view, by its name
 //   #orchestrator=parallax&agent=Scheduler and a child's chat, by the start of its Overview row
 //   #thread=Rework the updater            a plain thread, by its title
-//   #settings                             Settings; #usage, the Usage page; #issues, Issues
+//   #settings                             Settings; #usage, the Usage page; #issues, Issues (#issues=none, with no tracker)
 //   #connect                              with Parallax Connect set up on three computers
 //   #signedout                            signed out of Parallax, without onboarding
 //   #moved                                signed out at launch by the move to production Clerk

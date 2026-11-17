@@ -52,10 +52,14 @@ const keyOf = (e: IssueEntry) => e.issue.url;
  */
 export function IssuesPage({
   hosts,
+  settingsClosed,
   onOpenTrackers,
   onStartThread,
 }: {
   hosts: Host[];
+  /** How many times Settings has closed: each time, every computer is read again, since its
+   * tracker accounts may have changed there. */
+  settingsClosed: number;
   /** Opens Settings › Issue trackers, on `hostId` when given. */
   onOpenTrackers: (hostId?: string) => void;
   /** Opens New thread on the entry's computer with a draft of the issue and its `body`. */
@@ -69,7 +73,9 @@ export function IssuesPage({
   });
   const outdated = connected.filter((h) => !supported.includes(h));
   const [read, setRead] = useState<Readonly<Record<string, HostRead>>>({});
-  const [loading, setLoading] = useState(false);
+  // How many reads are under way, and each computer's latest, the only one whose answer applies.
+  const [loading, setLoading] = useState(0);
+  const latest = useRef<Record<string, number>>({});
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<IssueSort>("updated");
   const [chosen, setChosen] = useState<ReadonlySet<IssueProvider>>(new Set());
@@ -78,13 +84,16 @@ export function IssuesPage({
   const list = useRef<HTMLUListElement>(null);
 
   const load = useCallback(async (hostIds: readonly string[]) => {
-    setLoading(true);
+    setLoading((n) => n + 1);
     await Promise.all(
       hostIds.map(async (hostId) => {
+        const mine = (latest.current[hostId] = (latest.current[hostId] ?? 0) + 1);
         const [accounts, issues] = await Promise.all([
           window.parallax.request(hostId, "issue/connections", {}),
           window.parallax.request(hostId, "issue/list", {}),
         ]);
+        // A newer read of this computer answers for it.
+        if (latest.current[hostId] !== mine) return;
         const failed =
           "error" in accounts ? accounts.error : "error" in issues ? issues.error : undefined;
         setRead((all) => ({
@@ -98,13 +107,14 @@ export function IssuesPage({
         }));
       }),
     );
-    setLoading(false);
+    setLoading((n) => n - 1);
   }, []);
-  // Each computer is read as it connects, and again with Refresh and after a write.
+  // Each computer is read as it connects, and again with Refresh, after a write, and each time
+  // Settings closes.
   const supportedKey = supported.map((h) => h.id).join("\n");
   useEffect(() => {
     if (supportedKey) void load(supportedKey.split("\n"));
-  }, [supportedKey, load]);
+  }, [supportedKey, settingsClosed, load]);
 
   const reads = supported.flatMap((h) => (read[h.id] ? [{ host: h, read: read[h.id]! }] : []));
   const accounts: ConnectionEntry[] = reads.flatMap(({ host, read: r }) =>
@@ -124,14 +134,25 @@ export function IssuesPage({
       text: t("{{computer}} needs an update to show its issues.", { computer: host.name }),
     })),
     ...reads.flatMap(({ host, read: r }) => [
-      ...(r.failed ? [{ key: host.id, hostId: host.id, text: `${host.name}: ${r.failed}` }] : []),
+      ...(r.failed
+        ? [
+            {
+              key: host.id,
+              hostId: host.id,
+              text: t("{{source}}: {{message}}", { source: host.name, message: r.failed }),
+            },
+          ]
+        : []),
       ...r.errors.map((e) => {
         const account = r.connections.find((c) => c.id === e.connectionId);
         const tracker = account ? connectionName(account) : e.connectionId;
         return {
           key: `${host.id} ${e.connectionId}`,
           hostId: host.id,
-          text: `${named ? `${tracker} · ${host.name}` : tracker}: ${e.message}`,
+          text: t("{{source}}: {{message}}", {
+            source: named ? `${tracker} · ${host.name}` : tracker,
+            message: e.message,
+          }),
         };
       }),
     ]),
@@ -191,7 +212,8 @@ export function IssuesPage({
       )}
       <div className={open ? "hidden" : "contents"}>
         <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-8 pt-6 pb-4">
-          <h1 className="text-heading font-semibold">{t("Issues")}</h1>
+          {/* As tall as the toolbar, so it sits at one height with and without it. */}
+          <h1 className="flex h-8 items-center text-heading font-semibold">{t("Issues")}</h1>
           {accounts.length > 0 && (
             <>
               <label className={`ml-auto w-72 ${searchField}`}>
@@ -231,19 +253,27 @@ export function IssuesPage({
                   onPick: () => toggle(p),
                 }))}
               />
-              <IconButton
-                label={t("Refresh")}
-                aria-busy={loading}
-                disabled={loading}
-                onClick={() => void load(supported.map((h) => h.id))}
-              >
-                <icons.refresh aria-hidden className={loading ? "motion-safe:animate-spin" : ""} />
-              </IconButton>
-              <Button variant="primary" onClick={() => setCreating(true)}>
-                <icons.add aria-hidden />
-                {t("New issue")}
-              </Button>
             </>
+          )}
+          {supported.length > 0 && (
+            <IconButton
+              label={t("Refresh")}
+              aria-busy={loading > 0}
+              disabled={loading > 0}
+              onClick={() => void load(supported.map((h) => h.id))}
+              className={accounts.length > 0 ? "" : "ml-auto"}
+            >
+              <icons.refresh
+                aria-hidden
+                className={loading > 0 ? "motion-safe:animate-spin" : ""}
+              />
+            </IconButton>
+          )}
+          {accounts.length > 0 && (
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              <icons.add aria-hidden />
+              {t("New issue")}
+            </Button>
           )}
         </header>
         {notes.length > 0 && supported.length > 0 && (

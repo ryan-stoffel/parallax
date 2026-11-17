@@ -369,6 +369,7 @@
   "{{size}} KB": "{{size}} KB",
   "{{size}} MB": "{{size}} MB",
   "{{size}}. Parallax can't show this kind of file, but you can download it.": "{{size}}. Parallax kan ikke vise denne filtypen, men du kan laste den ned.",
+  "{{source}}: {{message}}": "{{source}}: {{message}}",
   "{{state}}:": "{{state}}:",
   "{{status}} · steer": "{{status}} · styr",
   "{{status}} in {{time}}": "{{status}} om {{time}}",

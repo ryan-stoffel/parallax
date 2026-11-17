@@ -465,6 +465,7 @@
   "{{size}} KB": "{{size}} Ko",
   "{{size}} MB": "{{size}} Mo",
   "{{size}}. Parallax can't show this kind of file, but you can download it.": "{{size}}. Parallax ne peut pas afficher ce type de fichier, mais vous pouvez le télécharger.",
+  "{{source}}: {{message}}": "{{source}} : {{message}}",
   "{{state}}:": "{{state}} :",
   "{{status}} · steer": "{{status}} · orienter",
   "{{status}} in {{time}}": "{{status}} dans {{time}}",

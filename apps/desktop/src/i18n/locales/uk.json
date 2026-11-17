@@ -561,6 +561,7 @@
   "{{size}} KB": "{{size}} КБ",
   "{{size}} MB": "{{size}} МБ",
   "{{size}}. Parallax can't show this kind of file, but you can download it.": "{{size}}. Parallax не може показати файл такого типу, але ви можете його завантажити.",
+  "{{source}}: {{message}}": "{{source}}: {{message}}",
   "{{state}}:": "{{state}}:",
   "{{status}} · steer": "{{status}} · скерувати",
   "{{status}} in {{time}}": "{{status}} через {{time}}",

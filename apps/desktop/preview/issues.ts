@@ -18,12 +18,22 @@ const LINEAR = "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b06";
 const JIRA = "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b07";
 const JIRA_OLD = "01a0f702-5e6f-7a81-9c83-9d0e1f2a3b08";
 
-let connections: IssueConnection[] = [
-  { id: "github", provider: "github", account: "ryanstoffel" },
-  { id: LINEAR, provider: "linear", account: "Ryan Stoffel", site: "Parallax" },
-  { id: JIRA, provider: "jira", account: "ryan@parallax.codes", site: "parallax.atlassian.net" },
-  { id: JIRA_OLD, provider: "jira", account: "ryan@acme.example", site: "acme.atlassian.net" },
-];
+// `#issues=none` starts with no tracker connected, gh signed out included. Connecting Linear or
+// Jira there saves the first account below, so its issues show.
+const none = new URLSearchParams(location.hash.slice(1)).get("issues") === "none";
+let connections: IssueConnection[] = none
+  ? []
+  : [
+      { id: "github", provider: "github", account: "ryanstoffel" },
+      { id: LINEAR, provider: "linear", account: "Ryan Stoffel", site: "Parallax" },
+      {
+        id: JIRA,
+        provider: "jira",
+        account: "ryan@parallax.codes",
+        site: "parallax.atlassian.net",
+      },
+      { id: JIRA_OLD, provider: "jira", account: "ryan@acme.example", site: "acme.atlassian.net" },
+    ];
 
 /** The states each tracker's issues move between, as `issue/get` lists them. */
 const states: Record<IssueProvider, IssueState[]> = {
@@ -216,9 +226,11 @@ export const issueHandlers = {
   "issue/connect": (p: IssueConnectParams) => {
     const connection: IssueConnection =
       p.provider === "linear"
-        ? { id: crypto.randomUUID(), provider: "linear", account: "Ryan Stoffel", site: "Acme" }
+        ? connections.some((c) => c.id === LINEAR)
+          ? { id: crypto.randomUUID(), provider: "linear", account: "Ryan Stoffel", site: "Acme" }
+          : { id: LINEAR, provider: "linear", account: "Ryan Stoffel", site: "Parallax" }
         : {
-            id: crypto.randomUUID(),
+            id: connections.some((c) => c.id === JIRA) ? crypto.randomUUID() : JIRA,
             provider: "jira",
             account: p.email,
             site: p.site.replace(/^https?:\/\//, ""),

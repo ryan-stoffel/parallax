@@ -85,11 +85,13 @@ test("an issue with no body drafts its title and URL alone", () => {
   );
 });
 
-test("a GitHub issue's thread starts in the repository of its name, others in the fallback", () => {
+test("a GitHub issue's thread starts in the repository of its name, never a Project or another repo", () => {
   const groups = [
+    { id: "p1", name: "hello", project: true },
     { id: "g1", name: "parallax" },
     { id: "g2", name: "hello" },
   ];
-  expect(draftGroup(issue(), groups, "no-repo")).toBe("g2");
-  expect(draftGroup(linear, groups, "no-repo")).toBe("no-repo");
+  expect(draftGroup(issue(), groups, "g1", "no-repo")).toBe("g2");
+  expect(draftGroup(issue(), groups.slice(0, 2), "g1", "no-repo")).toBe("no-repo");
+  expect(draftGroup(linear, groups, "g1", "no-repo")).toBe("g1");
 });

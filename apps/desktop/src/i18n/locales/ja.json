@@ -273,6 +273,7 @@
   "{{size}} KB": "{{size}} KB",
   "{{size}} MB": "{{size}} MB",
   "{{size}}. Parallax can't show this kind of file, but you can download it.": "{{size}}。Parallaxではこの種類のファイルを表示できませんが、ダウンロードはできます。",
+  "{{source}}: {{message}}": "{{source}}：{{message}}",
   "{{state}}:": "{{state}}:",
   "{{status}} · steer": "{{status}} · 割り込み",
   "{{status}} in {{time}}": "{{time}}後に{{status}}",

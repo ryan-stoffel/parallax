@@ -2011,15 +2011,16 @@ export function App() {
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <IssuesPage
                   hosts={hosts}
+                  settingsClosed={settingsClosed.count}
                   onOpenTrackers={(hostId) => openSettings("issueTrackers", hostId)}
                   onStartThread={({ hostId, issue }, body) => {
-                    // In the repository of the issue's name on its computer, else the one open
-                    // there, else Chat.
+                    // A GitHub issue in the repository of its name on its computer, else No repo.
+                    // Another tracker's in the repository open there, else No repo.
                     const state = (views[hostId] ?? idleThreads).state;
                     const fallback = hostId === host.id && !group.project ? group.id : noRepo;
                     const draft = issueDraft(
                       hostId,
-                      draftGroup(issue, groupThreads(state), fallback),
+                      draftGroup(issue, groupThreads(state), fallback, noRepo),
                       issue,
                       body,
                     );

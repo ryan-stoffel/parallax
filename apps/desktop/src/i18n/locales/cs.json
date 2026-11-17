@@ -561,6 +561,7 @@
   "{{size}} KB": "{{size}} KB",
   "{{size}} MB": "{{size}} MB",
   "{{size}}. Parallax can't show this kind of file, but you can download it.": "{{size}}. Parallax tento druh souboru neumí zobrazit, ale můžete si ho stáhnout.",
+  "{{source}}: {{message}}": "{{source}}: {{message}}",
   "{{state}}:": "{{state}}:",
   "{{status}} · steer": "{{status}} · usměrnit",
   "{{status}} in {{time}}": "{{status}} za {{time}}",

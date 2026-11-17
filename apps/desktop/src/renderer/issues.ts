@@ -119,16 +119,20 @@ export function sortIssues(entries: readonly IssueEntry[], sort: IssueSort): Iss
 }
 
 /**
- * The repository a thread about `issue` starts in: on GitHub, the computer's repository named as
- * the issue's, and `fallback` otherwise.
+ * The repository a thread about `issue` starts in. A GitHub issue's is the computer's repository
+ * named as the issue's, never a Project, and `none` when it has no such repository, so an agent
+ * never works on it in another codebase. Another tracker's issue names no repository and starts
+ * in `fallback`.
  */
 export function draftGroup(
   issue: Issue,
-  groups: readonly { id: string; name: string }[],
+  groups: readonly { id: string; name: string; project?: boolean }[],
   fallback: string,
+  none: string,
 ): string {
-  const repo = issue.provider === "github" ? issue.container.name.split("/").pop() : undefined;
-  return groups.find((g) => g.name === repo)?.id ?? fallback;
+  if (issue.provider !== "github") return fallback;
+  const repo = issue.container.name.split("/").pop();
+  return groups.find((g) => !g.project && g.name === repo)?.id ?? none;
 }
 
 /**
