@@ -21,7 +21,14 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode, Fragment } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  Fragment,
+} from "react";
 
 import { msg } from "../i18n";
 import type { BrowserAction } from "../preload/bridge";
@@ -346,6 +353,14 @@ export function SidePanel({
   showFiles?: object;
 }) {
   const tabbed = threadTabs.use();
+  // The layout releases the panel's width and expansion on close; keep both while the exit
+  // transition runs, so a closing expanded panel hides at once instead of sliding.
+  const last = useRef({ width, expanded });
+  useLayoutEffect(() => {
+    if (open) last.current = { width, expanded };
+  }, [open, width, expanded]);
+  const shownWidth = open ? width : last.current.width;
+  const slides = !(open ? expanded : last.current.expanded);
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
   const [scopes, setScopes] = useState<Record<string, Scoped>>({});
@@ -596,7 +611,12 @@ export function SidePanel({
         e.preventDefault();
         pick(next);
       }}
-      style={expanded ? undefined : { width }}
+      data-expanded={slides ? undefined : true}
+      style={
+        expanded
+          ? undefined
+          : ({ width: shownWidth, "--side-panel-width": `${shownWidth}px` } as CSSProperties)
+      }
       className={
         tabbed
           ? `pane-edge pane-card relative m-1.5 ml-0 flex min-w-0 flex-col overflow-clip rounded-prompt bg-pane ${expanded ? "flex-1" : "shrink-0"}`

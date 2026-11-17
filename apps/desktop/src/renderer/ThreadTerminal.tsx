@@ -1,6 +1,14 @@
 import { t } from "i18next";
 import { Plus, Terminal, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import { isRepository, noRepo, type ThreadsState, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
@@ -282,7 +290,7 @@ export function TerminalDrawer({
       id="terminal-drawer"
       aria-label={t("Terminal")}
       hidden={!open}
-      style={{ height }}
+      style={{ height, "--drawer-height": `${height}px` } as CSSProperties}
       className={
         tabbed
           ? "pane-edge pane-card relative mx-1.5 mb-1.5 flex shrink-0 flex-col rounded-prompt bg-pane"
@@ -367,7 +375,7 @@ export function TerminalDrawer({
             id={tabTerminalId(group.folder, n)}
             label={t("Terminal")}
             folder={group.folder}
-            hidden={!open || group !== current || n !== group.active}
+            hidden={group !== current || n !== group.active}
           />
         )),
       )}
