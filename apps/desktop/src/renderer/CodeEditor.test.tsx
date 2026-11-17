@@ -6,7 +6,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
-import CodeEditor from "./CodeEditor";
+import CodeEditor, { editorKeymaps } from "./CodeEditor";
+import { commands } from "./keybindings";
 import { OpenFiles } from "./openFiles";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -134,4 +135,33 @@ test("a long indented line that spans two visible ranges is decorated once", asy
   );
   expect(editor().visibleRanges.length).toBeGreaterThan(1);
   expect(document.querySelector(".cm-indent")).not.toBeNull();
+});
+
+// A CodeMirror key ("Mod-Shift-l", "Alt-A") or an app default ("Mod+Shift+KeyM") as its modifiers
+// and key on a platform, where Mod is Cmd on macOS and Ctrl elsewhere.
+function chord(key: string, mac: boolean): string {
+  const parts = key.split(/[-+](?=.)/);
+  const last = parts.pop()!;
+  const mods = new Set(
+    parts.map((m) => (m === "Mod" ? (mac ? "Meta" : "Ctrl") : m === "Cmd" ? "Meta" : m)),
+  );
+  // CodeMirror writes a shifted letter as its capital.
+  if (/^[A-Z]$/.test(last)) mods.add("Shift");
+  return [...[...mods].sort(), last.replace(/^(Key|Digit)/, "").toLowerCase()].join("+");
+}
+
+test("the Issues view switch's default isn't a key the editor's keymaps bind", () => {
+  const key = commands.find((c) => c.id === "issuesView")!.default!;
+  for (const mac of [true, false]) {
+    const taken = new Set(
+      editorKeymaps.flatMap((b) =>
+        (mac ? [b.mac ?? b.key] : [b.win ?? b.key, b.linux ?? b.key])
+          .filter((k) => k !== undefined)
+          .map((k) => chord(k, mac)),
+      ),
+    );
+    // The helper reads CodeMirror's keys: select all matches is Mod-Shift-l.
+    expect(taken.has(chord("Mod+Shift+KeyL", mac))).toBe(true);
+    expect(taken.has(chord(key, mac)), key).toBe(false);
+  }
 });

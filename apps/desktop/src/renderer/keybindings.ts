@@ -116,8 +116,9 @@ export const commands: {
     id: "issuesView",
     name: msg("Issues: Switch List and Board"),
     category: "Navigation",
-    // Not Mod+Alt+L: Ctrl+Alt+L locks the screen on several Linux desktops.
-    default: "Mod+Shift+KeyL",
+    // Not Mod+Alt+L, which locks the screen on several Linux desktops as Ctrl+Alt+L, nor
+    // Mod+Shift+L, the code editor's select all matches.
+    default: "Mod+Shift+KeyM",
   },
   // The threads opened in this window, as a browser's history (PLX-789).
   { id: "back", name: msg("History: Back"), category: "Navigation", default: "Mod+BracketLeft" },
