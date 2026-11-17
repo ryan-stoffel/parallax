@@ -1997,7 +1997,6 @@ export function App() {
                 {!tabsOn && (
                   <TopBar className={`@container ${topBarInset}`}>
                     {showSidebar}
-                    {!sidebarOpen && <div className="-ml-1 flex shrink-0">{historyButtons}</div>}
                     <Breadcrumb items={crumbs} />
                     <div className="ml-auto flex shrink-0 items-center gap-2">{panelButtons}</div>
                   </TopBar>
@@ -2011,14 +2010,7 @@ export function App() {
                         cuts={workspace.cuts}
                         onResize={(cuts) => setWorkspace((state) => ({ ...state, cuts }))}
                         maximized={!!workspace.maximized}
-                        leading={
-                          !sidebarOpen && (
-                            <>
-                              {showSidebar}
-                              {historyButtons}
-                            </>
-                          )
-                        }
+                        leading={showSidebar}
                         leadingClass={sidebarOpen ? "" : "traffic-light-inset"}
                         controls={topControls}
                         controlsClass={sidePanelOpen ? "" : "window-controls-inset"}
