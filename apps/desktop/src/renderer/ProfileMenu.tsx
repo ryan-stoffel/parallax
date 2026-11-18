@@ -21,6 +21,7 @@ import type { HostThreads } from "./Sidebar";
 import { icons } from "./icons";
 import type { NavRow } from "./sidebarPrefs";
 import { IconButton, Menu, menuItem, useModHeld } from "./ui";
+import { Kbd } from "./ui/marks";
 
 /**
  * The sidebar footer's Profile button (0067): the account's picture or initials beside its name
@@ -138,9 +139,7 @@ export function ProfileButton({
         >
           <Settings aria-hidden className="text-muted-foreground" />
           {t("Settings")}
-          {modHeld && settingsKeys && (
-            <span className="ml-auto text-meta text-faint-foreground">{settingsKeys}</span>
-          )}
+          {modHeld && settingsKeys && <Kbd className="ml-auto">{settingsKeys}</Kbd>}
         </button>
         {profile !== undefined && (
           <>
