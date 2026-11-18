@@ -23,3 +23,6 @@ __pycache__/
 
 # Parallax Relay
 relay/.wrangler/
+
+# parallax.codes
+site/.wrangler/

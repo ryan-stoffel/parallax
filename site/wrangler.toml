@@ -1,0 +1,13 @@
+# parallax.codes (PLX-1454): the home page and the privacy policy, as static files with no script.
+# README.md has the deploy command.
+name = "parallax-site"
+compatibility_date = "2026-10-01"
+
+# The apex of the account's parallax.codes zone, and no workers.dev URL. Deploying creates its DNS
+# record and certificate.
+routes = [{ pattern = "parallax.codes", custom_domain = true }]
+workers_dev = false
+
+# public/index.html at /, public/privacy.html at /privacy. public/_headers sets their headers.
+[assets]
+directory = "./public"
