@@ -19,9 +19,11 @@
 //! every dial to that relay with the same proxy settings. Cloudflare closes a connection that sent
 //! no request 15 s after it opened, so the kept one is replaced every [`REPLACE_AFTER`], and it's
 //! dropped when the computer changes networks or wakes. A relay route takes it the way it takes an
-//! early connection, with the same fallbacks, and a new one opens at once for the next dial. It's
-//! kept only for [`KEEP_FOR`] after the last dial that connected over the relay, and a wake ends
-//! that, so a plxd whose dials don't use the relay, as at home, opens nothing.
+//! early connection, and a new one opens at once for the next dial. A kept connection idle for
+//! seconds sometimes takes the upgrade and never answers (PLX-1602), so one with no answer within
+//! [`KEPT_ANSWER`] gets a new connection asking beside it, and the first answer wins. It's kept
+//! only for [`KEEP_FOR`] after the last dial that connected over the relay, and a wake ends that,
+//! so a plxd whose dials don't use the relay, as at home, opens nothing.
 
 use std::future::Future;
 use std::io;
@@ -43,6 +45,12 @@ use crate::remote::Error;
 /// (PLX-1549), and a route has 10 s in all, so a slow relay is rarely asked twice and a dead
 /// connection leaves time for the new one.
 const EARLY_ANSWER: Duration = Duration::from_secs(3);
+
+/// How long the relay route waits for the relay to answer its upgrade over a kept connection before
+/// a new connection asks too. On staging from the Mac mini's Wi-Fi, kept connections that worked
+/// answered within 1 s in 283 of 293 dials, and 6 of 300 never answered (PLX-1602). Most slow
+/// answers were the Worker's own time, so the kept one keeps asking and often still wins.
+const KEPT_ANSWER: Duration = Duration::from_secs(1);
 
 /// Whether a relay route in this process took an early connection, for `plxd dial` to report.
 static TOOK: AtomicBool = AtomicBool::new(false);
@@ -68,18 +76,26 @@ struct Early {
 
 /// The task opening an early connection. Dropping it aborts the task, or closes the connection it
 /// opened.
-pub(super) struct Connecting(JoinHandle<io::Result<Stream>>);
+pub(super) struct Connecting {
+    task: JoinHandle<io::Result<Stream>>,
+    /// Whether this plxd kept it open between dials, so it may have sat idle for seconds.
+    kept: bool,
+}
 
 impl Drop for Connecting {
     fn drop(&mut self) {
-        self.0.abort();
+        self.task.abort();
     }
 }
 
 impl Connecting {
+    fn new(task: JoinHandle<io::Result<Stream>>) -> Self {
+        Self { task, kept: false }
+    }
+
     /// The connection, once open: an early one.
     async fn open(mut self) -> io::Result<(Stream, bool)> {
-        match (&mut self.0).await {
+        match (&mut self.task).await {
             Ok(opened) => opened.map(|stream| (stream, true)),
             Err(error) => Err(io::Error::other(error)),
         }
@@ -100,7 +116,7 @@ pub(crate) async fn ahead<F: Future>(race: F) -> F::Output {
         return race.await;
     }
     let scope = crate::local_dial::current();
-    let connecting = Connecting(tokio::spawn(crate::local_dial::within(scope, async move {
+    let connecting = Connecting::new(tokio::spawn(crate::local_dial::within(scope, async move {
         base.connect(Roots::WithOs).await
     })));
     let early = Early {
@@ -185,7 +201,7 @@ impl Keeping {
     /// Opens a connection to keep, on the route to the internet `outward`.
     fn open(&self, outward: Outward) -> Kept {
         let (url, scope) = (self.url.clone(), Arc::clone(&self.scope));
-        let connecting = Connecting(tokio::spawn(crate::local_dial::within(
+        let connecting = Connecting::new(tokio::spawn(crate::local_dial::within(
             Some(scope),
             async move { Base::parse(&url)?.connect(Roots::WithOs).await },
         )));
@@ -316,17 +332,22 @@ fn take_kept(slot: &Slot, url: &str) -> Option<Connecting> {
         .take()
         .filter(|kept| kept.fresh(now, outward).is_some());
     keeping.kept = Some(keeping.open(outward));
-    let kept = kept?;
+    let mut connecting = kept?.connecting;
+    connecting.kept = true;
     scope.took_kept();
-    Some(kept.connecting)
+    Some(connecting)
 }
+
+/// What an upgrade answers: the WebSocket, or the HTTP status the relay refused it with, if any.
+type Upgraded = Result<WebSocketStream<Stream>, (Option<u16>, Error)>;
 
 /// [`super::upgrade`] to the relay at `url`, over `early` when it's open first. A new connection
 /// stands in when `early` isn't open yet and the new one opens first, and when `early` failed. It
 /// also asks again when `early` fails before the relay answered the upgrade, as a connection the
 /// relay closed for being idle would, or gives no answer within [`EARLY_ANSWER`], as one left on a
 /// network the computer moved off would. Then the relay saw no request, or answered none this
-/// route will read. `first` goes behind each request, as [`super::upgrade_with`] sends it.
+/// route will read. A kept connection gets [`kept_or_new`] instead. `first` goes behind each
+/// request, as [`super::upgrade_with`] sends it.
 pub(super) async fn upgrade(
     early: Connecting,
     url: &str,
@@ -335,10 +356,14 @@ pub(super) async fn upgrade(
     first: &[u8],
 ) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     let base = Base::parse(url).map_err(|e| (None, e.into()))?;
+    let kept = early.kept;
     let (stream, was_early) = open(early, &base).await.map_err(|e| (None, e.into()))?;
     let upgrading = super::upgrade_over(&base, stream, path, headers, first);
     if !was_early {
         return upgrading.await;
+    }
+    if kept {
+        return Box::pin(kept_or_new(upgrading, url, path, headers, first)).await;
     }
     match tokio::time::timeout(EARLY_ANSWER, upgrading).await {
         Ok(Err((None, error))) => {
@@ -353,11 +378,57 @@ pub(super) async fn upgrade(
     }
 }
 
+/// `upgrading`, an upgrade over a kept connection, with a new connection asking too once it has no
+/// answer within [`KEPT_ANSWER`] (PLX-1602). The first answer wins and the other is dropped. One
+/// that fails with no answer leaves the other, and the kept one gets [`EARLY_ANSWER`] in all. A
+/// kept connection that fails within [`KEPT_ANSWER`] gives way to a new one at once.
+async fn kept_or_new(
+    upgrading: impl Future<Output = Upgraded>,
+    url: &str,
+    path: &str,
+    headers: &[(&'static str, &str)],
+    first: &[u8],
+) -> Upgraded {
+    use futures_util::future::{Either, select};
+    let silent = || {
+        let error = Error::Protocol("the relay didn't answer over the kept connection".to_owned());
+        (None, error)
+    };
+    let mut kept = std::pin::pin!(async {
+        tokio::time::timeout(EARLY_ANSWER, upgrading)
+            .await
+            .unwrap_or_else(|_| Err(silent()))
+    });
+    if let Ok(answered) = tokio::time::timeout(KEPT_ANSWER, &mut kept).await {
+        if !matches!(answered, Err((None, _))) {
+            return answered;
+        }
+        debug!("the kept relay connection failed, so a new one asks");
+        return super::upgrade_with(url, path, headers, first).await;
+    }
+    debug!("no answer over the kept relay connection yet, so a new one asks too");
+    crate::connect_timing::mark("kept_raced");
+    let new = Box::pin(super::upgrade_with(url, path, headers, first));
+    let gave_way = || crate::connect_timing::mark("kept_gave_way");
+    match select(kept, new).await {
+        Either::Left((Err((None, _)), new)) => {
+            gave_way();
+            new.await
+        }
+        Either::Left((answered, _)) => answered,
+        Either::Right((Err((None, _)), kept)) => kept.await,
+        Either::Right((answered, _)) => {
+            gave_way();
+            answered
+        }
+    }
+}
+
 /// `early`'s connection if it opens first, else a new one to `base` if that does, and whether it
 /// was `early`'s. The other is dropped. A failed `early` leaves the new one.
 async fn open(early: Connecting, base: &Base) -> io::Result<(Stream, bool)> {
     let new = async { base.connect(Roots::WithOs).await.map(|s| (s, false)) };
-    if early.0.is_finished() {
+    if early.task.is_finished() {
         // Open, so no new connection starts. One that failed costs only the new one.
         return match early.open().await {
             Ok(opened) => Ok(opened),
@@ -391,7 +462,14 @@ mod tests {
         Closes,
         /// Holds it and never reads, as a connection on a network the computer left looks.
         Ignores,
+        /// Answers it [`SLOW`] late, and every later one [`SLOWER`] late, as a busy Worker would.
+        Slow,
     }
+
+    /// How late [`First::Slow`] answers the first connection: past [`KEPT_ANSWER`].
+    const SLOW: Duration = Duration::from_millis(1_300);
+    /// How late [`First::Slow`] answers the rest.
+    const SLOWER: Duration = Duration::from_secs(2);
 
     /// A relay on loopback that answers `/connect` with `ready` and echoes binary frames. Each
     /// connection it accepts counts in `accepted`. `first` says what it does with the first.
@@ -409,6 +487,12 @@ mod tests {
                         tokio::spawn(async move {
                             let _held = tcp;
                             std::future::pending::<()>().await;
+                        });
+                    }
+                    (n, First::Slow) => {
+                        tokio::spawn(async move {
+                            tokio::time::sleep(if n == 0 { SLOW } else { SLOWER }).await;
+                            answer(tcp).await;
                         });
                     }
                     _ => {
@@ -438,7 +522,7 @@ mod tests {
             connecting: Arc::new(Mutex::new(None)),
         };
         let base = Base::parse(url).unwrap();
-        *early.connecting.lock().unwrap() = Some(Connecting(tokio::spawn(async move {
+        *early.connecting.lock().unwrap() = Some(Connecting::new(tokio::spawn(async move {
             base.connect(Roots::WithOs).await
         })));
         EARLY
@@ -487,7 +571,7 @@ mod tests {
         // Nothing listens there, so the early connection fails at once.
         let early = Early {
             url: url.clone(),
-            connecting: Arc::new(Mutex::new(Some(Connecting(tokio::spawn(async {
+            connecting: Arc::new(Mutex::new(Some(Connecting::new(tokio::spawn(async {
                 Err(io::Error::from(io::ErrorKind::ConnectionRefused))
             }))))),
         };
@@ -506,7 +590,7 @@ mod tests {
         // An early connection whose handshake hangs, as one started on a network that went away.
         let early = Early {
             url: url.clone(),
-            connecting: Arc::new(Mutex::new(Some(Connecting(tokio::spawn(
+            connecting: Arc::new(Mutex::new(Some(Connecting::new(tokio::spawn(
                 std::future::pending(),
             ))))),
         };
@@ -523,7 +607,7 @@ mod tests {
     async fn another_relay_or_no_race_takes_nothing() {
         let early = Early {
             url: "http://127.0.0.1:1".to_owned(),
-            connecting: Arc::new(Mutex::new(Some(Connecting(tokio::spawn(
+            connecting: Arc::new(Mutex::new(Some(Connecting::new(tokio::spawn(
                 std::future::pending(),
             ))))),
         };
@@ -611,11 +695,72 @@ mod tests {
         lock(slot).take().unwrap().keeper.abort();
     }
 
+    /// Takes the connection `slot` keeps to the stand-in relay at `url`, whose connections count in
+    /// `accepted`, upgrades over it, and answers how long the upgrade took.
+    async fn upgrade_over_kept(slot: &'static Slot, url: &str, accepted: &AtomicUsize) -> Duration {
+        dialed_in(slot);
+        accepts(accepted, 1).await;
+        let kept = take_kept(slot, url).expect("a fresh kept connection");
+        let started = std::time::Instant::now();
+        let upgraded = upgrade(kept, url, "/v1/hosts/h/connect", &[], &[]).await;
+        let took = started.elapsed();
+        echoes_over(upgraded.unwrap()).await;
+        lock(slot).take().unwrap().keeper.abort();
+        took
+    }
+
+    /// Reads `ready` from the stand-in relay's WebSocket, then checks it echoes.
+    async fn echoes_over(mut socket: WebSocketStream<Stream>) {
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::text("ready")
+        );
+        socket.send(Message::binary(&b"ping"[..])).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::binary(&b"ping"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kept_connection_that_never_answers_gives_way_within_kept_answer() {
+        let (url, accepted) = relay(First::Ignores).await;
+        let took = crate::local_dial::within(Some(dial_scope(&url)), async {
+            upgrade_over_kept(slot(), &url, &accepted).await
+        })
+        .await;
+        assert!(took >= KEPT_ANSWER, "it asked again before {KEPT_ANSWER:?}");
+        assert!(
+            took < EARLY_ANSWER / 2,
+            "it waited {took:?}, not {KEPT_ANSWER:?} and a new connection"
+        );
+        // The kept one, the one that replaced it, and the new one that asked.
+        assert_eq!(accepted.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_kept_connection_that_answers_late_still_wins_the_race() {
+        let (url, accepted) = relay(First::Slow).await;
+        let took = crate::local_dial::within(Some(dial_scope(&url)), async {
+            upgrade_over_kept(slot(), &url, &accepted).await
+        })
+        .await;
+        assert!(
+            took < KEPT_ANSWER + SLOWER,
+            "it took {took:?}, so the new connection's answer won, not the kept one's"
+        );
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            3,
+            "a new connection asked too"
+        );
+    }
+
     #[tokio::test]
     async fn a_kept_connection_too_old_or_from_another_network_isnt_taken() {
         let outward = (Some(IpAddr::from([192, 168, 1, 2])), None);
         let kept = |age: u64| Kept {
-            connecting: Connecting(tokio::spawn(std::future::pending())),
+            connecting: Connecting::new(tokio::spawn(std::future::pending())),
             opened: SystemTime::now() - Duration::from_secs(age),
             outward,
         };
@@ -639,7 +784,7 @@ mod tests {
             scope: Arc::new(Scope::new(None, Vec::new(), false)),
             used: ago(60),
             kept: Some(Kept {
-                connecting: Connecting(tokio::spawn(std::future::pending())),
+                connecting: Connecting::new(tokio::spawn(std::future::pending())),
                 opened: ago(4),
                 outward,
             }),
