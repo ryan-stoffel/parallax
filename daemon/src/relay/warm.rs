@@ -326,7 +326,6 @@ fn take_kept(slot: &Slot, url: &str) -> Option<Connecting> {
         .as_mut()
         .filter(|keeping| keeping.serves(url, &scope))?;
     let now = SystemTime::now();
-    keeping.used = now;
     let kept = keeping
         .kept
         .take()
@@ -379,8 +378,9 @@ pub(super) async fn upgrade(
 }
 
 /// `upgrading`, an upgrade over a kept connection, with a new connection asking too once it has no
-/// answer within [`KEPT_ANSWER`] (PLX-1602). The first answer wins and the other is dropped. One
-/// that fails with no answer leaves the other, and the kept one gets [`EARLY_ANSWER`] in all. A
+/// answer within [`KEPT_ANSWER`] (PLX-1602). The first answer wins and the other is dropped, except
+/// that a refusal over the new one waits for the kept one's answer. One that fails with no answer
+/// leaves the other, and the kept one gets [`EARLY_ANSWER`] in all. A
 /// kept connection that fails within [`KEPT_ANSWER`] gives way to a new one at once.
 async fn kept_or_new(
     upgrading: impl Future<Output = Upgraded>,
@@ -417,6 +417,15 @@ async fn kept_or_new(
         }
         Either::Left((answered, _)) => answered,
         Either::Right((Err((None, _)), kept)) => kept.await,
+        // A refusal, such as a 429 because the kept upgrade took the host's last open, waits for
+        // the kept one, which may still connect.
+        Either::Right((Err(refused), kept)) => match kept.await {
+            Err((None, _)) => {
+                gave_way();
+                Err(refused)
+            }
+            answered => answered,
+        },
         Either::Right((answered, _)) => {
             gave_way();
             answered
@@ -464,6 +473,9 @@ mod tests {
         Ignores,
         /// Answers it [`SLOW`] late, and every later one [`SLOWER`] late, as a busy Worker would.
         Slow,
+        /// Answers it [`SLOW`] late, and refuses every later upgrade with a 429 at once, as the
+        /// relay does once the first took the host's last open.
+        SlowThenRefuses,
     }
 
     /// How late [`First::Slow`] answers the first connection: past [`KEPT_ANSWER`].
@@ -489,6 +501,15 @@ mod tests {
                             std::future::pending::<()>().await;
                         });
                     }
+                    (0, First::SlowThenRefuses) => {
+                        tokio::spawn(async move {
+                            tokio::time::sleep(SLOW).await;
+                            answer(tcp).await;
+                        });
+                    }
+                    (_, First::SlowThenRefuses) => {
+                        tokio::spawn(refuse(tcp));
+                    }
                     (n, First::Slow) => {
                         tokio::spawn(async move {
                             tokio::time::sleep(if n == 0 { SLOW } else { SLOWER }).await;
@@ -502,6 +523,20 @@ mod tests {
             }
         });
         (url, accepted)
+    }
+
+    /// Reads a request's head from `tcp` and answers 429.
+    async fn refuse(mut tcp: TcpStream) {
+        let mut head = Vec::new();
+        let mut byte = [0; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if tcp.read(&mut byte).await.unwrap_or(0) == 0 {
+                return;
+            }
+            head.push(byte[0]);
+        }
+        let refused = b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\n\r\n";
+        let _ = tcp.write_all(refused).await;
     }
 
     async fn answer(tcp: TcpStream) {
@@ -754,6 +789,40 @@ mod tests {
             3,
             "a new connection asked too"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_over_the_new_connection_waits_for_the_kept_ones_answer() {
+        let (url, accepted) = relay(First::SlowThenRefuses).await;
+        crate::local_dial::within(Some(dial_scope(&url)), async {
+            upgrade_over_kept(slot(), &url, &accepted).await
+        })
+        .await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            3,
+            "a new connection asked too"
+        );
+    }
+
+    #[tokio::test]
+    async fn taking_the_kept_connection_doesnt_extend_the_5_minutes() {
+        let (url, accepted) = relay(First::Answers).await;
+        let slot = slot();
+        crate::local_dial::within(Some(dial_scope(&url)), async {
+            dialed_in(slot);
+            accepts(&accepted, 1).await;
+            let used = SystemTime::now() - Duration::from_secs(60);
+            lock(slot).as_mut().unwrap().used = used;
+            take_kept(slot, &url).expect("a fresh kept connection");
+            assert_eq!(
+                lock(slot).as_ref().unwrap().used,
+                used,
+                "only a dial that connected over the relay keeps it longer"
+            );
+        })
+        .await;
+        lock(slot).take().unwrap().keeper.abort();
     }
 
     #[tokio::test]
