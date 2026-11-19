@@ -19,6 +19,9 @@
 //! The parts of a dial that are one per process in `plxd dial` (the relay's sign-in, how its
 //! stream ended, its timing marks, and whether it opened the relay's connection during the head
 //! start) are a [`Scope`] of the task that runs it inside plxd.
+//!
+//! A dial that connected over the relay also has plxd keep a connection to the relay open for the
+//! next few minutes, so the next dial skips its TCP and TLS ([`crate::relay::warm`], PLX-1586).
 
 use std::fmt::Display;
 use std::future::Future;
@@ -99,6 +102,9 @@ enum Answer {
     Connected {
         route: String,
         head_start: bool,
+        /// Whether the relay route took the connection plxd kept open (PLX-1586).
+        #[serde(default)]
+        kept: bool,
         timings: Vec<Timing>,
     },
     Failed {
@@ -130,6 +136,7 @@ pub(crate) struct Scope {
     proxy: Vec<(String, String)>,
     timings: Option<(Instant, Mutex<Vec<Timing>>)>,
     head_start: AtomicBool,
+    kept: AtomicBool,
     end: crate::relay::EndSlot,
 }
 
@@ -138,14 +145,30 @@ tokio::task_local! {
 }
 
 impl Scope {
-    fn new(relay: Option<(String, String)>, proxy: Vec<(String, String)>, timings: bool) -> Self {
+    pub(crate) fn new(
+        relay: Option<(String, String)>,
+        proxy: Vec<(String, String)>,
+        timings: bool,
+    ) -> Self {
         Scope {
             relay,
             proxy,
             timings: timings.then(|| (Instant::now(), Mutex::default())),
             head_start: AtomicBool::new(false),
+            kept: AtomicBool::new(false),
             end: crate::relay::EndSlot::default(),
         }
+    }
+
+    /// A scope with this dial's proxy settings alone, for the relay connection plxd keeps open
+    /// after it, which outlives it and holds no sign-in.
+    pub(crate) fn for_keeping(&self) -> Self {
+        Scope::new(None, self.proxy.clone(), false)
+    }
+
+    /// `dial`'s proxy settings.
+    pub(crate) fn proxy(&self) -> &[(String, String)] {
+        &self.proxy
     }
 
     /// The relay and Clerk session this dial's `relay:` routes use.
@@ -174,6 +197,11 @@ impl Scope {
     /// Notes that this dial's relay route took the connection opened during the head start.
     pub(crate) fn took_head_start(&self) {
         self.head_start.store(true, Ordering::Relaxed);
+    }
+
+    /// Notes that this dial's relay route took the connection plxd kept open.
+    pub(crate) fn took_kept(&self) {
+        self.kept.store(true, Ordering::Relaxed);
     }
 
     /// Keeps a timing mark, when `dial` prints them. `ms` is a duration for the relay's own.
@@ -405,7 +433,7 @@ where
     let mut input = Input::with_waiting(read, request.lines);
     let (routes, in_order) = (&request.routes, request.in_order);
     let dialed = within(Some(Arc::clone(&scope)), async {
-        match (&request.account, &request.remote) {
+        let dialed = match (&request.account, &request.remote) {
             (Some(host_id), _) => {
                 remote::dial_account_with_input(routes, in_order, host_id, data_dir, &mut input)
                     .await
@@ -414,7 +442,13 @@ where
                 remote::dial_with_input(routes, fingerprint, data_dir, &mut input).await
             }
             (None, None) => Err(remote::Error::Protocol("no computer to dial".to_owned())),
+        };
+        if let Ok(dialed) = &dialed
+            && dialed.route.starts_with(remote::RELAY_ROUTE)
+        {
+            crate::relay::warm::dialed();
         }
+        dialed
     });
     let dialed = tokio::select! {
         dialed = dialed => dialed,
@@ -436,6 +470,7 @@ where
     let connected = Answer::Connected {
         route: dialed.route.clone(),
         head_start: scope.head_start.load(Ordering::Relaxed),
+        kept: scope.kept.load(Ordering::Relaxed),
         timings: scope.take_timings(),
     };
     if write_line(&mut write, &connected).await.is_err() {
@@ -584,6 +619,7 @@ async fn carry<R: AsyncRead + Unpin>(
         Ok(Answer::Connected {
             route,
             head_start,
+            kept,
             timings,
         }) => {
             replay(timings);
@@ -594,6 +630,10 @@ async fn carry<R: AsyncRead + Unpin>(
             // without (PLX-1549). The app reads only the next line.
             if route.starts_with(remote::RELAY_ROUTE) && head_start {
                 report(&"opened the relay's connection during the head start");
+            }
+            // And this one from a dial over the connection plxd kept open (PLX-1586).
+            if route.starts_with(remote::RELAY_ROUTE) && kept {
+                report(&"took the relay connection this computer's plxd kept open");
             }
             report(&format!("connected over {route}"));
         }
