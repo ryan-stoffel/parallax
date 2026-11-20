@@ -60,9 +60,7 @@ pub(crate) async fn register_relay(
     context: &Context,
     params: RelayRegisterParams,
 ) -> Result<RemoteSessionsResult, ErrorObject> {
-    crate::relay::register(&context.daemon, &params.token, params.signed)
-        .await
-        .map_err(ErrorObject::invalid_params)?;
+    crate::relay::register(&context.daemon, &params.token, params.signed).await?;
     sessions(context, RemoteSessionsParams {}).await
 }
 
