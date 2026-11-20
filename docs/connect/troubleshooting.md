@@ -38,6 +38,7 @@ Each result names a part: `signIn`, `relay`, `listener`, or `stream` in `check.f
 | `The relay answered <status>.` | Check this computer's internet connection and clock, then check again. If both are fine, the relay may be down, so try again in a few minutes. |
 | `Parallax couldn't reach the relay: <reason>` | The same. Also check any proxy or firewall for `relay.parallax.codes`. See [Proxies](guide.md#proxies). |
 | `Parallax couldn't reach the relay: this computer's clock is too far off the relay's; set it to the right time` | Set the computer's clock to the right time. |
+| `Parallax couldn't reach the relay: this computer couldn't look up relay.parallax.codes; check its internet connection and any VPN or DNS filter` | This computer's DNS can't find the relay. Check that it's online, then turn off any VPN, DNS filter, or ad blocker that might block `parallax.codes`, or allow that domain in it. |
 | `The relay didn't answer in time.` | Check the internet connection and clock, then check again. |
 | `plxd isn't connected to the relay.` | Check the internet connection and clock, then check again. |
 | `The relay stopped answering over plxd's connection.` | Check the internet connection and clock, then check again. |
