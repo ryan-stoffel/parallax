@@ -23,7 +23,7 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, AgentEventsParams,
-    AgentListParams, AgentOutputItem, HostAnnounceUpdateParams, HostSettingsGetParams,
+    AgentListParams, AgentOutputItem, ErrorKind, HostAnnounceUpdateParams, HostSettingsGetParams,
     HostSettingsSetParams, ParallaxEvent, PeerComputersParams, RelayCheckParams, RelayCheckPart,
     RelayHostsParams, RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
     RelayStatus, RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
@@ -44,7 +44,7 @@ use crate::mcp::{Mcp, mcp_command};
 use crate::remote::{
     App, INITIALIZE, LOOPBACK, new_code, open, open_account, set_remote, wait_listening,
 };
-use crate::support::{Client, InProcess, PATIENCE, temp_dir};
+use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 use crate::thread_tools::Keys;
 use crate::threads::start_params;
 use crate::you_sync::{TABS, body, list, write};
@@ -100,6 +100,30 @@ async fn signing_in_turns_the_relay_on_unless_its_user_turned_it_off() {
     assert!(
         !relay_on(&mut client).await,
         "an off the user chose stays off"
+    );
+}
+
+#[tokio::test]
+async fn registering_with_a_relay_whose_name_doesnt_resolve_says_what_to_check() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    // `.invalid` never resolves (RFC 6761).
+    config.relay_url = "https://relay.invalid".to_owned();
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+
+    let refused = client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: "token".to_owned(),
+            signed: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&refused), ErrorKind::RelayUnreachable);
+    assert_eq!(
+        refused.message,
+        "Parallax couldn't reach the relay: this computer couldn't look up relay.invalid; check \
+         its internet connection and any VPN or DNS filter"
     );
 }
 

@@ -252,10 +252,24 @@ impl Base {
         };
         let tcp = match through {
             Some(proxy) => proxy.tunnel(&self.host, self.port).await?,
-            None => TcpStream::connect((self.host.as_str(), self.port)).await?,
+            None => TcpStream::connect(resolve(&self.host, self.port).await?.as_slice()).await?,
         };
         let _ = tcp.set_nodelay(true);
         Ok(tcp)
+    }
+}
+
+/// The addresses of `host`, or an error that says what to check when this computer can't look it
+/// up: the OS's own says nothing a person can act on (PLX-1604).
+async fn resolve(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(addresses) => Ok(addresses.collect()),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "this computer couldn't look up {host}; check its internet connection and any VPN or DNS filter"
+            ),
+        )),
     }
 }
 
@@ -1581,28 +1595,29 @@ pub(crate) async fn signer(daemon: &Daemon) -> Result<DpopKey, Error> {
 /// `token`: `signed`, another computer's from its `relay/sign`, else this host's, signed now. This
 /// host's records the token's user as its account (0091), from the token the caller handed it,
 /// never from the relay, turns `relay` on unless its user chose, and reconnects. Answers why it
-/// couldn't.
+/// couldn't, for people: a relay it couldn't reach as [`ErrorKind::RelayUnreachable`].
 pub(crate) async fn register(
     daemon: &Daemon,
     token: &str,
     signed: Option<RelaySignResult>,
-) -> Result<(), String> {
+) -> Result<(), ErrorObject> {
     let own = signed.is_none();
     // An app still signed in to development doesn't take back a computer that moved (PLX-1465).
     if own && let Some(named) = crate::clerk::issuer_of(token) {
-        crate::server::remote::access::refuse_going_back(daemon, &named).await?;
+        crate::server::remote::access::refuse_going_back(daemon, &named)
+            .await
+            .map_err(ErrorObject::invalid_params)?;
     }
     let signed = match signed {
         Some(signed) => signed,
-        None => {
-            sign(
-                daemon,
-                &remote::base64url(&remote::sha256(token.as_bytes())),
-                None,
-                None,
-            )
-            .await?
-        }
+        None => sign(
+            daemon,
+            &remote::base64url(&remote::sha256(token.as_bytes())),
+            None,
+            None,
+        )
+        .await
+        .map_err(ErrorObject::invalid_params)?,
     };
     let RelaySignResult {
         host_id,
@@ -1630,18 +1645,23 @@ pub(crate) async fn register(
                         named.as_deref(),
                         daemon.clerk.issuer(),
                     );
-                    crate::server::remote::access::record_account(daemon, &user, &issuer).await?;
+                    crate::server::remote::access::record_account(daemon, &user, &issuer)
+                        .await
+                        .map_err(ErrorObject::invalid_params)?;
                 }
                 relay.changed.notify_one();
             }
             Ok(())
         }
-        Ok((401, _)) => Err(SIGN_IN_REFUSED.to_owned()),
-        Ok((status, body)) => Err(format!(
+        Ok((401, _)) => Err(ErrorObject::invalid_params(SIGN_IN_REFUSED)),
+        Ok((status, body)) => Err(ErrorObject::invalid_params(format!(
             "The relay answered {status}: {}",
             body["error"].as_str().unwrap_or("no reason")
+        ))),
+        Err(error) => Err(ErrorObject::parallax(
+            ErrorKind::RelayUnreachable,
+            cant_reach(&error),
         )),
-        Err(error) => Err(cant_reach(&error)),
     }
 }
 
