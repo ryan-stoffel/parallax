@@ -35,7 +35,9 @@ Tailscale (until the release after this one):
   plx setup                          Install Parallax on this computer and connect it
 
 Options:
-  --channel stable|nightly   Which release to install (default: nightly)
+  --channel stable|nightly   Which release to install. Without it, connect installs the newest
+                             stable when it supports Parallax Relay, else the newest nightly, and
+                             add and setup install the newest nightly
   --no-browser               Sign in on any device, with a link and a short code printed here,
                              rather than in a browser on this computer. Automatic over SSH,
                              without a display, and with no terminal
@@ -160,13 +162,15 @@ export async function main(argv, deps = realDeps) {
   const { values, positionals } = args;
   if (values.help) return print(HELP);
   if (values.version) return print(VERSION);
-  // Parallax has no stable release yet, so nightly is what works.
-  const channel = values.channel ?? "nightly";
-  if (channel !== "stable" && channel !== "nightly") return usage(`--channel is stable or nightly, not ${channel}.`);
+  const channel = values.channel;
+  if (channel !== undefined && channel !== "stable" && channel !== "nightly") return usage(`--channel is stable or nightly, not ${channel}.`);
   if (values.port !== undefined && !/^\d+$/.test(values.port)) return usage(`--port is a number, not ${values.port}.`);
   if (values.device !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(values.device)) return usage(`--device is a device's key, not ${values.device}.`);
-  /** @type {import("./tailscale-setup.mjs").Options & import("./connect.mjs").Options} */
-  const options = { channel, user: values.user, port: values.port, headless: values.headless, dryRun: values["dry-run"], device: values.device };
+  // Without --channel, connect lets pickDefault choose, and the Tailscale commands keep nightly.
+  /** @type {import("./connect.mjs").Options} */
+  const options = { channel, user: values.user, port: values.port, device: values.device };
+  /** @type {import("./tailscale-setup.mjs").Options} */
+  const tailscale = { ...options, channel: channel ?? "nightly", headless: values.headless, dryRun: values["dry-run"] };
 
   const [command, ...rest] = positionals;
   switch (command) {
@@ -201,9 +205,9 @@ export async function main(argv, deps = realDeps) {
       return devices(values.json === true);
     case "add":
       if (rest.length !== 1 || !rest[0]) return usage("add takes one device.");
-      return add(rest[0], options);
+      return add(rest[0], tailscale);
     case "setup":
-      return setup(options);
+      return setup(tailscale);
     case "doctor":
       if (values.agent !== undefined && values.agent !== "claude" && values.agent !== "codex") return usage(`--agent is claude or codex, not ${values.agent}.`);
       return doctor({ agent: values.agent, model: values.model });

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { pickAsset, pickRelease, supportsRelay, withSha256 } from "../src/releases.mjs";
+import { fetchReleases, pickAsset, pickDefault, pickRelease, supportsRelay, withSha256 } from "../src/releases.mjs";
 
 /** Each asset's GitHub digest, made up from its name. @param {string} name */
 const digest = (name) => `sha256:${Buffer.from(name).toString("hex").padEnd(64, "0").slice(0, 64)}`;
@@ -38,6 +38,48 @@ const releases = [release("v2610.1.1-nightly", true, [], true), newestNightly, s
 test("picks the newest non-draft release of each channel", () => {
   assert.equal(pickRelease(releases, "nightly"), newestNightly);
   assert.equal(pickRelease(releases, "stable"), stable);
+});
+
+test("the default is the newest stable that supports the relay, else the newest nightly", () => {
+  const relayNightly = release("v2611.10423.14450-nightly", true, []);
+  const oldStable = release("v2610.10118.11324", false, []);
+  const relayStable = release("v2611.10101.10000", false, []);
+  assert.equal(pickDefault([relayNightly]), relayNightly);
+  assert.equal(pickDefault([relayNightly, oldStable]), relayNightly);
+  assert.equal(pickDefault([relayNightly, relayStable, oldStable]), relayStable);
+  assert.equal(pickDefault([release("v2611.10501.10000", false, [], true), relayNightly, oldStable]), relayNightly);
+});
+
+test("the release list ends with the latest stable when asked and it's older than the page", async () => {
+  const page = [release("v2611.10423.14450-nightly", true, [])];
+  const latest = release("v2611.10101.10000", false, []);
+  const real = globalThis.fetch;
+  /** @type {string[]} */
+  let urls = [];
+  /** @param {() => Response} answerLatest */
+  const github = (answerLatest) => {
+    urls = [];
+    globalThis.fetch = async (url) => (urls.push(String(url)), String(url).endsWith("/latest") ? answerLatest() : Response.json(page));
+  };
+  const tags = async (/** @type {boolean} */ latestStable) => (await fetchReleases(latestStable)).map((r) => r.tag_name);
+  try {
+    github(() => Response.json(latest));
+    assert.deepEqual(await tags(true), ["v2611.10423.14450-nightly", "v2611.10101.10000"]);
+    assert.equal(urls.length, 2);
+    github(() => Response.json(latest));
+    assert.deepEqual(await tags(false), ["v2611.10423.14450-nightly"]);
+    assert.equal(urls.length, 1);
+    // No stable, a rate limit, a server error, and no network all read as no stable.
+    for (const failure of [404, 403, 500, 0]) {
+      github(() => {
+        if (!failure) throw new TypeError("fetch failed");
+        return new Response("{}", { status: failure });
+      });
+      assert.deepEqual(await tags(true), ["v2611.10423.14450-nightly"], String(failure));
+    }
+  } finally {
+    globalThis.fetch = real;
+  }
 });
 
 test("a release supports the relay from the first build that has it", () => {

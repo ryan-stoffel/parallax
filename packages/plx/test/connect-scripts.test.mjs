@@ -77,13 +77,13 @@ test("connect.sh from curl | sh with no terminal runs plx with nothing on stdin,
   assert.equal(code, 7);
   assert.equal(stdout, "plx ran\n");
   // Nothing of the script itself reaches plx's prompt, and only a plx that fails at end of input runs.
-  assert.equal(recorded, "-y plx-cli@>=0.7.0 connect --channel nightly --channel stable\n");
+  assert.equal(recorded, "-y plx-cli@>=0.7.0 connect --channel stable\n");
 });
 
 test("connect.sh as a file with no terminal leaves plx the script's stdin for a piped code", { skip: process.platform === "win32" }, async () => {
   const { code, recorded } = await posix(`sh "$CONNECT_SH"`, "the-code\n");
   assert.equal(code, 7);
-  assert.equal(recorded, "-y plx-cli@>=0.7.0 connect --channel nightly\nthe-code\n");
+  assert.equal(recorded, "-y plx-cli@>=0.7.0 connect\nthe-code\n");
 });
 
 const POWERSHELL = ["-NoProfile", "-NonInteractive", "-Command"];
@@ -110,7 +110,7 @@ for (const [launch, plx, how] of LAUNCHES) {
       const [file, args, options] = how(`Get-Content -Raw -LiteralPath '${script("connect.ps1")}' | Invoke-Expression; Connect-Parallax --channel stable`);
       const { code, stdout, stderr } = await run(file, args, env, undefined, options);
       assert.equal(code, 7, `exit ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
-      assert.equal(readFileSync(recorded, "utf8").trim(), `-y ${plx} connect --channel nightly --channel stable`);
+      assert.equal(readFileSync(recorded, "utf8").trim(), `-y ${plx} connect --channel stable`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

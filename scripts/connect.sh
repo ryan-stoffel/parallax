@@ -65,13 +65,13 @@ fi
 NPM_CONFIG_UPDATE_NOTIFIER=false
 export NPM_CONFIG_UPDATE_NOTIFIER
 
-# Named because this script can reach users before a plx-cli that defaults to nightly does. The
-# last --channel wins, so one given to this script overrides it.
+# No --channel, so plx picks one: the newest stable with Parallax Relay, else the newest nightly.
+# A plx-cli older than that default installs the nightly. A --channel given to this script wins.
 # This script can arrive on stdin, so plx reads from the terminal when there is one.
 if (: </dev/tty) 2>/dev/null; then
-  exec npx -y plx-cli@latest connect --channel nightly "$@" </dev/tty
+  exec npx -y plx-cli@latest connect "$@" </dev/tty
 fi
 # With none, plx keeps this stdin: a code piped in, or the end of a `curl | sh` script, which it
 # reports as a failure. plx-cli before 0.7.0 would exit 0 there with nothing signed in, so npx
 # fails rather than run one.
-exec npx -y 'plx-cli@>=0.7.0' connect --channel nightly "$@"
+exec npx -y 'plx-cli@>=0.7.0' connect "$@"

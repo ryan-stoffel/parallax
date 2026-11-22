@@ -131,6 +131,47 @@ test("connect and add stop before sign-in, naming the fix, when the release can'
   }
 });
 
+test("connect with no channel installs the newest stable with the relay, else the newest nightly", async () => {
+  const nightly = { tag_name: "v2611.10423.14450-nightly", prerelease: true, assets: [] };
+  const oldStable = { tag_name: "v2610.10118.11324", prerelease: false, assets: [] };
+  const relayStable = { tag_name: "v2611.10101.10000", prerelease: false, assets: [] };
+  /** @type {[import("../src/releases.mjs").Release[], string][]} */
+  const cases = [
+    [[nightly], "nightly"],
+    [[nightly, oldStable], "nightly"],
+    [[nightly, relayStable], "stable"],
+  ];
+  for (const [list, channel] of cases) {
+    const fake = fakes();
+    fake.deps.release = (channel) => connect.findRelease(channel, async () => list);
+    const { code, out } = await printed(() => connect.connect({}, fake.deps));
+    assert.equal(code, 0, out);
+    assert.equal(fake.installed[0]?.split(" ").pop(), channel, list.map((r) => r.tag_name).join(" "));
+    fake.done();
+  }
+});
+
+test("a failed latest-stable lookup leaves the default on nightly, and an explicit channel never makes it", async () => {
+  const nightly = { tag_name: "v2611.10423.14450-nightly", prerelease: true, assets: [] };
+  const real = globalThis.fetch;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    for (const status of [403, 500]) {
+      /** @type {string[]} */
+      const urls = [];
+      globalThis.fetch = async (url) => (urls.push(String(url)), String(url).endsWith("/latest") ? new Response("{}", { status }) : Response.json([nightly]));
+      assert.equal((await connect.findRelease("nightly")).tag_name, nightly.tag_name);
+      assert.equal(urls.length, 1, String(status));
+      assert.equal((await connect.findRelease(undefined)).tag_name, nightly.tag_name);
+      assert.equal(urls.length, 3, String(status));
+    }
+  } finally {
+    globalThis.fetch = real;
+    console.log = log;
+  }
+});
+
 test("install downloads the given release's plxd, and fails when it has none for the OS", async () => {
   const name = "parallax-plxd-1.0.0-nightly-linux-x64";
   const asset = { name, browser_download_url: `https://dl/${name}`, digest: `sha256:${"a".repeat(64)}` };
@@ -481,6 +522,25 @@ test("add signs in here, then installs and links over ssh", { skip: process.plat
       else process.env[key] = value;
     }
     rmSync(home, { recursive: true, force: true });
+    fake.done();
+  }
+});
+
+test("add with no channel names the chosen release's channel when ssh can't connect", { skip: process.platform === "win32" }, async () => {
+  const fake = fakes();
+  fake.deps.release = async (channel) => (assert.equal(channel, undefined), { tag_name: "v2611.10101.10000", prerelease: false, assets: [] });
+  const bin = mkdtempSync(path.join(tmpdir(), "plx-bin-"));
+  writeFileSync(path.join(bin, "ssh"), "#!/bin/sh\nexit 255\n");
+  chmodSync(path.join(bin, "ssh"), 0o755);
+  const saved = process.env["PATH"];
+  process.env["PATH"] = `${bin}:${saved}`;
+  try {
+    const { code, out } = await printed(() => connect.add("box.local", {}, fake.deps));
+    assert.equal(code, 1, out);
+    assert.match(out, /run npx plx-cli connect --channel stable on it\./);
+  } finally {
+    process.env["PATH"] = saved;
+    rmSync(bin, { recursive: true, force: true });
     fake.done();
   }
 });

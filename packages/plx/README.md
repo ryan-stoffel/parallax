@@ -8,7 +8,7 @@ It publishes as `plx-cli`, with a `plx` command, until the `plx` name on npm is 
 npx plx-cli connect
 ```
 
-Parallax ships only nightlies for now, and plx installs the nightly by default. In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
+`plx connect` installs the newest stable release when it supports Parallax Relay, and otherwise the newest nightly. In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
 
 Every download is checked against the SHA-256 its GitHub release reports, and plx refuses one that doesn't match or has none. plxd goes in `~/.parallax-plxd` (`%USERPROFILE%\.parallax-plxd` on Windows), and its login service runs it from there. On Linux, `~/.local/bin/plxd` links to it.
 
@@ -28,7 +28,7 @@ Until the release after this one, the Tailscale commands stay: `plx devices [--j
 
 Options:
 
-- `--channel stable|nightly`: which release to install (default `nightly`). `plx connect` stops before sign-in when that release is older than Parallax Relay, and says what to run instead.
+- `--channel stable|nightly`: which release to install. Without it, `connect` chooses as above, and `add` and `setup` install the nightly. `plx connect` stops before sign-in when that release is older than Parallax Relay, and says what to run instead.
 - `--no-browser`: sign in on any device, with a link and a short code printed here. This is automatic over SSH, on Linux without a display, and with no terminal.
 - `--device=<key>`: for `connect` and `connect add`, the signed-in device whose Allow is enough, by its key. Add computer's command fills this in. It isn't a secret. It works because it reaches this computer through you, not the relay.
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
