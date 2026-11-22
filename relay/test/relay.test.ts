@@ -1535,23 +1535,30 @@ describe("standby spare object (PLX-1574)", () => {
 
 describe("stream object placement (PLX-1606)", () => {
   it("maps where plxd's IP is to a location hint", () => {
+    const at = (latitude: string, longitude: string) => ({ latitude, longitude });
     const cases: [Record<string, string> | undefined, string | undefined][] = [
-      [{ continent: "NA", longitude: "-117.16" }, "wnam"], // San Diego
-      [{ continent: "NA", longitude: "-104.99" }, "wnam"], // Denver
-      [{ continent: "NA", longitude: "-96.80" }, "enam"], // Dallas
-      [{ continent: "NA", longitude: "-74.01" }, "enam"], // New York
-      [{ continent: "SA", longitude: "-46.63" }, "sam"],
-      [{ continent: "EU", longitude: "2.35" }, "weur"], // Paris
-      [{ continent: "EU", longitude: "21.01" }, "eeur"], // Warsaw
-      [{ continent: "AS", longitude: "55.27" }, "me"], // Dubai
-      [{ continent: "AS", longitude: "139.69" }, "apac"], // Tokyo
-      [{ continent: "OC", longitude: "151.21" }, "oc"],
-      [{ continent: "AF", longitude: "18.42" }, "afr"],
-      // A split continent with no longitude, Antarctica, and no geolocation give none.
-      [{ continent: "NA" }, undefined],
-      [{ continent: "EU", longitude: "" }, undefined],
-      [{ continent: "AN", longitude: "0" }, undefined],
-      [{}, undefined],
+      [at("32.72", "-117.16"), "wnam"], // San Diego
+      [at("39.74", "-104.99"), "wnam"], // Denver
+      [at("21.31", "-157.86"), "wnam"], // Honolulu
+      [at("32.78", "-96.80"), "enam"], // Dallas
+      [at("40.71", "-74.01"), "enam"], // New York
+      [at("-23.55", "-46.63"), "enam"], // São Paulo, where Cloudflare makes objects hinted `sam`
+      [at("48.86", "2.35"), "weur"], // Paris
+      [at("6.52", "3.38"), "weur"], // Lagos, not `afr`
+      [at("52.23", "21.01"), "eeur"], // Warsaw
+      [at("41.01", "28.98"), "eeur"], // Istanbul, which Cloudflare puts in Asia
+      [at("25.20", "55.27"), "eeur"], // Dubai, not `me`
+      [at("19.08", "72.88"), "apac-se"], // Mumbai
+      [at("1.35", "103.82"), "apac-se"], // Singapore
+      [at("35.68", "139.69"), "apac-ne"], // Tokyo
+      [at("43.12", "131.89"), "apac-ne"], // Vladivostok, which Cloudflare puts in Europe
+      [at("13.44", "144.79"), "apac-ne"], // Guam, which Cloudflare puts in Oceania
+      [at("-33.87", "151.21"), "oc"], // Sydney
+      // A missing, empty or out-of-range coordinate, and no geolocation, give none.
+      [{ latitude: "48.86" }, undefined],
+      [at("", "2.35"), undefined],
+      [at("91", "0"), undefined],
+      [{ continent: "EU", country: "T1" }, undefined],
       [undefined, undefined],
     ];
     for (const [cf, hint] of cases) expect(regionHint(cf as IncomingRequestCfProperties | undefined), JSON.stringify(cf)).toBe(hint);
@@ -1600,7 +1607,7 @@ describe("stream object placement (PLX-1606)", () => {
   }
 
   it("makes each new stream object in the region plxd's IP is in, after hibernating too", async () => {
-    expect(await made({ continent: "EU", longitude: "2.35" })).toEqual(["weur", "weur", "weur"]);
+    expect(await made({ latitude: "48.86", longitude: "2.35" })).toEqual(["weur", "weur", "weur"]);
   });
 
   it("gives no hint when that region is unknown", async () => {

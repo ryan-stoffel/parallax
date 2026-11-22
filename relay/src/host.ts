@@ -47,30 +47,40 @@ export const MAX_STREAMS = 16;
 /** The control socket's tag naming the location hint its host's new stream objects get, such as
  *  `region:wnam`. */
 const REGION_TAG = "region:";
-/** Each continent's location hint, or the longitude that splits it in two and the hints west and
- *  east of it. */
-const REGIONS = new Map<string, DurableObjectLocationHint | [number, DurableObjectLocationHint, DurableObjectLocationHint]>([
-  ["NA", [-100, "wnam", "enam"]],
-  ["SA", "sam"],
-  ["EU", [20, "weur", "eeur"]],
-  ["AS", [60, "me", "apac"]],
-  ["OC", "oc"],
-  ["AF", "afr"],
-]);
+/** A city in each region Durable Objects are made in, as latitude and longitude. `sam`, `afr` and
+ *  `me` aren't here: Cloudflare makes objects hinted there in a nearby region instead. */
+const REGIONS: [DurableObjectLocationHint, number, number][] = [
+  ["wnam", 37.36, -121.93], // San Jose
+  ["enam", 39.04, -77.49], // Ashburn
+  ["weur", 50.11, 8.68], // Frankfurt
+  ["eeur", 52.23, 21.01], // Warsaw
+  ["apac-ne", 35.68, 139.69], // Tokyo
+  ["apac-se", 1.35, 103.82], // Singapore
+  ["oc", -33.87, 151.21], // Sydney
+];
+
+/** The distance between two points on the Earth, in radians of arc. */
+function arc(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const rad = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * rad) / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(((lon2 - lon1) * rad) / 2) ** 2;
+  return 2 * Math.asin(Math.sqrt(a));
+}
 
 /**
- * The Durable Object location hint for the region Cloudflare places a request's IP in, from its
- * `request.cf`, or undefined when that's unknown (PLX-1606). It's the IP's geolocation, not the
- * data center the request entered, which PLX-1574 found unreliable. North America splits at 100°W,
- * Europe at 20°E, and Asia at 60°E, west of which is the Middle East.
+ * The Durable Object location hint for the region nearest where Cloudflare places a request's IP,
+ * from its `request.cf`, or undefined when that's unknown (PLX-1606). It's the IP's geolocation, not
+ * the data center the request entered, which PLX-1574 found unreliable. Distance, not the
+ * continent, picks it, so Vladivostok gets `apac-ne`, Istanbul `eeur`, Guam `apac-ne` and South
+ * America `enam`. Southern Africa sits about as far from Frankfurt as from Singapore.
  */
-export function regionHint(cf: Partial<Pick<IncomingRequestCfProperties, "continent" | "longitude">> | undefined) {
-  const region = REGIONS.get(String(cf?.continent));
-  if (!Array.isArray(region)) return region;
-  const [split, west, east] = region;
-  const longitude = Number.parseFloat(String(cf?.longitude));
-  if (Number.isNaN(longitude)) return undefined;
-  return longitude < split ? west : east;
+export function regionHint(cf: Partial<Pick<IncomingRequestCfProperties, "latitude" | "longitude">> | undefined) {
+  const [latitude, longitude] = [cf?.latitude, cf?.longitude].map((value) => Number.parseFloat(String(value)));
+  if (!(Math.abs(latitude!) <= 90 && Math.abs(longitude!) <= 180)) return undefined;
+  let nearest = REGIONS[0]!;
+  for (const region of REGIONS)
+    if (arc(latitude!, longitude!, region[1], region[2]) < arc(latitude!, longitude!, nearest[1], nearest[2])) nearest = region;
+  return nearest[0];
 }
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
