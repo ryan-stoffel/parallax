@@ -45,6 +45,16 @@ dbg_macro = "warn"
 codegen-units = 1
 strip = "symbols"
 
+# The browser's TLS module (packages/relay-tls, 0108), which a page downloads. `z` keeps it about
+# 14 KB under CI's 200 KB gzipped limit, where `s` sat at the limit (PLX-1615). It costs a little
+# speed: a handshake with both ends in WASM took 0.62 ms instead of 0.55, and bulk data ran at 35
+# instead of 45 MiB/s, far above what the relay carries.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+panic = "abort"
+
 # `cargo build --profile bench -p plxd --features fake-backend`: release optimizations with debug
 # assertions on, which the fake backend requires, for scripts/bench/load.py.
 [profile.bench]
