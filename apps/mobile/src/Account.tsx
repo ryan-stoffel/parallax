@@ -5,7 +5,8 @@
 // load a plain-HTTP page, which iOS 27 warns about. The refresh token and the last userinfo stay in the
 // Keychain on this phone only; the access token, a JWT good for a day, stays in memory. The
 // account's name, password, and deletion are on Clerk's account pages, since an OAuth token
-// can't change the user.
+// can't change the user. Deletion opens that page in the sign-in sheet, where the user is signed
+// in already, and the phone then asks Clerk whether the account is still there (PLX-1608).
 import { sha256 } from "@noble/hashes/sha2.js";
 import { t } from "i18next";
 import { randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -54,6 +55,8 @@ const API =
   `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "")}`;
 /** Clerk's Account Portal beside it: `<slug>.accounts.dev`, or `accounts.<domain>`. */
 export const PORTAL =API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
+/** The account's security page there: its password, its passkeys, and Delete account. */
+export const SECURITY = `${PORTAL}/user/security`;
 
 /** What Clerk's userinfo says of the user, as much as the app shows. */
 interface User {
@@ -103,6 +106,12 @@ interface AccountValue {
   notice?: string;
   signIn: (create: boolean) => Promise<string | undefined>;
   signOut: () => Promise<void>;
+  /**
+   * Shows Clerk's security page, whose Delete account button deletes the account, in the sign-in
+   * sheet. Once the sheet closes, a deleted account leaves the phone signed out, and one still
+   * there leaves it as it was.
+   */
+  deleteAccount: () => Promise<void>;
   /**
    * A current access token, for Parallax Relay, or undefined signed out. With `fresh`, a new one
    * from Clerk, as an account's computer takes only a token issued in the last minute (0091).
@@ -214,6 +223,14 @@ export function AccountProvider({ children }: { children: ReactNode }) {
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ client_id: CLIENT_ID, token: held.refreshToken }).toString(),
         }).catch(() => undefined);
+    },
+
+    async deleteAccount() {
+      // The page never sends the sheet back, so it ends when the user closes it.
+      await authorize(SECURITY).catch(() => undefined);
+      // Clerk refuses a deleted user's refresh token, which ends the session (`refresh`).
+      await value.accessToken(true);
+      if (!latest.current.session) setNotice(t("Your Parallax account was deleted."));
     },
 
     accessToken(fresh = false) {
