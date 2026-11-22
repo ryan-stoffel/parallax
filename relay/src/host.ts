@@ -690,7 +690,7 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** plxd's control socket. Clients' streams go to their own objects, through the Worker. */
-  async fetch(request: Request<unknown, IncomingRequestCfProperties>): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return json(426, { error: "upgrade_required" });
     return logged(
@@ -700,7 +700,8 @@ export class HostRelay extends DurableObject<Env> {
         this.hostSocket(
           request.headers.get(PROOF_HEADER) ?? "",
           request.headers.get(STREAMS_HEADER),
-          regionHint(request.cf),
+          // A request that reached the Worker carries Cloudflare's incoming properties.
+          regionHint(request.cf as IncomingRequestCfProperties | undefined),
         ),
     );
   }
