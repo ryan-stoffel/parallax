@@ -4566,7 +4566,7 @@
   "This branch has conflicts": "Tato větev má konflikty",
   "This branch is behind {{base}}": "Tato větev je pozadu za {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Toto sestavení nemůže získat push token. Potřebuje funkci push u App ID.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Tuto akci nelze vrátit. Všechna zařízení budou odhlášena a vaše vlákna zůstanou ve vašich počítačích. Dokončete to na další stránce volbou Smazat účet.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Tuto akci nelze vrátit. Všechna zařízení budou odhlášena a vaše vlákna zůstanou ve vašich počítačích. Dokončete to na další stránce volbou „Delete account“.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Tuto akci nelze vrátit. Pro plný přístup ho zrušte a pak znovu spárujte, nebo v Nastavení toho zařízení zvolte Začít znovu s novým klíčem.",
   "This chat couldn't load": "Tento chat se nepodařilo načíst",
   "This chat isn't updating": "Tento chat se neaktualizuje",

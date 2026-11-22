@@ -4566,7 +4566,7 @@
   "This branch has conflicts": "Ця гілка має конфлікти",
   "This branch is behind {{base}}": "Ця гілка відстає від {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Ця збірка не може отримати push-токен. Їй потрібна можливість push в App ID.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Це не можна скасувати. На всіх пристроях буде виконано вихід, а ваші треди залишаться на ваших комп’ютерах. Щоб завершити, виберіть «Видалити обліковий запис» на наступній сторінці.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Це не можна скасувати. На всіх пристроях буде виконано вихід, а ваші треди залишаться на ваших комп’ютерах. Щоб завершити, виберіть «Delete account» на наступній сторінці.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Це не можна скасувати. Щоб надати йому повний доступ, відкличте його, а потім знову з’єднайте в пару або виберіть «Почати заново з новим ключем» у Налаштуваннях того пристрою.",
   "This chat couldn't load": "Не вдалося завантажити цей чат",
   "This chat isn't updating": "Цей чат не оновлюється",

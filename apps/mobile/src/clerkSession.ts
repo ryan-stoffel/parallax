@@ -12,19 +12,53 @@ export class ClerkError extends Error {
 }
 
 /**
- * The result of `refresh`, or undefined if it failed. A refresh token Clerk refused, such as after
- * signing out everywhere, signs this phone out too. Any other failure leaves it signed in.
+ * How a refresh went: `valid` with its result, `refused` when Clerk refused the refresh token
+ * itself, or `unreachable` for anything else, such as no network or a 500.
+ */
+export type Refreshed<T> = { state: "valid"; value: T } | { state: "refused" } | { state: "unreachable" };
+
+/**
+ * Runs `refresh` and says how it went. A refresh token Clerk refused, such as after signing out
+ * everywhere, signs this phone out too. Any other failure leaves it signed in.
  */
 export async function refreshOrSignOut<T>(
   refresh: () => Promise<T>,
   signOut: () => Promise<void>,
-): Promise<T | undefined> {
+): Promise<Refreshed<T>> {
   try {
-    return await refresh();
+    return { state: "valid", value: await refresh() };
   } catch (e) {
-    if (e instanceof ClerkError && e.revoked) await signOut();
-    return undefined;
+    if (!(e instanceof ClerkError && e.revoked)) return { state: "unreachable" };
+    await signOut();
+    return { state: "refused" };
   }
+}
+
+/**
+ * How deleting the account on Clerk's page ended:
+ * - `deleted`: Clerk took the refresh token before the page and refuses it after.
+ * - `kept`: Clerk still takes it, so the page was closed without deleting.
+ * - `unconfirmed`: no answer after the page, so the phone stays signed in and the next refresh decides.
+ * - `revoked`: Clerk refused the token before the page opened, so this is a sign-out and no deletion.
+ * - `unreachable`: no answer before the page, which then isn't opened.
+ */
+export type Deletion = "deleted" | "kept" | "unconfirmed" | "revoked" | "unreachable";
+
+/**
+ * Deletes the account on Clerk's page (`openPage`, which ends when the page is closed), with a
+ * fresh refresh (`check`) on each side of it. Clerk answers a deleted user's refresh token and a
+ * revoked one alike, `invalid_grant`, and the access token alike too, so the refresh before the
+ * page is what tells them apart (PLX-1608).
+ */
+export async function deleteOnClerk(
+  check: () => Promise<Refreshed<unknown>["state"]>,
+  openPage: () => Promise<void>,
+): Promise<Deletion> {
+  const before = await check();
+  if (before !== "valid") return before === "refused" ? "revoked" : "unreachable";
+  await openPage();
+  const after = await check();
+  return after === "refused" ? "deleted" : after === "valid" ? "kept" : "unconfirmed";
 }
 
 /** What the sign-in screen says after a session from another Clerk instance is dropped. Shown with `t`. */

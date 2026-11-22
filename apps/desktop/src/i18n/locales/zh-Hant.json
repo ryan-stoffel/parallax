@@ -4056,7 +4056,7 @@
   "This branch has conflicts": "此分支有衝突",
   "This branch is behind {{base}}": "此分支落後 {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "此組建無法取得推播權杖。它需要 App ID 的推播功能。",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "此動作無法復原。所有裝置都會登出，你的對話串會保留在你的電腦上。若要完成，請在下一頁選擇「刪除帳號」。",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "此動作無法復原。所有裝置都會登出，你的對話串會保留在你的電腦上。若要完成，請在下一頁選擇「Delete account」。",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "此動作無法復原。若要給予完整存取權，請撤銷它，然後重新配對，或在該裝置的「設定」中選擇「使用新金鑰重新開始」。",
   "This chat couldn't load": "無法載入此聊天",
   "This chat isn't updating": "此聊天未更新",

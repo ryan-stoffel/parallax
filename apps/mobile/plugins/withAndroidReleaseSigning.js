@@ -1,13 +1,16 @@
 // Signs the Android release build with the upload key the build's environment names (PLX-1608),
 // so the key and its secrets are never in the repo: four variables, each PARALLAX_ANDROID_ and a
-// name from `parallaxSigning` below. Without the keystore's, release keeps the template's debug
-// key, which Google Play refuses.
+// name from `parallaxSigning` below. Without all four, a release build of the app (assembleRelease,
+// bundleRelease) stops with a message naming what's missing, rather than signing with the
+// template's debug key, which Google Play refuses. Debug builds, the only ones CI makes
+// (scripts/ci/android-build), need none of them.
 const { withAppBuildGradle } = require("expo/config-plugins");
 
 const SIGNING = `
 def parallaxSigning = ["KEYSTORE", "KEYSTORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD"] // ggignore
 def parallaxEnv = { name -> System.getenv("PARALLAX_ANDROID_" + name) }
-if (parallaxEnv(parallaxSigning[0])) {
+def parallaxSigningMissing = parallaxSigning.findAll { !parallaxEnv(it) }.collect { "PARALLAX_ANDROID_" + it }
+if (parallaxSigningMissing.isEmpty()) {
     android {
         signingConfigs {
             upload {
@@ -18,6 +21,15 @@ if (parallaxEnv(parallaxSigning[0])) {
             }
         }
         buildTypes.release.signingConfig = signingConfigs.upload
+    }
+} else {
+    gradle.taskGraph.whenReady { graph ->
+        if (graph.allTasks.any { it.project == project && it.name ==~ /(assemble|bundle|package|sign)Release.*/ }) {
+            throw new GradleException(
+                "A release build needs its signing key. Set " + parallaxSigningMissing.join(", ") +
+                " (apps/mobile/README.md), or build a debug variant."
+            )
+        }
     }
 }
 `;

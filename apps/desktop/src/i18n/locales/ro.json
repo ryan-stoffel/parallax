@@ -4396,7 +4396,7 @@
   "This branch has conflicts": "Această ramură are conflicte",
   "This branch is behind {{base}}": "Această ramură este în urma {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Această versiune nu poate obține un token push. Are nevoie de capabilitatea push a App ID-ului.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Acțiunea nu poate fi anulată. Toate dispozitivele sunt deconectate, iar conversațiile tale rămân pe computerele tale. Pentru a încheia, alege Șterge contul pe pagina următoare.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Acțiunea nu poate fi anulată. Toate dispozitivele sunt deconectate, iar conversațiile tale rămân pe computerele tale. Pentru a încheia, alege „Delete account” pe pagina următoare.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Acțiunea nu poate fi anulată. Pentru a-i da acces complet, revocă-l, apoi asociază-l din nou sau alege Începe de la zero cu o cheie nouă în Setările acelui dispozitiv.",
   "This chat couldn't load": "Acest chat nu s-a putut încărca",
   "This chat isn't updating": "Acest chat nu se actualizează",

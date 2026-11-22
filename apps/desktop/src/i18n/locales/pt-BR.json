@@ -4396,7 +4396,7 @@
   "This branch has conflicts": "Esta branch tem conflitos",
   "This branch is behind {{base}}": "Esta branch está atrás de {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Este build não consegue obter um token de push. Ele precisa do recurso de push do App ID.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Isso não pode ser desfeito. Todos os dispositivos são desconectados e suas threads continuam nos seus computadores. Para concluir, escolha Excluir conta na próxima página.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Isso não pode ser desfeito. Todos os dispositivos são desconectados e suas threads continuam nos seus computadores. Para concluir, escolha “Delete account” na próxima página.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Isso não pode ser desfeito. Para dar acesso total, revogue-o e pareie novamente, ou escolha Começar de novo com uma nova chave nas Configurações desse dispositivo.",
   "This chat couldn't load": "Não foi possível carregar este chat",
   "This chat isn't updating": "Este chat não está sendo atualizado",

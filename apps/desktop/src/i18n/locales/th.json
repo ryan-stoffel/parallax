@@ -4056,7 +4056,7 @@
   "This branch has conflicts": "branch นี้มีความขัดแย้ง",
   "This branch is behind {{base}}": "branch นี้ตามหลัง {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "บิลด์นี้รับ push token ไม่ได้ ต้องเปิดความสามารถ push ของ App ID",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "เลิกทำไม่ได้ ทุกอุปกรณ์จะถูกลงชื่อออก และเธรดของคุณยังอยู่บนคอมพิวเตอร์ของคุณ หากต้องการดำเนินการให้เสร็จ ให้เลือก ลบบัญชี ในหน้าถัดไป",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "เลิกทำไม่ได้ ทุกอุปกรณ์จะถูกลงชื่อออก และเธรดของคุณยังอยู่บนคอมพิวเตอร์ของคุณ หากต้องการดำเนินการให้เสร็จ ให้เลือก “Delete account” ในหน้าถัดไป",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "เลิกทำไม่ได้ หากต้องการให้สิทธิ์เข้าถึงเต็มรูปแบบ ให้เพิกถอนก่อน แล้วจับคู่อีกครั้ง หรือเลือก เริ่มใหม่ด้วยคีย์ใหม่ ในการตั้งค่าของอุปกรณ์นั้น",
   "This chat couldn't load": "โหลดแชตนี้ไม่ได้",
   "This chat isn't updating": "แชตนี้ไม่อัปเดต",

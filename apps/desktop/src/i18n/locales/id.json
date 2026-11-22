@@ -4056,7 +4056,7 @@
   "This branch has conflicts": "Branch ini memiliki konflik",
   "This branch is behind {{base}}": "Branch ini tertinggal dari {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Build ini tidak dapat memperoleh token push. Build memerlukan kemampuan push dari App ID.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Tindakan ini tidak dapat diurungkan. Semua perangkat dikeluarkan, dan utas Anda tetap ada di komputer Anda. Untuk menyelesaikan, pilih Hapus akun di halaman berikutnya.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Tindakan ini tidak dapat diurungkan. Semua perangkat dikeluarkan, dan utas Anda tetap ada di komputer Anda. Untuk menyelesaikan, pilih \"Delete account\" di halaman berikutnya.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Tindakan ini tidak dapat diurungkan. Untuk memberinya akses penuh, cabut aksesnya, lalu pasangkan lagi, atau pilih Mulai dari awal dengan kunci baru di Pengaturan perangkat itu.",
   "This chat couldn't load": "Obrolan ini tidak dapat dimuat",
   "This chat isn't updating": "Obrolan ini tidak diperbarui",

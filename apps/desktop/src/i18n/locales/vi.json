@@ -4056,7 +4056,7 @@
   "This branch has conflicts": "Nhánh này có xung đột",
   "This branch is behind {{base}}": "Nhánh này đang đi sau {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Bản dựng này không lấy được push token. Nó cần khả năng push của App ID.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Không thể hoàn tác thao tác này. Mọi thiết bị sẽ bị đăng xuất, và các luồng của bạn vẫn ở trên máy tính của bạn. Để hoàn tất, hãy chọn Xóa tài khoản ở trang tiếp theo.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Không thể hoàn tác thao tác này. Mọi thiết bị sẽ bị đăng xuất, và các luồng của bạn vẫn ở trên máy tính của bạn. Để hoàn tất, hãy chọn “Delete account” ở trang tiếp theo.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Không thể hoàn tác thao tác này. Để cấp toàn quyền truy cập, hãy thu hồi nó rồi ghép nối lại, hoặc chọn Bắt đầu lại với khóa mới trong Cài đặt của thiết bị đó.",
   "This chat couldn't load": "Không tải được cuộc trò chuyện này",
   "This chat isn't updating": "Cuộc trò chuyện này không cập nhật",

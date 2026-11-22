@@ -4226,7 +4226,7 @@
   "This branch has conflicts": "Denne branch har konflikter",
   "This branch is behind {{base}}": "Denne branch er bagud i forhold til {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Dette build kan ikke få et push-token. Det kræver App-id'ets push-funktion.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Dette kan ikke fortrydes. Alle enheder logges ud, og dine tråde bliver på dine computere. Vælg Slet konto på næste side for at afslutte.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Dette kan ikke fortrydes. Alle enheder logges ud, og dine tråde bliver på dine computere. Vælg “Delete account” på næste side for at afslutte.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Dette kan ikke fortrydes. For at give den fuld adgang skal du tilbagekalde den og derefter parre den igen eller vælge Start forfra med en ny nøgle i den enheds Indstillinger.",
   "This chat couldn't load": "Denne chat kunne ikke indlæses",
   "This chat isn't updating": "Denne chat opdateres ikke",

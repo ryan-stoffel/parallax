@@ -4226,7 +4226,7 @@
   "This branch has conflicts": "Ennek az ágnak ütközései vannak",
   "This branch is behind {{base}}": "Ez az ág lemaradt ehhez képest: {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Ez a build nem kap push-tokent. Ehhez az App ID push képessége szükséges.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Ez nem vonható vissza. Minden eszköz kijelentkezik, a szálai pedig a számítógépein maradnak. A befejezéshez válassza a következő oldalon a Fiók törlése lehetőséget.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Ez nem vonható vissza. Minden eszköz kijelentkezik, a szálai pedig a számítógépein maradnak. A befejezéshez válassza a következő oldalon a „Delete account” lehetőséget.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Ez nem vonható vissza. Teljes hozzáféréshez vonja vissza, majd párosítsa újra, vagy válassza az Újrakezdés új kulccsal lehetőséget az eszköz Beállításaiban.",
   "This chat couldn't load": "Ez a csevegés nem tölthető be",
   "This chat isn't updating": "Ez a csevegés nem frissül",

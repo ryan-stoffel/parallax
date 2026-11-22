@@ -4056,7 +4056,7 @@
   "This branch has conflicts": "此分支有冲突",
   "This branch is behind {{base}}": "此分支落后于 {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "此构建无法获取推送令牌。它需要 App ID 的推送功能。",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "此操作无法撤销。所有设备都会退出登录，你的对话会保留在你的电脑上。要完成删除，请在下一页选择“删除账户”。",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "此操作无法撤销。所有设备都会退出登录，你的对话会保留在你的电脑上。要完成删除，请在下一页选择“Delete account”。",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "此操作无法撤销。要授予其完全访问权限，请先撤销，然后重新配对，或在该设备的“设置”中选择“使用新密钥重新开始”。",
   "This chat couldn't load": "无法加载此聊天",
   "This chat isn't updating": "此聊天未更新",

@@ -237,7 +237,14 @@ export function AccountScreen() {
                   t("This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page."),
                   [
                     { text: t("Cancel"), style: "cancel" },
-                    { text: t("Continue"), style: "destructive", onPress: () => void deleteAccount() },
+                    {
+                      text: t("Continue"),
+                      style: "destructive",
+                      onPress: () =>
+                        void deleteAccount().then((outcome) => {
+                          if (outcome === "unreachable") showAlert(t("Can't reach Clerk sign-in"));
+                        }),
+                    },
                   ],
                 )
               }

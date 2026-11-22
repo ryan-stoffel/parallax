@@ -4226,7 +4226,7 @@
   "This branch has conflicts": "Deze branch heeft conflicten",
   "This branch is behind {{base}}": "Deze branch loopt achter op {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Deze build kan geen pushtoken krijgen. Hij heeft de push-capability van de App ID nodig.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Dit kan niet ongedaan worden gemaakt. Alle apparaten worden uitgelogd en je threads blijven op je computers. Kies op de volgende pagina Account verwijderen om het af te ronden.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Dit kan niet ongedaan worden gemaakt. Alle apparaten worden uitgelogd en je threads blijven op je computers. Kies op de volgende pagina ‘Delete account’ om het af te ronden.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Dit kan niet ongedaan worden gemaakt. Om hem volledige toegang te geven, trek je hem in en koppel je hem opnieuw, of kies je Opnieuw beginnen met een nieuwe sleutel in de instellingen van dat apparaat.",
   "This chat couldn't load": "Deze chat kon niet laden",
   "This chat isn't updating": "Deze chat wordt niet bijgewerkt",

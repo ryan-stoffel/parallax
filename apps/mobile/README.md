@@ -37,4 +37,4 @@ The bundle is `android/app/build/outputs/bundle/release/app-release.aab`. Check 
 keytool -printcert -jarfile android/app/build/outputs/bundle/release/app-release.aab
 ```
 
-Without `PARALLAX_ANDROID_KEYSTORE` the release build is signed with the debug key, which Google Play refuses. Raise `android.versionCode` in `app.json` for every upload.
+Without all four variables a release build (`assembleRelease`, `bundleRelease`) stops and names the missing ones. Debug builds need none. Raise `android.versionCode` in `app.json` for every upload.

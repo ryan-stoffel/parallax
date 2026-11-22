@@ -4226,7 +4226,7 @@
   "This branch has conflicts": "Dieser Branch hat Konflikte",
   "This branch is behind {{base}}": "Dieser Branch liegt hinter {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Dieser Build kann kein Push-Token erhalten. Er braucht die Push-Fähigkeit der App-ID.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Dies kann nicht rückgängig gemacht werden. Alle Geräte werden abgemeldet, und deine Threads bleiben auf deinen Computern. Wähle zum Abschließen auf der nächsten Seite „Konto löschen“.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Dies kann nicht rückgängig gemacht werden. Alle Geräte werden abgemeldet, und deine Threads bleiben auf deinen Computern. Wähle zum Abschließen auf der nächsten Seite „Delete account“.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Dies kann nicht rückgängig gemacht werden. Um ihm Vollzugriff zu geben, widerrufe ihn und kopple ihn dann erneut, oder wähle in den Einstellungen dieses Geräts „Mit neuem Schlüssel neu beginnen“.",
   "This chat couldn't load": "Dieser Chat konnte nicht geladen werden",
   "This chat isn't updating": "Dieser Chat wird nicht aktualisiert",

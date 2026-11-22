@@ -4226,7 +4226,7 @@
   "This branch has conflicts": "Bu dalda çakışmalar var",
   "This branch is behind {{base}}": "Bu dal {{base}} dalının gerisinde",
   "This build can't get a push token. It needs the App ID's push capability.": "Bu derleme push token'ı alamıyor. App ID'nin push özelliğine ihtiyacı var.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Bu geri alınamaz. Tüm cihazlarda oturum kapatılır ve konularınız bilgisayarlarınızda kalır. Bitirmek için sonraki sayfada Hesabı sil'i seçin.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Bu geri alınamaz. Tüm cihazlarda oturum kapatılır ve konularınız bilgisayarlarınızda kalır. Bitirmek için sonraki sayfada “Delete account” seçeneğini seçin.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Bu geri alınamaz. Tam erişim vermek için iptal edin ve yeniden eşleyin ya da o cihazın Ayarlar'ında Yeni anahtarla baştan başla'yı seçin.",
   "This chat couldn't load": "Bu sohbet yüklenemedi",
   "This chat isn't updating": "Bu sohbet güncellenmiyor",

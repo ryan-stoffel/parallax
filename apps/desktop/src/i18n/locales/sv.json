@@ -4226,7 +4226,7 @@
   "This branch has conflicts": "Den här grenen har konflikter",
   "This branch is behind {{base}}": "Den här grenen ligger efter {{base}}",
   "This build can't get a push token. It needs the App ID's push capability.": "Det här bygget kan inte få en push-token. Det behöver App ID:ts push-funktion.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Det går inte att ångra. Alla enheter loggas ut och dina trådar finns kvar på dina datorer. Välj Radera konto på nästa sida för att slutföra.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "Det går inte att ångra. Alla enheter loggas ut och dina trådar finns kvar på dina datorer. Välj ”Delete account” på nästa sida för att slutföra.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "Det går inte att ångra. För att ge den full åtkomst, återkalla den och parkoppla den igen, eller välj Börja om med en ny nyckel i den enhetens Inställningar.",
   "This chat couldn't load": "Den här chatten kunde inte läsas in",
   "This chat isn't updating": "Den här chatten uppdateras inte",

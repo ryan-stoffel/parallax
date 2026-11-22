@@ -4056,7 +4056,7 @@
   "This branch has conflicts": "이 브랜치에 충돌이 있습니다",
   "This branch is behind {{base}}": "이 브랜치가 {{base}}보다 뒤처져 있습니다",
   "This build can't get a push token. It needs the App ID's push capability.": "이 빌드는 푸시 토큰을 받을 수 없습니다. App ID의 푸시 기능이 필요합니다.",
-  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "이 작업은 실행 취소할 수 없습니다. 모든 기기에서 로그아웃되며, 스레드는 내 컴퓨터에 유지됩니다. 완료하려면 다음 페이지에서 계정 삭제를 선택하세요.",
+  "This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page.": "이 작업은 실행 취소할 수 없습니다. 모든 기기에서 로그아웃되며, 스레드는 내 컴퓨터에 유지됩니다. 완료하려면 다음 페이지에서 ‘Delete account’를 선택하세요.",
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in that device's Settings.": "이 작업은 실행 취소할 수 없습니다. 전체 접근 권한을 주려면 철회한 후 다시 페어링하거나, 해당 기기의 설정에서 새 키로 처음부터 시작을 선택하세요.",
   "This chat couldn't load": "이 채팅을 불러오지 못했습니다",
   "This chat isn't updating": "이 채팅이 업데이트되지 않습니다",
