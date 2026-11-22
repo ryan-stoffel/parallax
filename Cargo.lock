@@ -995,8 +995,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1705,6 +1707,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "parallax-browser-tls"
+version = "0.1.0"
+dependencies = [
+ "parallax-pin",
+ "rcgen",
+ "ring",
+ "rustls",
+ "rustls-pki-types",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "parallax-pin"
+version = "0.1.0"
+dependencies = [
+ "rcgen",
+ "ring",
+ "rustls-pki-types",
+ "rustls-webpki",
+]
+
+[[package]]
 name = "parallax-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1798,6 +1822,7 @@ dependencies = [
  "mdns-sd",
  "nix 0.31.3",
  "notify",
+ "parallax-pin",
  "parallax-protocol",
  "parallax-store",
  "portable-pty",
@@ -1808,7 +1833,6 @@ dependencies = [
  "rustix",
  "rustls",
  "rustls-native-certs",
- "rustls-webpki",
  "security-framework",
  "serde",
  "serde_json",
@@ -2135,6 +2159,7 @@ version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
+ "web-time",
  "zeroize",
 ]
 
@@ -2965,6 +2990,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

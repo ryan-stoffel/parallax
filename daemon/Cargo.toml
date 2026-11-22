@@ -66,9 +66,9 @@ spake2 = "0.4"
 # certificate works there. Its Unix side reads files, and macOS and Windows use their own APIs.
 webpki-roots = "1"
 rustls-native-certs = "0.8"
-# An `account:` host's certificate is pinned by its key's JWK thumbprint, its relay id (0091), read
-# with the same parse rustls checks the handshake with. rustls already builds it.
-webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["alloc"] }
+# Which certificate a dial accepts: its fingerprint, or its key's JWK thumbprint for an `account:`
+# host (0091). The browser's TLS checks it with the same crate (0108).
+parallax-pin = { path = "../crates/parallax-pin" }
 mdns-sd = { version = "0.21", default-features = false }
 # `plxd tui` (PLX-740), on crossterm, which it re-exports. `line_count` scrolls a wrapped
 # transcript to its end.

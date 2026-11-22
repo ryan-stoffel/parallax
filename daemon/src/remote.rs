@@ -41,6 +41,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use data_encoding::BASE64URL_NOPAD;
 use futures_util::{SinkExt as _, StreamExt as _};
+use parallax_pin::thumbprint;
+// The pin check, shared with the browser's TLS (0108).
+pub use parallax_pin::{Pin, fingerprint, key_id};
 use ring::rand::SystemRandom;
 use ring::signature::{self, EcdsaKeyPair, KeyPair as _};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -167,12 +170,6 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-/// A certificate's fingerprint: the SHA-256 of its DER, in hex.
-#[must_use]
-pub fn fingerprint(certificate: &[u8]) -> String {
-    hex(&sha256(certificate))
-}
-
 /// `length` random bytes in base64url, for tokens and tickets.
 ///
 /// # Panics
@@ -269,30 +266,6 @@ pub fn is_host_id(text: &str) -> bool {
         && text
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
-/// What a P-256 public key's DER `SubjectPublicKeyInfo` starts with, before its point's x and y.
-const P256_SPKI_PREFIX: &[u8] = &[
-    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
-    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
-];
-
-/// The JWK thumbprint of a certificate's P-256 key, which is a host's relay id (0068), or `None`
-/// for a certificate that isn't one or doesn't parse. The key comes from webpki's parse, the same
-/// one TLS checks the handshake's signature with, so it is the key the host proves it holds.
-#[must_use]
-pub fn key_id(certificate: &[u8]) -> Option<String> {
-    let der = CertificateDer::from(certificate);
-    let parsed = webpki::EndEntityCert::try_from(&der).ok()?;
-    let spki = parsed.subject_public_key_info();
-    let point = spki.as_ref().strip_prefix(P256_SPKI_PREFIX)?;
-    if point.len() != 64 {
-        return None;
-    }
-    Some(thumbprint(
-        &base64url(&point[..32]),
-        &base64url(&point[32..]),
-    ))
 }
 
 /// A code as typed, without spaces or dashes, in capitals: `7kq-4m2` is `7KQ4M2`.
@@ -502,28 +475,6 @@ impl HostKey {
     }
 }
 
-/// Which certificate a connection accepts.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Pin {
-    /// Any, while pairing with a code, for SPAKE2 to vouch for.
-    Any,
-    /// Only the one with this SHA-256 fingerprint, which the client paired with (0065).
-    Fingerprint(String),
-    /// Only one whose key's JWK thumbprint is this relay id: an `account:` host (0091). The relay
-    /// can't present another key for an id, so it can't stand in for the host.
-    HostId(String),
-}
-
-impl Pin {
-    fn accepts(&self, certificate: &[u8], presented: &str) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Fingerprint(pinned) => pinned == presented,
-            Self::HostId(id) => key_id(certificate).is_some_and(|key| key == *id),
-        }
-    }
-}
-
 /// Accepts only the certificate its [`Pin`] names, and keeps the fingerprint of the one presented
 /// in `seen`, for SPAKE2 to vouch for while pairing.
 #[derive(Debug)]
@@ -543,7 +494,7 @@ impl ServerCertVerifier for Pinned {
         _: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let presented = fingerprint(end_entity);
-        if !self.pin.accepts(end_entity, &presented) {
+        if !self.pin.accepts(end_entity) {
             return Err(rustls::Error::InvalidCertificate(
                 CertificateError::UnknownIssuer,
             ));
@@ -663,13 +614,6 @@ impl DpopKey {
         );
         format!("{input}.{}", base64url(&self.sign(input.as_bytes())))
     }
-}
-
-/// The JWK thumbprint of a P-256 key with base64url `x` and `y`: the SHA-256 of its required
-/// members in lexical order.
-fn thumbprint(x: &str, y: &str) -> String {
-    let members = format!(r#"{{"crv":"P-256","kty":"EC","x":"{x}","y":"{y}"}}"#);
-    base64url(&sha256(members.as_bytes()))
 }
 
 /// Seconds since the Unix epoch.

@@ -1,0 +1,24 @@
+{
+  "name": "@parallax/relay-tls",
+  "version": "0.0.0",
+  "private": true,
+  "description": "plxd's pinned TLS 1.3 in WebAssembly, over a relay stream's WebSocket, for the hosted browser client (0108).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/relay-tls.ts",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "size": "node scripts/size.mjs",
+    "check": "tsc -p .",
+    "test": "node --test test/relay-tls.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2",
+    "ws": "^8.18.3"
+  }
+}

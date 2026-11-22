@@ -1,0 +1,33 @@
+[package]
+name = "parallax-browser-tls"
+description = "plxd's pinned TLS 1.3 client, for a browser through WebAssembly (0108)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# packages/relay-tls builds the cdylib for wasm32-unknown-unknown. The rlib is for the tests here.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+parallax-pin = { path = "../parallax-pin" }
+# The same rustls and ring as plxd's listener and `plxd dial`, with ring's default provider.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+# Pinned to the version of the wasm-bindgen CLI that packages/relay-tls and CI run.
+wasm-bindgen = "=0.2.128"
+
+# In a browser, ring takes its random numbers from `crypto.getRandomValues`, and rustls reads the
+# clock from `Date.now`, through wasm-bindgen.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1", features = ["web"] }
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
