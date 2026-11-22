@@ -2,7 +2,8 @@
 // profile card, with a banner in the mark's colors, the picture, name, and email, and what every
 // computer's agents add up to, counted as the desktop counts them (activity.ts); then the
 // account's settings, when its agents ran, its security, and Parallax Connect. An OAuth token
-// can't change the user (Account.tsx), so Edit and Security open Clerk's account pages.
+// can't change the user (Account.tsx), so Edit and Security open Clerk's account pages. Delete
+// account asks first, then opens that page inside the app (`deleteAccount`).
 import {
   Bot,
   CalendarDays,
@@ -19,7 +20,7 @@ import Svg, { Circle, Defs, LinearGradient, RadialGradient, Rect, Stop } from "r
 
 import { activityOf, dayOf, rhythmOf } from "../../desktop/src/renderer/activity";
 import { isRepository } from "../../desktop/src/renderer/threads";
-import { Avatar, nameOf, PORTAL, useAccount } from "./Account";
+import { Avatar, nameOf, PORTAL, SECURITY, useAccount } from "./Account";
 import { showAlert } from "./dialogStore";
 import { useFleet } from "./fleet";
 import { useNav } from "./nav";
@@ -30,8 +31,6 @@ import { Icon, Mark, Row, T, useColors } from "./ui";
 const monthYear = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
 const shortDay = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
 const hourName = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
-
-const SECURITY = `${PORTAL}/user/security`;
 
 /** A soft disc of `color`, fading to nothing at its edge, as the desktop blurs the banner's circles. */
 function Glow({ id, color, size, top, right, opacity }: { id: string; color: string; size: number; top: number; right: number; opacity: number }) {
@@ -109,7 +108,7 @@ function Stat({
 export function AccountScreen() {
   const c = useColors();
   const nav = useNav();
-  const { user, signOut } = useAccount();
+  const { user, signOut, deleteAccount } = useAccount();
   const { computers, defaultId } = useFleet();
   const [now] = useState(Date.now);
   const activity = useMemo(
@@ -228,7 +227,29 @@ export function AccountScreen() {
           title={t("Delete account")}
           detail={t("Deletes your Parallax account and signs out every device.")}
           last
-          right={<Action label={t("Delete")} destructive onPress={security} />}
+          right={
+            <Action
+              label={t("Delete")}
+              destructive
+              onPress={() =>
+                showAlert(
+                  t("Delete your Parallax account?"),
+                  t("This can't be undone. Every device is signed out, and your threads stay on your computers. To finish, choose Delete account on the next page."),
+                  [
+                    { text: t("Cancel"), style: "cancel" },
+                    {
+                      text: t("Continue"),
+                      style: "destructive",
+                      onPress: () =>
+                        void deleteAccount().then((outcome) => {
+                          if (outcome === "unreachable") showAlert(t("Can't reach Clerk sign-in"));
+                        }),
+                    },
+                  ],
+                )
+              }
+            />
+          }
         />
       </Section>
 

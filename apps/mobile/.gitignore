@@ -3,3 +3,7 @@ node_modules/
 # Expo prebuild output, made fresh by `expo run:ios`.
 /ios/
 /android/
+
+# Android signing keys, which stay outside the repo (README.md).
+*.keystore
+*.jks

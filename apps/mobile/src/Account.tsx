@@ -5,7 +5,8 @@
 // load a plain-HTTP page, which iOS 27 warns about. The refresh token and the last userinfo stay in the
 // Keychain on this phone only; the access token, a JWT good for a day, stays in memory. The
 // account's name, password, and deletion are on Clerk's account pages, since an OAuth token
-// can't change the user.
+// can't change the user. Deletion opens that page in the sign-in sheet, where the user is signed
+// in already, and the phone refreshes its token before and after to learn how it ended (PLX-1608).
 import { sha256 } from "@noble/hashes/sha2.js";
 import { t } from "i18next";
 import { randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -22,7 +23,7 @@ import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { authorize } from "../modules/pinned-tls";
 import { keychain } from "./host";
-import { ClerkError, MOVED, refreshOrSignOut, restore } from "./clerkSession";
+import { ClerkError, deleteOnClerk, MOVED, refreshOrSignOut, restore, type Deletion, type Refreshed } from "./clerkSession";
 import { base64url } from "./pairing";
 import { forgetThreadStatus } from "./push";
 import { UserRound } from "lucide-react-native";
@@ -54,6 +55,8 @@ const API =
   `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "")}`;
 /** Clerk's Account Portal beside it: `<slug>.accounts.dev`, or `accounts.<domain>`. */
 export const PORTAL =API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
+/** The account's security page there: its password, its passkeys, and Delete account. */
+export const SECURITY = `${PORTAL}/user/security`;
 
 /** What Clerk's userinfo says of the user, as much as the app shows. */
 interface User {
@@ -104,6 +107,12 @@ interface AccountValue {
   signIn: (create: boolean) => Promise<string | undefined>;
   signOut: () => Promise<void>;
   /**
+   * Shows Clerk's security page, whose Delete account button deletes the account, in the sign-in
+   * sheet, and says how it ended (`deleteOnClerk`). A deleted account leaves the phone signed out
+   * with a notice, and one still there leaves it as it was.
+   */
+  deleteAccount: () => Promise<Deletion>;
+  /**
    * A current access token, for Parallax Relay, or undefined signed out. With `fresh`, a new one
    * from Clerk, as an account's computer takes only a token issued in the last minute (0091).
    */
@@ -120,6 +129,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   // refresh under way: one at a time, so a rotated refresh token is never used twice.
   const latest = useRef<{ session?: Session | null; access?: { token: string; expiresAt: number } }>({});
   const refreshing = useRef<Promise<unknown>>(Promise.resolve());
+  /** Clerk's deletion page closed and Clerk hasn't answered since, so the next refresh decides. */
+  const unconfirmed = useRef(false);
   latest.current.session = session;
   const setAccess = (access: { token: string; expiresAt: number } | undefined) => {
     latest.current.access = access;
@@ -216,18 +227,38 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         }).catch(() => undefined);
     },
 
-    accessToken(fresh = false) {
-      const next = refreshing.current.then(() => refresh(fresh));
-      refreshing.current = next.catch(() => undefined);
-      return next;
+    async deleteAccount() {
+      const outcome = await deleteOnClerk(
+        async () => (await queued(true)).state,
+        // The page never sends the sheet back, so it ends when the user closes it.
+        () => authorize(SECURITY).then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      if (outcome === "deleted") setNotice(t("Your Parallax account was deleted."));
+      unconfirmed.current = outcome === "unconfirmed";
+      return outcome;
+    },
+
+    async accessToken(fresh = false) {
+      const answer = await queued(fresh);
+      return answer.state === "valid" ? answer.value : undefined;
     },
   };
 
-  async function refresh(fresh: boolean): Promise<string | undefined> {
+  /** A refresh after the one under way. */
+  function queued(fresh: boolean) {
+    const next = refreshing.current.then(() => refresh(fresh));
+    refreshing.current = next.catch(() => undefined);
+    return next;
+  }
+
+  async function refresh(fresh: boolean): Promise<Refreshed<string>> {
     const { access, session } = latest.current;
-    if (!fresh && access && access.expiresAt - 60_000 > Date.now()) return access.token;
-    if (!session) return undefined;
-    return refreshOrSignOut(async () => {
+    if (!fresh && access && access.expiresAt - 60_000 > Date.now()) return { state: "valid", value: access.token };
+    if (!session) return { state: "refused" };
+    const answer = await refreshOrSignOut(async () => {
       const answer = await token({ grant_type: "refresh_token", refresh_token: session.refreshToken });
       setAccess(answer.access);
       // Each refresh also refreshes the profile, so a sign-in from before the picture gets it.
@@ -235,6 +266,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       await save({ ...session, user, refreshToken: answer.refreshToken ?? session.refreshToken });
       return answer.access.token;
     }, endSession);
+    // The first answer from Clerk after an unconfirmed deletion settles it.
+    if (answer.state === "refused" && unconfirmed.current) setNotice(t("Your Parallax account was deleted."));
+    if (answer.state !== "unreachable") unconfirmed.current = false;
+    return answer;
   }
   return <AccountContext value={value}>{children}</AccountContext>;
 }
