@@ -382,6 +382,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "githubStatus",
     "hostFolders",
     "hostUpdate",
+    "hostedClient",
     "hubAccounts",
     "hubs",
     "inbox",
@@ -867,6 +868,7 @@ pub(crate) async fn set_settings(
         connect,
         remote,
         remote_web,
+        hosted_client,
         relay,
         agent_work,
         device_name,
@@ -978,6 +980,13 @@ pub(crate) async fn set_settings(
                 db.set_remote_web(on).map_err(|e| store_error(&e))?;
                 info!(remote_web = on, "changed the host's web client setting");
             }
+            if let Some(on) = hosted_client {
+                db.set_hosted_client(on).map_err(|e| store_error(&e))?;
+                info!(
+                    hosted_client = on,
+                    "changed the host's hosted client setting"
+                );
+            }
             if let Some(on) = relay {
                 db.set_relay(on).map_err(|e| store_error(&e))?;
                 info!(relay = on, "changed the host's relay setting");
@@ -1014,6 +1023,9 @@ pub(crate) async fn set_settings(
     }
     if agent_work == Some(false) {
         crate::server::remote::access::close_peers(&context.daemon).await;
+    }
+    if hosted_client == Some(false) {
+        crate::server::remote::close_hosted(&context.daemon).await;
     }
     if let Some(prefix) = &branch_prefix {
         context.daemon.agents.set_branch_prefix(prefix);
@@ -1090,6 +1102,7 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         connect: Some(db.connect().map_err(|e| store_error(&e))?),
         remote: Some(db.remote().map_err(|e| store_error(&e))?),
         remote_web: Some(db.remote_web().map_err(|e| store_error(&e))?),
+        hosted_client: Some(db.hosted_client().map_err(|e| store_error(&e))?),
         relay: Some(db.relay().map_err(|e| store_error(&e))?),
         agent_work: Some(db.agent_work().map_err(|e| store_error(&e))?),
         device_name: db.device_name().map_err(|e| store_error(&e))?,

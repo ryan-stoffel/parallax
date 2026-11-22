@@ -7,7 +7,9 @@
 //!   that client's stream and joins it to a loopback connection to its own remote listener. The
 //!   client's TLS ends in plxd, at the certificate it pinned (0065, 0091), so the relay carries
 //!   only ciphertext. plxd also keeps one spare stream open (0091): the relay joins the next client
-//!   to it without asking plxd first, and plxd asks for another once it's taken.
+//!   to it without asking plxd first, and plxd asks for another once it's taken. A stream the
+//!   relay marks as the hosted browser client's or a guest's ([`Mark`], 0108) is joined only while
+//!   `hostedClient` is on, and the listener serves it less.
 //! - It answers the webhooks the relay forwards, held ones included, with the same check as
 //!   `/api/hooks` ([`crate::schedules::hook`]), keyed by the relay's delivery id so a redelivery
 //!   fires once.
@@ -1381,6 +1383,44 @@ pub(crate) struct RelayStream {
     /// control connection (PLX-1419).
     pub(crate) stop: CancellationToken,
     pub(crate) end: EndSlot,
+    /// Who the relay says opened it (0108).
+    pub(crate) mark: Mark,
+    /// Ends this stream alone, as `hostedClient` turning off does to a marked one.
+    pub(crate) cut: CancellationToken,
+}
+
+/// Who opened a stream, as the relay's `open` frame marks it (0108): the hosted browser client, a
+/// guest link's holder, or neither. A mark only narrows what plxd serves on the stream, so a relay
+/// that drops one gains nothing it lacked, and one that adds one only takes away.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Mark {
+    /// An ordinary stream: the user's own devices, or plxd itself.
+    #[default]
+    None,
+    /// `client: "hosted"`.
+    Hosted,
+    /// `guest: <linkId>`, the narrowest, so it wins over `client`.
+    Guest(String),
+}
+
+impl Mark {
+    /// The mark of the stream the `open` frame `message` announces.
+    pub(crate) fn of(message: &Value) -> Self {
+        if let Some(guest) = message.get("guest").filter(|guest| !guest.is_null()) {
+            // A link id that isn't text still marks a guest's stream, which plxd serves least.
+            return Self::Guest(guest.as_str().unwrap_or_default().to_owned());
+        }
+        if message["client"] == "hosted" {
+            return Self::Hosted;
+        }
+        Self::None
+    }
+
+    /// Whether the stream is the hosted client's or a guest's, which plxd serves only while
+    /// `hostedClient` is on.
+    pub(crate) fn marked(&self) -> bool {
+        *self != Self::None
+    }
 }
 
 impl RelayStream {
@@ -1474,6 +1514,16 @@ impl Relay {
     /// The relay stream connecting to the remote listener from `peer`, if it is one.
     pub(crate) fn joined(&self, peer: SocketAddr) -> Option<Arc<RelayStream>> {
         self.listed().get(&peer).cloned()
+    }
+
+    /// Ends every joined stream the relay marked as the hosted client's or a guest's, as
+    /// `hostedClient` turning off does (0108).
+    pub(crate) fn cut_marked(&self) {
+        for stream in self.listed().values() {
+            if stream.mark.marked() {
+                stream.cut.cancel();
+            }
+        }
     }
 
     fn set(&self, status: Status) {
@@ -2396,6 +2446,18 @@ async fn serve(
                         if message["t"] == "check" {
                             daemon.relay.check_answered(message);
                         } else if message["t"] == "open" && serving(daemon).await {
+                            // A hosted client's or guest's stream, while `hostedClient` is off, is
+                            // never joined, and the relay hears at once that it's gone (0108).
+                            if Mark::of(&message).marked()
+                                && !crate::server::remote::hosted_on(daemon).await
+                            {
+                                if let Some((id, _)) = stream_identity(&message) {
+                                    info!("refused a hosted client's stream: the hosted client is off");
+                                    let gone = json!({ "t": "gone", "stream": id }).to_string();
+                                    sink.send(Message::text(gone)).await.map_err(failed)?;
+                                }
+                                continue;
+                            }
                             let daemon = Arc::clone(daemon);
                             let host_id = host_id.to_owned();
                             let (stop, done) = match &mut streams.spare {
@@ -2472,6 +2534,7 @@ async fn stream(
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
     let mut unused = spare.clone();
     let relay = &daemon.relay;
+    let cut = CancellationToken::new();
     let joined = async {
         #[cfg(feature = "host-routing-proof")]
         let socket = if message["proof"] == true {
@@ -2528,6 +2591,8 @@ async fn stream(
             Arc::new(RelayStream {
                 stop: stop.clone(),
                 end: Arc::clone(&end),
+                mark: Mark::of(&message),
+                cut: cut.clone(),
             }),
         );
         let _listed = Listed { relay, from };
@@ -2550,6 +2615,7 @@ async fn stream(
     };
     tokio::select! {
         () = stop.cancelled() => {}
+        () = cut.cancelled() => debug!("ended a hosted client's relay stream"),
         joined = joined => if let Err(error) = joined {
             debug!(%error, "a relay stream ended");
         }
@@ -2984,6 +3050,22 @@ mod tests {
 
     const NOTHING: [String; 0] = [];
     const JUST_UNDER: Duration = HOLD.saturating_sub(Duration::from_secs(1));
+
+    #[test]
+    fn an_open_frame_marks_its_stream_and_a_guest_mark_wins() {
+        let mark = |open: Value| Mark::of(&open);
+        assert_eq!(mark(json!({ "t": "open", "stream": "s" })), Mark::None);
+        assert_eq!(mark(json!({ "client": "hosted" })), Mark::Hosted);
+        assert_eq!(
+            mark(json!({ "client": "other", "guest": null })),
+            Mark::None
+        );
+        let guest = Mark::Guest("link".to_owned());
+        assert_eq!(mark(json!({ "guest": "link" })), guest);
+        assert_eq!(mark(json!({ "client": "hosted", "guest": "link" })), guest);
+        assert_eq!(mark(json!({ "guest": 7 })), Mark::Guest(String::new()));
+        assert!(!Mark::None.marked() && Mark::Hosted.marked() && guest.marked());
+    }
 
     #[test]
     fn a_run_that_stays_finished_or_failed_pushes_once_when_the_hold_ends() {

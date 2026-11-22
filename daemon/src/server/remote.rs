@@ -38,6 +38,14 @@
 //!   as a wrong confirmation does. While `remoteWeb` is off, a browser's session gets no ticket,
 //!   and turning it off closes their sockets; turning it on again lets them back in.
 //!
+//! A relay stream the relay marked as the hosted browser client's or a guest's (0108) is served
+//! only while the `hostedClient` setting is on. A hosted client's serves `POST /api/auth/account`,
+//! `POST /api/auth/approval`, and `GET /ws` alone, and a guest's nothing yet. Its `/ws` takes a
+//! hosted client's session with its proof, never a ticket. Any other request on one gets 404,
+//! which ends the stream. A sign-in is the hosted client's when its token's OAuth
+//! application or its stream says so, judged at each sign-in, and its session works only while
+//! `hostedClient` is on.
+//!
 //! Files stream in chunks, at most [`MAX_FILE_RESPONSES`] at once and [`MAX_FILE_RESPONSES_PER_IP`]
 //! for one address, and a reader that takes none of a chunk for [`remote::REQUEST_TIMEOUT`] is
 //! dropped, so stalled readers hold little memory. A browser's request to `/ws`, `/api/pair/*`, or
@@ -81,7 +89,7 @@ use super::connection::{Closed, Reason, Route};
 use super::tailnet::{Check, Checks, Serving};
 use super::{ACCEPT_BACKOFF, Daemon, connection};
 use crate::agents::store_error;
-use crate::relay::{RelayStream, StreamEnd};
+use crate::relay::{Mark, RelayStream, StreamEnd};
 use crate::remote::{self, Descriptor, HostKey};
 
 /// How long a pairing code works, as 0065 has it.
@@ -906,6 +914,10 @@ impl Serving {
     /// answered 202 and asked to keep the connection. `check` is held until the first request is
     /// read, and a slot of `checks` while each next one is awaited. It runs as one of the server's
     /// connections, so shutdown waits for it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one connection's requests, routed in one match"
+    )]
     fn admit_remote(
         &self,
         stream: TcpStream,
@@ -945,10 +957,18 @@ impl Serving {
                     Ok(Err(error)) => return debug!(%peer, %error, "a remote connection failed"),
                     Err(_) => return debug!(%peer, "closed a remote connection that sent no request in time"),
                 };
+                // Who the relay says opened this stream, if it is one (0108).
+                let mark = daemon.relay.joined(peer).map(|stream| stream.mark.clone()).unwrap_or_default();
+                let hosted_stream = mark == Mark::Hosted;
                 loop {
                     let route = request.path.split('?').next().unwrap_or_default();
                     let guarded = route == "/ws" || route.starts_with("/api/pair/") || route.starts_with("/api/auth/");
+                    // A marked stream is served only while `hostedClient` is on, and then only its
+                    // own routes. Any other answer ends the connection, and so the stream.
+                    let marked_off = mark.marked() && !hosted_on(&daemon).await;
                     let (status, body) = match (request.method.as_str(), route) {
+                        _ if marked_off => access::removed(HOSTED_OFF),
+                        (method, _) if !serves(&mark, method, route) => (404, json!({ "error": "not_found" })),
                         _ if guarded && !same_origin(&request) => {
                             (403, json!({ "error": "forbidden", "error_description": "another origin" }))
                         }
@@ -972,8 +992,12 @@ impl Serving {
                             pair_browser(&daemon, &request).await
                         }
                         ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
-                        ("POST", "/api/auth/account") => access::sign_in(&daemon, &key, &request).await,
-                        ("POST", "/api/auth/approval") => access::approval(&daemon, &key, &request).await,
+                        ("POST", "/api/auth/account") => {
+                            access::sign_in(&daemon, &request, hosted_stream).await
+                        }
+                        ("POST", "/api/auth/approval") => {
+                            access::approval(&daemon, &request, hosted_stream).await
+                        }
                         ("POST", "/api/auth/peer") => access::peer(&daemon, &request).await,
                         _ if request.too_large => (413, json!({ "error": "body_too_large" })),
                         (method, hook) if hook.starts_with("/api/hooks/") => {
@@ -1092,7 +1116,7 @@ async fn finish_pairing(
     {
         return refusal;
     }
-    let token = match new_session(daemon, &proven, &finish.client_label, false).await {
+    let token = match new_session(daemon, &proven, &finish.client_label, Made::Paired).await {
         Ok(token) => token,
         Err(refusal) => return refusal,
     };
@@ -1109,6 +1133,17 @@ async fn finish_pairing(
     )
 }
 
+/// What made a session, which decides the switch it works under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Made {
+    /// Pairing, a setup code, or an account sign-in from the user's own apps.
+    Paired,
+    /// `/api/pair/browser`, under `remoteWeb`.
+    Browser,
+    /// An account sign-in through the hosted browser client, under `hostedClient` (0108).
+    Hosted,
+}
+
 /// Keeps a new session bound to the key of `proven`, named `label`, and answers with its token.
 /// A key the account removed gets none: checked in the same write that keeps the session, so a
 /// removal can't land between the check and the session (0091).
@@ -1116,7 +1151,7 @@ async fn new_session(
     daemon: &Daemon,
     proven: &remote::Proven,
     label: &str,
-    browser: bool,
+    made: Made,
 ) -> Result<String, (u16, serde_json::Value)> {
     let token = remote::random_token(32);
     let session = StoredSession {
@@ -1125,7 +1160,8 @@ async fn new_session(
         token_hash: remote::hex(&remote::sha256(token.as_bytes())),
         thumbprint: proven.thumbprint.clone(),
         created_at: jiff::Timestamp::now().to_string(),
-        browser,
+        browser: made == Made::Browser,
+        hosted: made == Made::Hosted,
         peer: false,
     };
     let name = session.name.clone();
@@ -1185,7 +1221,7 @@ async fn pair_browser(daemon: &Daemon, request: &Request) -> (u16, serde_json::V
     if let Err(why) = daemon.remote.use_code(&remote::normalize_code(&pair.code)) {
         return refused(why);
     }
-    let token = match new_session(daemon, &proven, &pair.client_label, true).await {
+    let token = match new_session(daemon, &proven, &pair.client_label, Made::Browser).await {
         Ok(token) => token,
         Err(refusal) => return refusal,
     };
@@ -1370,6 +1406,9 @@ async fn authorize(
             json!({ "error": "access_denied", "error_description": why }),
         ));
     }
+    if session.hosted && !hosted_on(daemon).await {
+        return Err(access::removed(HOSTED_OFF));
+    }
     Ok(session.id)
 }
 
@@ -1385,7 +1424,13 @@ async fn serve_socket(
     closing: &CancellationToken,
     peer: SocketAddr,
 ) {
+    // A hosted stream opens only a hosted client's session, and only with its proof (0108).
+    let hosted_stream = daemon
+        .relay
+        .joined(peer)
+        .is_some_and(|stream| stream.mark == Mark::Hosted);
     let session = match request.query("wsTicket") {
+        Some(_) if hosted_stream => Err(refused("a hosted client opens its socket with its proof")),
         Some(ticket) => daemon
             .remote
             .take_ticket(ticket)
@@ -1410,11 +1455,17 @@ async fn serve_socket(
     let closing = daemon.remote.watch(&session, closing);
     // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off. A
     // device made read-only after this has the connection closed too, as a revoke does.
-    let Some((read_only, computer)) = session_kind(&daemon, &session).await else {
+    let Some((read_only, computer, hosted)) = session_kind(&daemon, &session).await else {
         let refusal = refused("a revoked session");
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
     };
+    if hosted_stream && !hosted {
+        warn!(%peer, "refused another device's session on a hosted client's stream");
+        let refusal = refused("a session the hosted client didn't sign in for");
+        let _ = respond(&mut stream, refusal.0, &refusal.1).await;
+        return;
+    }
     let accept = derive_accept_key(key.as_bytes());
     let switching = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
@@ -1752,6 +1803,10 @@ struct StoredSession {
     /// Made by `/api/pair/browser`, so it works only while `remoteWeb` is on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     browser: bool,
+    /// Made by a sign-in this computer judged the hosted client's (0108), so it works only while
+    /// `hostedClient` is on. This computer's own judgment: nothing synced carries it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hosted: bool,
     /// Made by `/api/auth/peer` for another computer's agents (0101), so it ends when `agentWork`
     /// turns off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1791,12 +1846,13 @@ async fn session_for(daemon: &Daemon, token: &str) -> Option<StoredSession> {
         .find(|s| s.token_hash == hash)
 }
 
-/// Whether session `id`'s device is read-only, and whether it is another computer's peer session
-/// (0101), if it may have a socket now: it exists, and a browser's only while `remoteWeb` is on.
-/// Lists it can't read leave it no socket, rather than full access.
-async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool)> {
+/// Whether session `id`'s device is read-only, whether it is another computer's peer session
+/// (0101), and whether a hosted client's sign-in made it (0108), if it may have a socket now: it
+/// exists, a browser's only while `remoteWeb` is on, and a hosted client's only while
+/// `hostedClient` is on. Lists it can't read leave it no socket, rather than full access.
+async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool, bool)> {
     let id = id.to_owned();
-    let (browser, read_only, peer) = daemon
+    let (browser, hosted, read_only, peer) = daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
             let lists = access::read_lists(db)?;
@@ -1804,13 +1860,14 @@ async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool)> {
             let session = sessions.iter().find(|s| s.id == id);
             Ok(session.map(|s| {
                 let read_only = lists.read_only_clients.contains(&s.thumbprint);
-                (s.browser, read_only, s.peer)
+                (s.browser, s.hosted, read_only, s.peer)
             }))
         })
         .await
         .ok()
         .flatten()?;
-    (!browser || web_on(daemon).await).then_some((read_only, peer))
+    let allowed = (!browser || web_on(daemon).await) && (!hosted || hosted_on(daemon).await);
+    allowed.then_some((read_only, peer, hosted))
 }
 
 /// Closes every browser's connections, as `remoteWeb` turns off. Their sessions stay, for when it
@@ -1820,6 +1877,47 @@ pub(crate) async fn close_browsers(daemon: &Daemon) {
         if session.browser {
             daemon.remote.revoke(&session.id);
         }
+    }
+}
+
+/// What a hosted client hears while `hostedClient` is off (0108).
+pub(crate) const HOSTED_OFF: &str = "The hosted client is off on this computer";
+
+/// Whether plxd serves the hosted browser client (0108): `hostedClient`, read for each request so
+/// turning it off takes effect at once.
+pub(crate) async fn hosted_on(daemon: &Daemon) -> bool {
+    daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.hosted_client().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap_or(false)
+}
+
+/// Ends every hosted and guest stream and closes every hosted client's connections, as
+/// `hostedClient` turns off (0108). Their sessions stay, for when it turns on again.
+pub(crate) async fn close_hosted(daemon: &Daemon) {
+    daemon.relay.cut_marked();
+    for session in stored_sessions(daemon).await {
+        if session.hosted {
+            daemon.remote.revoke(&session.id);
+        }
+    }
+}
+
+/// Whether a stream the relay marked `mark` serves `method` on `route` (0108). A hosted client's
+/// stream serves account sign-in, its approval, and `/ws`. A guest's serves nothing yet: its
+/// sign-in and `/ws` come with guest links (PLX-1618). Everything else is refused, the descriptor,
+/// pairing, peer sign-in, tickets, webhooks, and the web client's files among them.
+fn serves(mark: &Mark, method: &str, route: &str) -> bool {
+    match mark {
+        Mark::None => true,
+        Mark::Hosted => matches!(
+            (method, route),
+            ("POST", "/api/auth/account" | "/api/auth/approval") | ("GET", "/ws")
+        ),
+        Mark::Guest(_) => false,
     }
 }
 
@@ -2059,6 +2157,8 @@ mod tests {
             RelayStream {
                 stop,
                 end: Arc::new(std::sync::Mutex::new(end)),
+                mark: crate::relay::Mark::None,
+                cut: CancellationToken::new(),
             }
         });
         explain(&mut closed, socket_end, stream.as_ref());

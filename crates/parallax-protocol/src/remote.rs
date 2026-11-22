@@ -386,6 +386,11 @@ pub struct AccessRequest {
     pub code: Option<String>,
     /// When it lapses, in RFC 3339.
     pub expires_at: String,
+    /// It came through the hosted browser client (0108): its token's OAuth application, or the
+    /// relay stream it came on, says so. Its Allow is read-only unless the approver unticks it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub hosted: bool,
 }
 
 /// Params of `access/merge`: lists another host keeps, merged into this one's. A removed key
@@ -418,6 +423,19 @@ pub struct AccessMergeParams {
 pub struct AccessRequestParams {
     /// The request's id.
     pub request: String,
+}
+
+/// Params of `access/approve`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessApproveParams {
+    /// The request's id.
+    pub request: String,
+    /// Approves the key read-only, the one-way mark of `access/setReadOnly` (0091). Absent is
+    /// read-only for a hosted client's request and full access for any other (0108).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub read_only: Option<bool>,
 }
 
 /// Params of `access/remove`.

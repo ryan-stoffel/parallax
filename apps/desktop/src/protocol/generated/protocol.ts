@@ -772,9 +772,10 @@ export type ParallaxRequests = {
 	 */
 	"access/setReadOnly": { params: AccessSetReadOnlyParams, result: RemoteSessionsResult },
 	/**
-	 * `access/approve`: approves the waiting request's key, once it shows a code.
+	 * `access/approve`: approves the waiting request's key, once it shows a code, read-only
+	 * if asked, and by default for a hosted client's request (0108).
 	 */
-	"access/approve": { params: AccessRequestParams, result: AccessState },
+	"access/approve": { params: AccessApproveParams, result: AccessState },
 	/**
 	 * `access/deny`: drops the waiting request, so a new one can start.
 	 */
@@ -8791,6 +8792,12 @@ export type HostSettings = {
 	 */
 	remoteWeb?: boolean,
 	/**
+	 * Whether plxd serves the hosted browser client (0108): the relay streams it opens, guest
+	 * links' streams, and the keys that sign in through it. Off by default. While it's off, plxd
+	 * refuses all three. An older plxd, without the `hostedClient` capability, leaves it out.
+	 */
+	hostedClient?: boolean,
+	/**
 	 * Whether plxd keeps a connection to Parallax Relay, for phone notifications and its
 	 * webhooks' public URL, and while `remote` is on too, so this user's other devices reach it
 	 * from anywhere (PLX-652, 0068, PLX-1146). Off until set, or until the host first registers.
@@ -8878,6 +8885,11 @@ export type HostSettingsSetParams = {
 	 * The new `remoteWeb`, behind the `remoteWeb` capability. Absent leaves it.
 	 */
 	remoteWeb?: boolean,
+	/**
+	 * The new `hostedClient`, behind the `hostedClient` capability (0108). Absent leaves it. Off
+	 * closes every hosted and guest stream and every hosted-client key's sockets.
+	 */
+	hostedClient?: boolean,
 	/**
 	 * The new `relay`, behind the `relay` capability. Absent leaves it.
 	 */
@@ -9701,6 +9713,11 @@ export type AccessRequest = {
 	 * When it lapses, in RFC 3339.
 	 */
 	expiresAt: string,
+	/**
+	 * It came through the hosted browser client (0108): its token's OAuth application, or the
+	 * relay stream it came on, says so. Its Allow is read-only unless the approver unticks it.
+	 */
+	hosted?: boolean,
 };
 
 /**
@@ -9738,6 +9755,21 @@ export type AccessSetReadOnlyParams = {
 	 * A session of the device, by the id `remote/sessions` lists.
 	 */
 	id: string,
+};
+
+/**
+ * Params of `access/approve`.
+ */
+export type AccessApproveParams = {
+	/**
+	 * The request's id.
+	 */
+	request: string,
+	/**
+	 * Approves the key read-only, the one-way mark of `access/setReadOnly` (0091). Absent is
+	 * read-only for a hosted client's request and full access for any other (0108).
+	 */
+	readOnly?: boolean,
 };
 
 /**

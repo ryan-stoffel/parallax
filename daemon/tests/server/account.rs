@@ -14,10 +14,10 @@ use parallax_protocol::methods::{
     RemoteRevoke, RemoteSessions,
 };
 use parallax_protocol::{
-    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
-    AccessRequestParams, AccessSetupCodeParams, ErrorKind, HostSettingsSetParams, RelayIdParams,
-    RelayMoveParams, RelayPushKeyParams, RelayRegisterParams, RelaySignParams, RemoteRevokeParams,
-    RemoteSessionsParams,
+    AccessApproveParams, AccessForgetHostParams, AccessGetParams, AccessMergeParams,
+    AccessRemoveParams, AccessRequestParams, AccessSetupCodeParams, ErrorKind,
+    HostSettingsSetParams, RelayIdParams, RelayMoveParams, RelayPushKeyParams, RelayRegisterParams,
+    RelaySignParams, RemoteRevokeParams, RemoteSessionsParams,
 };
 use plxd::remote::{self, SignIn};
 use ring::rand::SystemRandom;
@@ -34,7 +34,7 @@ use crate::connect::free_port;
 use crate::remote::{LOOPBACK, https, open_account, refusal, set_remote, wait_listening};
 use crate::support::{Client, InProcess, kind, temp_dir};
 
-const USER: &str = "user_1";
+pub(crate) const USER: &str = "user_1";
 
 fn clerk_key() -> KeyPair {
     KeyPair::from_der(include_bytes!("../fixtures/clerk-test-key.der")).unwrap()
@@ -70,8 +70,21 @@ pub(crate) fn token(issuer: &str, user: &str) -> String {
 
 /// A session token of `user` from the Clerk instance at `issuer`, issued at `now`.
 fn token_at(issuer: &str, user: &str, now: i64) -> String {
+    signed(&json!({ "iss": issuer, "sub": user, "sid": "sess", "iat": now, "exp": now + 600 }))
+}
+
+/// A fresh OAuth access token of `user` from the Clerk instance at `issuer`, for the application
+/// `client_id`.
+pub(crate) fn oauth_token(issuer: &str, user: &str, client_id: &str) -> String {
+    let now = remote::now_seconds();
+    signed(&json!({
+        "iss": issuer, "sub": user, "client_id": client_id, "iat": now, "exp": now + 600,
+    }))
+}
+
+/// `claims` as a JWT the test Clerk instance signed.
+fn signed(claims: &serde_json::Value) -> String {
     let header = json!({ "alg": "RS256", "kid": "k1" });
-    let claims = json!({ "iss": issuer, "sub": user, "sid": "sess", "iat": now, "exp": now + 600 });
     let input = format!(
         "{}.{}",
         remote::base64url(header.to_string().as_bytes()),
@@ -98,6 +111,7 @@ pub(crate) fn config(dir: &Path, issuer: &str, relay: &str, port: u16) -> plxd::
     config.clerk = plxd::clerk::Config {
         issuer: issuer.to_owned(),
         client_ids: Vec::new(),
+        hosted_client_ids: Vec::new(),
         authorized_parties: Vec::new(),
     };
     config
@@ -111,7 +125,7 @@ async fn host(dir: &Path, issuer: &str) -> (InProcess, Client, String, String) {
 }
 
 /// [`host`], from `config`.
-async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, String) {
+pub(crate) async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, String) {
     let issuer = config.clerk.issuer.clone();
     host_as(config, Some(issuer)).await
 }
@@ -151,7 +165,7 @@ async fn set_relay(client: &mut Client, on: bool) {
         .unwrap();
 }
 
-async fn access(client: &mut Client) -> parallax_protocol::AccessState {
+pub(crate) async fn access(client: &mut Client) -> parallax_protocol::AccessState {
     client
         .call::<AccessGet>(AccessGetParams::default())
         .await
@@ -479,7 +493,10 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
         tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
     };
     let approved = client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     assert_eq!(approved.approved_clients, [thumbprint(phone.path())]);
@@ -571,7 +588,10 @@ async fn a_sign_in_takes_one_connection_from_its_request_to_its_approval() {
     };
     sleep(Duration::from_millis(200)).await;
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     let approved = waiting.await.unwrap();
@@ -609,7 +629,10 @@ async fn a_step_on_a_kept_connection_the_host_closed_goes_again_on_a_new_one() {
     };
     sleep(Duration::from_millis(200)).await;
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     let approved = waiting.await.unwrap();
@@ -732,8 +755,9 @@ async fn with_a_bare_setup_command_allow_alone_gets_no_session_until_this_comput
         .unwrap();
     assert_eq!(said, SignIn::Confirm);
     client
-        .call::<AccessApprove>(AccessRequestParams {
+        .call::<AccessApprove>(AccessApproveParams {
             request: request.clone(),
+            read_only: None,
         })
         .await
         .unwrap();
@@ -778,7 +802,10 @@ async fn read_only_stays_with_the_key_and_no_merge_lifts_it() {
         tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
     };
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     assert!(matches!(
@@ -868,7 +895,10 @@ async fn read_only_stays_with_the_key_and_no_merge_lifts_it() {
         tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
     };
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     assert!(matches!(
@@ -947,8 +977,9 @@ async fn a_removal_beats_an_approval_not_yet_used_and_revoking_a_session_removes
         panic!("{signed_in:?}");
     };
     client
-        .call::<AccessApprove>(AccessRequestParams {
+        .call::<AccessApprove>(AccessApproveParams {
             request: request.clone(),
+            read_only: None,
         })
         .await
         .unwrap();
@@ -976,7 +1007,10 @@ async fn a_removal_beats_an_approval_not_yet_used_and_revoking_a_session_removes
         tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
     };
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     assert!(matches!(
@@ -1024,7 +1058,10 @@ async fn allow_new_device(
         tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
     };
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     assert!(matches!(
@@ -1091,7 +1128,10 @@ async fn a_removed_device_starts_over_with_a_new_key_that_gets_nothing_until_all
         tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
     };
     client
-        .call::<AccessApprove>(AccessRequestParams { request })
+        .call::<AccessApprove>(AccessApproveParams {
+            request,
+            read_only: None,
+        })
         .await
         .unwrap();
     assert!(matches!(
@@ -1614,6 +1654,7 @@ async fn a_move_trusts_the_production_account_beside_the_development_one() {
         config.clerk_legacy = Some(plxd::clerk::Config {
             issuer: development.clone(),
             client_ids: Vec::new(),
+            hosted_client_ids: Vec::new(),
             authorized_parties: Vec::new(),
         });
         config
@@ -1710,6 +1751,7 @@ async fn a_removal_counts_when_signed_for_either_account_of_a_move() {
         config.clerk_legacy = Some(plxd::clerk::Config {
             issuer: development.clone(),
             client_ids: Vec::new(),
+            hosted_client_ids: Vec::new(),
             authorized_parties: Vec::new(),
         });
         config
@@ -1768,6 +1810,7 @@ async fn a_computer_on_production_refuses_to_go_back_to_development() {
     config.clerk_legacy = Some(plxd::clerk::Config {
         issuer: development.clone(),
         client_ids: Vec::new(),
+        hosted_client_ids: Vec::new(),
         authorized_parties: Vec::new(),
     });
     // The production app set it up.

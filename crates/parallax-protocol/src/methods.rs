@@ -27,12 +27,13 @@ use ts_rs::TS;
 use crate::jsonrpc::CancelRequestParams;
 use crate::schedule::{PrFailureLogParams, PrFailureLogResult};
 use crate::{
-    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
-    AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
-    AccessState, Issue, IssueComment, IssueCommentParams, IssueConnectParams, IssueConnectResult,
-    IssueConnectionsParams, IssueConnectionsResult, IssueContainersParams, IssueContainersResult,
-    IssueCreateParams, IssueDetail, IssueDisconnectParams, IssueDisconnectResult, IssueGetParams,
-    IssueListParams, IssueListResult, IssueSetStateParams,
+    AccessApproveParams, AccessForgetHostParams, AccessGetParams, AccessMergeParams,
+    AccessRemoveParams, AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams,
+    AccessSetupCodeResult, AccessState, Issue, IssueComment, IssueCommentParams,
+    IssueConnectParams, IssueConnectResult, IssueConnectionsParams, IssueConnectionsResult,
+    IssueContainersParams, IssueContainersResult, IssueCreateParams, IssueDetail,
+    IssueDisconnectParams, IssueDisconnectResult, IssueGetParams, IssueListParams, IssueListResult,
+    IssueSetStateParams,
 };
 use crate::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
@@ -699,8 +700,9 @@ method_table! {
         /// and closes those sessions' connections so they reconnect read-only. No method undoes
         /// it (0091). Answers as `remote/sessions` does. Gated on `readOnlyDevices`.
         AccessSetReadOnly = "access/setReadOnly": AccessSetReadOnlyParams => RemoteSessionsResult;
-        /// `access/approve`: approves the waiting request's key, once it shows a code.
-        AccessApprove = "access/approve": AccessRequestParams => AccessState;
+        /// `access/approve`: approves the waiting request's key, once it shows a code, read-only
+        /// if asked, and by default for a hosted client's request (0108).
+        AccessApprove = "access/approve": AccessApproveParams => AccessState;
         /// `access/deny`: drops the waiting request, so a new one can start.
         AccessDeny = "access/deny": AccessRequestParams => AccessState;
         /// `access/remove`: removes a client's key for good and ends its sessions.

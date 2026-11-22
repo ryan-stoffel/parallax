@@ -6,13 +6,13 @@
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
-    AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
-    AccessState, RelayCheckParams, RelayCheckResult, RelayHostsParams, RelayHostsResult,
-    RelayIdParams, RelayIdResult, RelayMoveParams, RelayMoveResult, RelayPushKeyParams,
-    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
-    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
-    RemoteSessionsResult,
+    AccessApproveParams, AccessForgetHostParams, AccessGetParams, AccessMergeParams,
+    AccessRemoveParams, AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams,
+    AccessSetupCodeResult, AccessState, RelayCheckParams, RelayCheckResult, RelayHostsParams,
+    RelayHostsResult, RelayIdParams, RelayIdResult, RelayMoveParams, RelayMoveResult,
+    RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams,
+    RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    RemoteSessionsParams, RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -155,9 +155,10 @@ pub(crate) async fn access_merge(
 /// `access/approve`.
 pub(crate) async fn access_approve(
     context: &Context,
-    params: AccessRequestParams,
+    params: AccessApproveParams,
 ) -> Result<AccessState, ErrorObject> {
-    access::approve(&context.daemon, &context.cancel, &params.request).await?;
+    let AccessApproveParams { request, read_only } = params;
+    access::approve(&context.daemon, &context.cancel, &request, read_only).await?;
     access_now(context).await
 }
 
