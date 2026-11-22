@@ -37,6 +37,12 @@ fn alpn_protocols() -> Vec<Vec<u8>> {
     vec![EARLY_WS.to_vec(), b"http/1.1".to_vec()]
 }
 
+/// The most plaintext that goes as early data: enough for the `/ws` upgrade with its proof and the
+/// first messages, as `plxd dial` sends (0091). The rest goes after the handshake. plxd takes 16 KiB,
+/// but a rustls host that refuses early data failed the handshake once more than about 8 KiB of it
+/// came (`writes_past_rustls_buffer_go_whole`), so this stays under that.
+const MAX_EARLY_BYTES: usize = 6 * 1024;
+
 /// The name in the `ClientHello`. plxd's certificate isn't checked against it, only the pin.
 const SERVER_NAME: &str = "parallax";
 
@@ -190,8 +196,14 @@ impl Client {
         let name = ServerName::try_from(SERVER_NAME).map_err(|_| BROKE)?;
         let mut tls =
             ClientConnection::new(config(pin)?, name).map_err(|error| describe(&error))?;
+        // rustls holds at most 64 KiB to send by default, and a write past it would encrypt part
+        // and drop the rest. The page takes everything after each write, so nothing piles up.
+        tls.set_buffer_limit(None);
         let sent_early = match tls.early_data() {
-            Some(mut early) if !first.is_empty() => early.write(first).unwrap_or(0),
+            Some(mut early) if !first.is_empty() => {
+                let fits = first.len().min(MAX_EARLY_BYTES);
+                early.write(&first[..fits]).unwrap_or(0)
+            }
             _ => 0,
         };
         Ok(Self {
@@ -243,7 +255,7 @@ impl Client {
         } else {
             0
         };
-        // The writer buffers without limit while the handshake has just finished.
+        // The buffer has no limit (`new`), so all of it goes.
         let _ = self.tls.writer().write_all(&first[sent..]);
     }
 
@@ -432,8 +444,10 @@ mod tests {
         let mut read = Vec::new();
         for _ in 0..16 {
             let out = client.take();
-            if !out.is_empty() {
-                server.read_tls(&mut out.as_slice()).unwrap();
+            // rustls reads a slice in parts, and holds only so much plaintext unread.
+            let mut rest = out.as_slice();
+            while !rest.is_empty() {
+                server.read_tls(&mut rest).unwrap();
                 if server.process_new_packets().is_err() {
                     return (read, None);
                 }
@@ -516,5 +530,42 @@ mod tests {
         let (read, _) = pump(&mut other, &mut host);
         assert_eq!(read, b"three");
         assert!(!other.resumed() && !other.early_accepted());
+    }
+
+    #[test]
+    fn writes_past_rustls_buffer_go_whole() {
+        let big: Vec<u8> = (0..200 * 1024)
+            .map(|n: u32| n.to_le_bytes()[0] ^ 0x5a)
+            .collect();
+        let (config, certificate) = server();
+        let pin = host_id(&certificate);
+
+        let mut client = Client::new(&pin, b"").unwrap();
+        let mut host = ServerConnection::new(Arc::clone(&config)).unwrap();
+        pump(&mut client, &mut host);
+        client.write(&big).unwrap();
+        let (read, error) = pump(&mut client, &mut host);
+        assert_eq!((read.len(), error), (big.len(), None));
+        assert_eq!(read, big);
+
+        // The pin now holds a ticket. A host that takes it gets the first 6 KiB of `first` early,
+        // and the rest after.
+        let mut client = Client::new(&pin, &big).unwrap();
+        let mut host = ServerConnection::new(Arc::clone(&config)).unwrap();
+        let (read, _) = pump(&mut client, &mut host);
+        assert!(client.early_accepted());
+        assert_eq!(read, big);
+
+        // A host that lost its sessions, as after a restart, refuses the early data, so all of
+        // `first` goes again after the handshake.
+        let mut forgetful = (*config).clone();
+        forgetful.session_storage = rustls::server::ServerSessionMemoryCache::new(16);
+        let mut client = Client::new(&pin, &big).unwrap();
+        assert_eq!(client.sent_early, MAX_EARLY_BYTES);
+        let mut host = ServerConnection::new(Arc::new(forgetful)).unwrap();
+        let (read, error) = pump(&mut client, &mut host);
+        assert!(!client.early_accepted());
+        assert_eq!((read.len(), error), (big.len(), None));
+        assert_eq!(read, big);
     }
 }

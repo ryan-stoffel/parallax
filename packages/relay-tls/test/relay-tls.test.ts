@@ -14,7 +14,7 @@ import { after, before, test } from "node:test";
 
 import { WebSocketServer } from "ws";
 
-import { loadRelayTls, RelayTls, type RelayPin } from "../src/relay-tls.ts";
+import { loadRelayTls, RelayClosedError, RelayTls, type RelayPin } from "../src/relay-tls.ts";
 
 const root = path.join(import.meta.dirname, "../../..");
 const plxd = process.env["PLXD_PATH"] ?? path.join(root, "target/debug/plxd");
@@ -37,6 +37,8 @@ async function freePort(): Promise<number> {
 }
 
 before(async () => {
+  // A load that fails isn't kept: the next one loads.
+  await assert.rejects(loadRelayTls(new Uint8Array([0, 1, 2, 3])));
   await loadRelayTls(readFileSync(path.join(import.meta.dirname, "../pkg/parallax_browser_tls_bg.wasm")));
   dataDir = mkdtempSync(path.join(tmpdir(), "parallax-relay-tls-"));
   // A tailscale that finds no tailnet, so this plxd never reaches a real one.
@@ -78,7 +80,11 @@ before(async () => {
   hostId = (await call("relay/id", {})).result.hostId;
 
   bridge = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  bridge.on("connection", (socket) => {
+  bridge.on("connection", (socket, request) => {
+    // As the relay does when the frames a client sent before plxd joined were lost.
+    if (request.url === "/lost") return socket.close(4400, "the early frames were lost");
+    // As the relay does once plxd joins the stream.
+    socket.send("ready");
     const toHost: Buffer[] = [];
     sent.push(toHost);
     const tcp = connect(port, "127.0.0.1");
@@ -178,7 +184,7 @@ test("a host with another key fails the handshake before any byte of HTTP is sen
   assert.equal(sent.length, before + 1);
   // TLS records: a 5-byte header (type, version, length) and the body. The client's ClientHello
   // is a handshake record (22). After it, the only encrypted record (23) it may send is its alert,
-  // 2 bytes and the inner type under a 16-byte tag: 19. Its Finished alone would be 53.
+  // 2 bytes and the inner type under a 16-byte tag: 19. Its Finished alone would be 69.
   const bytes = Buffer.concat(sent[before]!);
   const records: { type: number; length: number }[] = [];
   for (let at = 0; at < bytes.length; ) {
@@ -190,4 +196,13 @@ test("a host with another key fails the handshake before any byte of HTTP is sen
   for (const record of records.slice(1)) {
     assert.ok(record.type === 20 || (record.type === 23 && record.length === 19), JSON.stringify(records));
   }
+});
+
+test("the relay's close code reaches the caller", async () => {
+  const closed = await RelayTls.connect(new WebSocket(`${bridgeUrl}/lost`), { hostId }).catch(
+    (error: unknown) => error,
+  );
+  assert.ok(closed instanceof RelayClosedError);
+  assert.equal(closed.code, 4400);
+  assert.equal(closed.reason, "the early frames were lost");
 });

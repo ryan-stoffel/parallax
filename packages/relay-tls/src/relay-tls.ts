@@ -10,8 +10,8 @@ export type RelayPin = { hostId: string } | { fingerprint: string };
 
 export interface ConnectOptions {
   /** Plaintext to send first, such as the `/ws` upgrade. With a ticket from an earlier connect to
-   * this pin in the page's life, it goes as 0-RTT early data, and again after the handshake when
-   * the host refuses that. Without one it goes once the host proved its key. */
+   * this pin in the page's life, its first 6 KiB go as 0-RTT early data, and again after the
+   * handshake when the host refuses them. Without one it all goes once the host proved its key. */
   first?: Uint8Array;
 }
 
@@ -21,10 +21,30 @@ export type ModuleSource = BufferSource | URL | string | Response | WebAssembly.
 let loading: Promise<unknown> | undefined;
 
 /** Loads the WebAssembly once per page: from `source`, or else the `.wasm` beside the module's
- * JavaScript. `RelayTls.connect` calls it with no source when nothing loaded it first. */
+ * JavaScript. `RelayTls.connect` calls it with no source when nothing loaded it first. A load that
+ * failed, such as on a dropped network, is tried again on the next call. */
 export function loadRelayTls(source?: ModuleSource): Promise<unknown> {
-  loading ??= init(source === undefined ? undefined : { module_or_path: source });
+  loading ??= init(source === undefined ? undefined : { module_or_path: source }).catch(
+    (error: unknown) => {
+      loading = undefined;
+      throw error;
+    },
+  );
   return loading;
+}
+
+/** The relay ended the stream, with its WebSocket close code and reason, such as 4400 when the
+ * frames sent before plxd joined were lost and a new stream should be opened (0091). */
+export class RelayClosedError extends Error {
+  readonly code: number;
+  readonly reason: string;
+
+  constructor(code: number, reason: string) {
+    super(`the relay closed the stream: ${code}${reason ? ` ${reason}` : ""}`);
+    this.name = "RelayClosedError";
+    this.code = code;
+    this.reason = reason;
+  }
 }
 
 /** One TLS connection to plxd over a WebSocket that carries the relay stream's bytes. */
@@ -53,9 +73,11 @@ export class RelayTls {
     if (socket.readyState === WebSocket.CONNECTING) {
       await new Promise<void>((resolve, reject) => {
         socket.addEventListener("open", () => resolve(), { once: true });
-        socket.addEventListener("close", () => reject(new Error("the relay closed the stream")), {
-          once: true,
-        });
+        socket.addEventListener(
+          "close",
+          (event) => reject(new RelayClosedError(event.code, event.reason)),
+          { once: true },
+        );
       });
     }
     if (socket.readyState !== WebSocket.OPEN) throw new Error("the relay stream isn't open");
@@ -66,6 +88,15 @@ export class RelayTls {
     return new Promise((resolve, reject) => {
       socket.addEventListener("message", (event: MessageEvent) => {
         if (connection.#freed) return;
+        // The relay's own text frames. `ready` says plxd joined the stream, which the handshake
+        // shows anyway, so it is dropped on purpose. No other is expected, and none reaches TLS.
+        if (typeof event.data === "string") {
+          if (event.data === "ready") return;
+          connection.#end();
+          socket.close();
+          reject(new Error(`the relay sent an unexpected text frame: ${event.data.slice(0, 64)}`));
+          return;
+        }
         try {
           tls.feed(new Uint8Array(event.data as ArrayBuffer));
         } catch (error) {
@@ -86,9 +117,9 @@ export class RelayTls {
         }
       });
       // Once the handshake resolved, these rejections do nothing.
-      socket.addEventListener("close", () => {
+      socket.addEventListener("close", (event) => {
         connection.#end();
-        reject(new Error("the relay stream closed during the TLS handshake"));
+        reject(new RelayClosedError(event.code, event.reason));
       });
       connection.#flush();
     });

@@ -13,7 +13,7 @@
     "build": "node scripts/build.mjs",
     "size": "node scripts/size.mjs",
     "check": "tsc -p .",
-    "test": "node --test"
+    "test": "node --test test/relay-tls.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

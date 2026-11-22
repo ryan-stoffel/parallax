@@ -18,9 +18,9 @@ defaults:
     shell: bash
 
 jobs:
-  # Whether the PR changes Rust or anything the rust job builds or runs (PLX-961), and whether it
-  # changes the mobile app, which the android job builds (PLX-1370). The checkout is the PR merged
-  # into its base, so its first parent is the base.
+  # Whether the PR changes Rust or anything the rust and browser-tls jobs build or run (PLX-961,
+  # PLX-1615), and whether it changes the mobile app, which the android job builds (PLX-1370). The
+  # checkout is the PR merged into its base, so its first parent is the base.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -37,7 +37,7 @@ jobs:
         id: diff
         run: |
           git diff --name-only --no-renames HEAD^1 HEAD | tee "$RUNNER_TEMP/changed"
-          rust_inputs='^(daemon/|crates/|sidecar/|relay/|packages/clerk-verify/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|rustfmt\.toml$|clippy\.toml$|apps/desktop/src/protocol/generated/|apps/desktop/\.node-version$|\.gitattributes$|scripts/ci/(check-rust|check-ssh-attach|ssh-localhost)|\.github/workflows/ci\.yml$)'
+          rust_inputs='^(daemon/|crates/|sidecar/|relay/|packages/clerk-verify/|packages/relay-tls/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|rustfmt\.toml$|clippy\.toml$|apps/desktop/src/protocol/generated/|apps/desktop/\.node-version$|\.gitattributes$|scripts/ci/(check-rust|check-ssh-attach|ssh-localhost)|\.github/workflows/ci\.yml$)'
           if grep -qE "$rust_inputs" "$RUNNER_TEMP/changed"; then
             echo rust=true >> "$GITHUB_OUTPUT"
           else
@@ -297,9 +297,11 @@ jobs:
           pnpm test
 
   # The hosted browser client's TLS (PLX-1615, 0108): rustls built for WebAssembly, failing past 200 KB
-  # gzipped, and RelayTls run against the plxd job's Linux plxd through a WebSocket.
+  # gzipped, and RelayTls run against the plxd job's Linux plxd through a WebSocket. Only when the PR
+  # changes Rust or packages/relay-tls.
   browser-tls:
-    needs: plxd
+    needs: [changes, plxd]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
