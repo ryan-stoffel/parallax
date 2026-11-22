@@ -40,8 +40,9 @@
 //!
 //! A relay stream the relay marked as the hosted browser client's or a guest's (0108) is served
 //! only while the `hostedClient` setting is on. A hosted client's serves `POST /api/auth/account`,
-//! `POST /api/auth/approval`, and `GET /ws` alone, and a guest's nothing yet. Any other request on
-//! one gets 404, which ends the stream. A sign-in is the hosted client's when its token's OAuth
+//! `POST /api/auth/approval`, and `GET /ws` alone, and a guest's nothing yet. Its `/ws` takes a
+//! hosted client's session with its proof, never a ticket. Any other request on one gets 404,
+//! which ends the stream. A sign-in is the hosted client's when its token's OAuth
 //! application or its stream says so, judged at each sign-in, and its session works only while
 //! `hostedClient` is on.
 //!
@@ -1423,7 +1424,13 @@ async fn serve_socket(
     closing: &CancellationToken,
     peer: SocketAddr,
 ) {
+    // A hosted stream opens only a hosted client's session, and only with its proof (0108).
+    let hosted_stream = daemon
+        .relay
+        .joined(peer)
+        .is_some_and(|stream| stream.mark == Mark::Hosted);
     let session = match request.query("wsTicket") {
+        Some(_) if hosted_stream => Err(refused("a hosted client opens its socket with its proof")),
         Some(ticket) => daemon
             .remote
             .take_ticket(ticket)
@@ -1448,11 +1455,17 @@ async fn serve_socket(
     let closing = daemon.remote.watch(&session, closing);
     // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off. A
     // device made read-only after this has the connection closed too, as a revoke does.
-    let Some((read_only, computer)) = session_kind(&daemon, &session).await else {
+    let Some((read_only, computer, hosted)) = session_kind(&daemon, &session).await else {
         let refusal = refused("a revoked session");
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
     };
+    if hosted_stream && !hosted {
+        warn!(%peer, "refused another device's session on a hosted client's stream");
+        let refusal = refused("a session the hosted client didn't sign in for");
+        let _ = respond(&mut stream, refusal.0, &refusal.1).await;
+        return;
+    }
     let accept = derive_accept_key(key.as_bytes());
     let switching = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
@@ -1833,11 +1846,11 @@ async fn session_for(daemon: &Daemon, token: &str) -> Option<StoredSession> {
         .find(|s| s.token_hash == hash)
 }
 
-/// Whether session `id`'s device is read-only, and whether it is another computer's peer session
-/// (0101), if it may have a socket now: it exists, a browser's only while `remoteWeb` is on, and a
-/// hosted client's only while `hostedClient` is on. Lists it can't read leave it no socket, rather
-/// than full access.
-async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool)> {
+/// Whether session `id`'s device is read-only, whether it is another computer's peer session
+/// (0101), and whether a hosted client's sign-in made it (0108), if it may have a socket now: it
+/// exists, a browser's only while `remoteWeb` is on, and a hosted client's only while
+/// `hostedClient` is on. Lists it can't read leave it no socket, rather than full access.
+async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool, bool)> {
     let id = id.to_owned();
     let (browser, hosted, read_only, peer) = daemon
         .reader
@@ -1854,7 +1867,7 @@ async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool)> {
         .ok()
         .flatten()?;
     let allowed = (!browser || web_on(daemon).await) && (!hosted || hosted_on(daemon).await);
-    allowed.then_some((read_only, peer))
+    allowed.then_some((read_only, peer, hosted))
 }
 
 /// Closes every browser's connections, as `remoteWeb` turns off. Their sessions stay, for when it

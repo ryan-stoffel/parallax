@@ -11,9 +11,9 @@
 //!   value after seeing the other's. Once a device approves the request (`access/approve`), the
 //!   client's next call gets its session. With `wait`, a call holds for up to
 //!   [`remote::APPROVAL_WAIT`] until that happens. With `allow`, the device named by the setup
-//!   command approves its own request ([`Access::setup_started`]). No other client's Allow counts,
-//!   since nothing it holds tells it from a client with a caught token. With `deny`, a client drops
-//!   its own request.
+//!   command approves its own request ([`Access::setup_started`]), unless it is the hosted client's
+//!   (0108). No other client's Allow counts, since nothing it holds tells it from a client with a
+//!   caught token. With `deny`, a client drops its own request.
 //!
 //! One request waits at a time, at most [`MAX_REQUESTS`] start an hour, and each lapses after
 //! [`remote::REQUEST_LIFETIME`]. A new one doesn't replace a waiting one unless the user denies
@@ -1274,7 +1274,12 @@ pub(super) async fn approval(
             Step::Waiting(host_value) => host_value,
         };
         if std::mem::take(&mut allow) {
-            if let Some(name) = access.named_device(&body.request, &proven.thumbprint) {
+            // A hosted client's request gets no self-Allow, whatever command named its key: only
+            // the owner's Allow, read-only by default, approves it (0108).
+            let marked = access.owns(&body.request, &proven.thumbprint) != Some(false);
+            if !(hosted_stream || marked)
+                && let Some(name) = access.named_device(&body.request, &proven.thumbprint)
+            {
                 if let Err(refusal) = approve_by_setup(daemon, &proven, &name).await {
                     return refusal;
                 }

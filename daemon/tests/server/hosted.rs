@@ -9,15 +9,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use parallax_protocol::methods::{AccessApprove, AccessDeny, AccessMerge, HostSettingsSet};
+use parallax_protocol::methods::{
+    AccessApprove, AccessDeny, AccessMerge, AccessSetupCode, HostSettingsSet,
+};
 use parallax_protocol::{
-    AccessApproveParams, AccessMergeParams, AccessRequestParams, HostSettingsSetParams,
+    AccessApproveParams, AccessMergeParams, AccessRequestParams, AccessSetupCodeParams,
+    HostSettingsSetParams,
 };
 use plxd::remote::{self, SignIn};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -47,6 +50,10 @@ struct FakeRelay {
     /// The streams plxd said were gone without joining them.
     unjoined: Arc<Mutex<Vec<String>>>,
     next: Arc<AtomicUsize>,
+    /// While true, plxd's joins wait before their handshake.
+    holding: watch::Sender<bool>,
+    /// Told when a join starts waiting.
+    held: Arc<Notify>,
 }
 
 impl FakeRelay {
@@ -58,11 +65,23 @@ impl FakeRelay {
         let joins = Joins::default();
         let unjoined = Arc::new(Mutex::new(Vec::new()));
         let (all_joins, all_unjoined) = (Arc::clone(&joins), Arc::clone(&unjoined));
+        let (holding, gate) = watch::channel(false);
+        let held = Arc::new(Notify::new());
+        let all_held = Arc::clone(&held);
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
                 let frames = Arc::clone(&frames);
                 let (joins, unjoined) = (Arc::clone(&all_joins), Arc::clone(&all_unjoined));
+                let (mut gate, held) = (gate.clone(), Arc::clone(&all_held));
                 tokio::spawn(async move {
+                    let mut request_line = [0; 512];
+                    let peeked = tcp.peek(&mut request_line).await.unwrap_or(0);
+                    let join =
+                        String::from_utf8_lossy(&request_line[..peeked]).contains("/streams/");
+                    if join && *gate.borrow_and_update() {
+                        held.notify_one();
+                        let _ = gate.wait_for(|on| !on).await;
+                    }
                     let mut path = String::new();
                     #[expect(clippy::result_large_err, reason = "tungstenite's callback type")]
                     let read_path = |request: &Request, response: Response| {
@@ -91,7 +110,19 @@ impl FakeRelay {
             joins,
             unjoined,
             next: Arc::default(),
+            holding,
+            held,
         }
+    }
+
+    /// Holds plxd's joins of streams before their handshake while `on`, and lets them go after.
+    fn hold(&self, on: bool) {
+        self.holding.send_replace(on);
+    }
+
+    /// Waits until a join is held.
+    async fn join_held(&self) {
+        timeout(PATIENCE, self.held.notified()).await.unwrap();
     }
 
     /// A route whose every connection the relay announces with `mark` added to its `open` frame.
@@ -617,4 +648,173 @@ async fn a_browser_approved_on_one_computer_is_refused_on_another_with_the_hoste
     );
     a.stop().await;
     b.stop().await;
+}
+
+#[tokio::test]
+async fn a_hosted_request_a_setup_command_names_still_needs_the_owners_allow() {
+    let issuer = clerk().await;
+    let (dir, browser) = (temp_dir(), temp_dir());
+    let (server, mut client, route, host_id) = direct_host(dir.path(), &issuer).await;
+    set_hosted(&mut client, true).await;
+    // The command names the browser's key, as a bad page could talk its user into.
+    client
+        .call::<AccessSetupCode>(AccessSetupCodeParams {
+            device: Some(thumbprint(browser.path())),
+        })
+        .await
+        .unwrap();
+    let routes = [route.clone()];
+    let (_, signed_in) = remote::sign_in(
+        &routes,
+        &host_id,
+        &hosted_token(&issuer),
+        "browser",
+        true,
+        browser.path(),
+    )
+    .await
+    .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("a new device waits: {signed_in:?}");
+    };
+
+    // Its own Allow approves nothing: this computer must confirm.
+    let said = remote::allow(&route, &host_id, &request, browser.path())
+        .await
+        .unwrap();
+    assert_eq!(said, SignIn::Confirm);
+    let key = thumbprint(browser.path());
+    assert!(!access(&mut client).await.approved_clients.contains(&key));
+
+    // The owner's Allow does, read-only.
+    approve(&route, &host_id, request, browser.path(), &mut client, None).await;
+    assert!(access(&mut client).await.read_only_clients.contains(&key));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_desktop_token_on_a_hosted_stream_signs_in_as_the_hosted_client() {
+    let issuer = clerk().await;
+    let (dir, web, device) = (temp_dir(), temp_dir(), temp_dir());
+    let (relay, server, mut client, direct, host_id) =
+        hosted_host(dir.path(), web.path(), &issuer, true).await;
+    let hosted = relay.route(json!({ "client": "hosted" })).await;
+
+    // The token is the desktop's, but the stream is the hosted client's.
+    let request = ask(&hosted, &host_id, &token(&issuer, USER), device.path()).await;
+    assert!(access(&mut client).await.pending.unwrap().hosted);
+    approve(&hosted, &host_id, request, device.path(), &mut client, None).await;
+    let key = thumbprint(device.path());
+    assert!(access(&mut client).await.read_only_clients.contains(&key));
+
+    // Its session is the hosted client's on any route, so the switch closes it.
+    let mut app = open_account(&[direct], &host_id, device.path())
+        .await
+        .unwrap();
+    app.initialize().await;
+    set_hosted(&mut client, false).await;
+    assert!(app.closes().await, "the switch closes its socket");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_stream_opened_as_the_switch_turns_off_is_refused_at_its_request() {
+    let issuer = clerk().await;
+    let (dir, web) = (temp_dir(), temp_dir());
+    let (relay, server, mut client, _, _) =
+        hosted_host(dir.path(), web.path(), &issuer, true).await;
+    let hosted = relay.route(json!({ "client": "hosted" })).await;
+
+    // plxd takes the open while the switch is on, and the switch turns off before the stream
+    // joins, so turning it off cuts nothing.
+    relay.hold(true);
+    let asked = tokio::spawn(async move { answer(&hosted, "GET", "/.well-known/parallax").await });
+    relay.join_held().await;
+    set_hosted(&mut client, false).await;
+    relay.hold(false);
+    let refused = (403, Some("access_denied".to_owned()));
+    assert_eq!(asked.await.unwrap(), refused);
+    server.stop().await;
+}
+
+/// A WebSocket ticket from `route` for the session the computer whose data folder is `dir` saved
+/// for `host_id`.
+async fn saved_ticket(route: &str, host_id: &str, dir: &Path) -> String {
+    let port = port_of(route);
+    let saved = std::fs::read(dir.join("remote-hosts").join(host_id)).unwrap();
+    let saved: Value = serde_json::from_slice(&saved).unwrap();
+    let session = saved["token"].as_str().unwrap().to_owned();
+    let pkcs8 = remote::base64url_decode(saved["key"].as_str().unwrap()).unwrap();
+    let key = remote::DpopKey::from_pkcs8(&pkcs8).unwrap();
+    let base = format!("https://{route}");
+    let path = "/api/auth/websocket-ticket";
+    let proof = key.proof("POST", &format!("{base}{path}"), Some(&session));
+    let authorization = format!("DPoP {session}");
+    let headers = [("Authorization", authorization.as_str()), ("DPoP", &proof)];
+    let (status, _, answer) = https(port, "POST", path, &headers, "").await;
+    assert_eq!(status, 200);
+    let answer: Value = serde_json::from_slice(&answer).unwrap();
+    answer["ticket"].as_str().unwrap().to_owned()
+}
+
+/// Whether `/ws` at `route` opens with `ticket`.
+async fn opens_with_ticket(route: &str, ticket: &str) -> bool {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let (tls, _) = remote::open(route, None).await.unwrap();
+    let request = format!("wss://{route}/ws?wsTicket={ticket}")
+        .into_client_request()
+        .unwrap();
+    tokio_tungstenite::client_async(request, tls).await.is_ok()
+}
+
+#[tokio::test]
+async fn a_hosted_streams_socket_takes_only_a_hosted_clients_session_with_its_proof() {
+    let issuer = clerk().await;
+    let (dir, web, phone, browser) = (temp_dir(), temp_dir(), temp_dir(), temp_dir());
+    let (relay, server, mut client, direct, host_id) =
+        hosted_host(dir.path(), web.path(), &issuer, true).await;
+    let hosted = relay.route(json!({ "client": "hosted" })).await;
+
+    // Another device's session, with its proof, opens no socket on a hosted stream, though it
+    // does on its own route.
+    allowed(
+        &direct,
+        &host_id,
+        &token(&issuer, USER),
+        phone.path(),
+        &mut client,
+        None,
+    )
+    .await;
+    let on_hosted = open_account(std::slice::from_ref(&hosted), &host_id, phone.path()).await;
+    assert!(on_hosted.is_err());
+    let mut app = open_account(std::slice::from_ref(&direct), &host_id, phone.path())
+        .await
+        .unwrap();
+    app.initialize().await;
+
+    // A hosted client's session does, with its proof.
+    allowed(
+        &hosted,
+        &host_id,
+        &hosted_token(&issuer),
+        browser.path(),
+        &mut client,
+        None,
+    )
+    .await;
+    let mut app = open_account(std::slice::from_ref(&hosted), &host_id, browser.path())
+        .await
+        .unwrap();
+    app.initialize().await;
+
+    // Not with a ticket, which works on an unmarked route.
+    let ticket = saved_ticket(&direct, &host_id, browser.path()).await;
+    assert!(
+        !opens_with_ticket(&hosted, &ticket).await,
+        "a hosted stream"
+    );
+    let ticket = saved_ticket(&direct, &host_id, browser.path()).await;
+    assert!(opens_with_ticket(&direct, &ticket).await, "its own route");
+    server.stop().await;
 }
