@@ -14,6 +14,7 @@ import {
   MAX_HOOK_BYTES,
   MAX_REMOVAL,
   MAX_STREAMS,
+  regionHint,
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
@@ -41,12 +42,13 @@ import {
 /** The relay's account for `user` of this test's Clerk instance. */
 const account = (user: string) => accountOf("https://clerk.test", user);
 
-/** A registered, connected host for `user`, a new one by default, and that user's token. */
-async function online(user = `user_${crypto.randomUUID()}`) {
+/** A registered, connected host for `user`, a new one by default, and that user's token. `cf` is
+ *  Cloudflare's geolocation of plxd's IP. */
+async function online(user = `user_${crypto.randomUUID()}`, cf?: Record<string, unknown>) {
   const host = await newHost();
   const token = await session(user);
   expect((await register(host, token)).status).toBe(200);
-  const { control } = await connectHost(host);
+  const { control } = await connectHost(host, undefined, cf);
   expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
   return { host, token, control };
 }
@@ -1528,6 +1530,81 @@ describe("standby spare object (PLX-1574)", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("stream object placement (PLX-1606)", () => {
+  it("maps where plxd's IP is to a location hint", () => {
+    const cases: [Record<string, string> | undefined, string | undefined][] = [
+      [{ continent: "NA", longitude: "-117.16" }, "wnam"], // San Diego
+      [{ continent: "NA", longitude: "-104.99" }, "wnam"], // Denver
+      [{ continent: "NA", longitude: "-96.80" }, "enam"], // Dallas
+      [{ continent: "NA", longitude: "-74.01" }, "enam"], // New York
+      [{ continent: "SA", longitude: "-46.63" }, "sam"],
+      [{ continent: "EU", longitude: "2.35" }, "weur"], // Paris
+      [{ continent: "EU", longitude: "21.01" }, "eeur"], // Warsaw
+      [{ continent: "AS", longitude: "55.27" }, "me"], // Dubai
+      [{ continent: "AS", longitude: "139.69" }, "apac"], // Tokyo
+      [{ continent: "OC", longitude: "151.21" }, "oc"],
+      [{ continent: "AF", longitude: "18.42" }, "afr"],
+      // A split continent with no longitude, Antarctica, and no geolocation give none.
+      [{ continent: "NA" }, undefined],
+      [{ continent: "EU", longitude: "" }, undefined],
+      [{ continent: "AN", longitude: "0" }, undefined],
+      [{}, undefined],
+      [undefined, undefined],
+    ];
+    for (const [cf, hint] of cases) expect(regionHint(cf as IncomingRequestCfProperties | undefined), JSON.stringify(cf)).toBe(hint);
+  });
+
+  /** Records the location hint each stream object was first asked for with, which is the call that
+   *  makes it, by id. */
+  function placements() {
+    const namespace = testEnv.STREAMS;
+    const hints = new Map<string, string | undefined>();
+    testEnv.STREAMS = new Proxy(namespace, {
+      get(target, key) {
+        if (key === "get")
+          return (id: DurableObjectId, options?: DurableObjectNamespaceGetDurableObjectOptions) => {
+            if (!hints.has(id.toString())) hints.set(id.toString(), options?.locationHint);
+            return target.get(id, options);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return { hints, restore: () => (testEnv.STREAMS = namespace) };
+  }
+
+  /** The spare, the standby made beside it, and a client's own stream when the spare is taken,
+   *  with the host's object hibernating before that client. */
+  async function made(cf: Record<string, unknown>) {
+    const { hints, restore } = placements();
+    try {
+      const { host, token, control } = await online(undefined, cf);
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      expect(spare).toMatchObject({ spare: true });
+      await expect.poll(() => hints.size).toBe(2);
+      opened(await connect(host, token));
+      await evictDurableObject(hosts.get(hosts.idFromName(host.id)));
+      opened(await connect(host, token));
+      const own = JSON.parse((await control.next()) as string) as Open;
+      expect(own.spare).toBeUndefined();
+      expect(hints.size).toBe(3);
+      expect(hints.has(spare.stream) && hints.has(own.stream)).toBe(true);
+      return [...hints.values()];
+    } finally {
+      restore();
+    }
+  }
+
+  it("makes each new stream object in the region plxd's IP is in, after hibernating too", async () => {
+    expect(await made({ continent: "EU", longitude: "2.35" })).toEqual(["weur", "weur", "weur"]);
+  });
+
+  it("gives no hint when that region is unknown", async () => {
+    expect(await made({ continent: "AN" })).toEqual([undefined, undefined, undefined]);
   });
 });
 

@@ -148,16 +148,17 @@ export async function peerHeader(caller: Host, route: string, signer: Host = cal
 }
 
 /** Opens plxd's control socket with `proof`: the socket, or the refusal. `held` lists the streams
- *  plxd still holds, and a plxd from before PLX-1419 lists none. */
-export function hostSocket(host: Host, proof: string, held?: string[]) {
+ *  plxd still holds, and a plxd from before PLX-1419 lists none. `cf` stands in for Cloudflare's
+ *  geolocation of plxd's IP. */
+export function hostSocket(host: Host, proof: string, held?: string[], cf?: Record<string, unknown>) {
   const headers: Record<string, string> = { [PROOF_HEADER]: proof };
   if (held) headers[STREAMS_HEADER] = held.join(",");
-  return socket(`/v1/hosts/${host.id}/host`, headers);
+  return socket(`/v1/hosts/${host.id}/host`, headers, cf);
 }
 
 /** plxd's control socket, opened with a fresh proof. */
-export async function connectHost(host: Host, held?: string[]) {
-  return { control: opened(await hostSocket(host, await hostProof(host), held)) };
+export async function connectHost(host: Host, held?: string[], cf?: Record<string, unknown>) {
+  return { control: opened(await hostSocket(host, await hostProof(host), held, cf)) };
 }
 
 /** A hook frame as plxd reads it: its head and raw body. */

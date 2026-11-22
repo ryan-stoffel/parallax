@@ -44,6 +44,34 @@ export const HOST_WAIT = 7_000;
 const RECONNECT_WINDOW = 60_000;
 /** How many clients' streams a host may have open at once, its spare included. */
 export const MAX_STREAMS = 16;
+/** The control socket's tag naming the location hint its host's new stream objects get, such as
+ *  `region:wnam`. */
+const REGION_TAG = "region:";
+/** Each continent's location hint, or the longitude that splits it in two and the hints west and
+ *  east of it. */
+const REGIONS = new Map<string, DurableObjectLocationHint | [number, DurableObjectLocationHint, DurableObjectLocationHint]>([
+  ["NA", [-100, "wnam", "enam"]],
+  ["SA", "sam"],
+  ["EU", [20, "weur", "eeur"]],
+  ["AS", [60, "me", "apac"]],
+  ["OC", "oc"],
+  ["AF", "afr"],
+]);
+
+/**
+ * The Durable Object location hint for the region Cloudflare places a request's IP in, from its
+ * `request.cf`, or undefined when that's unknown (PLX-1606). It's the IP's geolocation, not the
+ * data center the request entered, which PLX-1574 found unreliable. North America splits at 100°W,
+ * Europe at 20°E, and Asia at 60°E, west of which is the Middle East.
+ */
+export function regionHint(cf: Partial<Pick<IncomingRequestCfProperties, "continent" | "longitude">> | undefined) {
+  const region = REGIONS.get(String(cf?.continent));
+  if (!Array.isArray(region)) return region;
+  const [split, west, east] = region;
+  const longitude = Number.parseFloat(String(cf?.longitude));
+  if (Number.isNaN(longitude)) return undefined;
+  return longitude < split ? west : east;
+}
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -285,7 +313,7 @@ export class HostRelay extends DurableObject<Env> {
     const saved = await this.ctx.storage.get<string>("standby");
     const next = this.env.STREAMS.newUniqueId();
     this.ctx.waitUntil(
-      this.env.STREAMS.get(next)
+      this.env.STREAMS.get(next, this.placement())
         .hostJoined()
         .catch((error) => logError("host.standby", this.context(), error)),
     );
@@ -295,7 +323,19 @@ export class HostRelay extends DurableObject<Env> {
   /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
   protected streamObject(hostId: string, stream: string): Pick<import("./stream").StreamRelay,
     "arm" | "close" | "hostJoined" | "clientJoined" | "taken" | "hostGone"> | null {
-    return streamObject(this.env, hostId, stream);
+    return streamObject(this.env, hostId, stream, this.placement());
+  }
+
+  /**
+   * Where a new stream object goes: the region plxd's control socket came from, so the object runs
+   * near plxd wherever this one runs (PLX-1606). A hint counts only when an id is first used, so
+   * every call passes it and the first one, which makes the object, places it. With no region, or
+   * no control socket, Cloudflare places the object near its first caller, this object.
+   */
+  private placement(): DurableObjectNamespaceGetDurableObjectOptions | undefined {
+    const socket = this.host();
+    const hint = socket && this.ctx.getTags(socket).find((tag) => tag.startsWith(REGION_TAG));
+    return hint ? { locationHint: hint.slice(REGION_TAG.length) as DurableObjectLocationHint } : undefined;
   }
 
   protected async armStream(object: NonNullable<ReturnType<HostRelay["streamObject"]>>,
@@ -413,7 +453,7 @@ export class HostRelay extends DurableObject<Env> {
     return {
       object: "host",
       id: short(this.ctx.id.toString()),
-      host: ws && this.ctx.getTags(ws).find((tag) => tag !== "host"),
+      host: ws && this.ctx.getTags(ws).find((tag) => tag !== "host" && !tag.startsWith(REGION_TAG)),
     };
   }
 
@@ -640,14 +680,18 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** plxd's control socket. Clients' streams go to their own objects, through the Worker. */
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request<unknown, IncomingRequestCfProperties>): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return json(426, { error: "upgrade_required" });
     return logged(
       "host.fetch",
       () => this.context(),
       () =>
-        this.hostSocket(request.headers.get(PROOF_HEADER) ?? "", request.headers.get(STREAMS_HEADER)),
+        this.hostSocket(
+          request.headers.get(PROOF_HEADER) ?? "",
+          request.headers.get(STREAMS_HEADER),
+          regionHint(request.cf),
+        ),
     );
   }
 
@@ -656,9 +700,10 @@ export class HostRelay extends DurableObject<Env> {
    * key. The relay takes it only within [`PROOF_PAST`] and [`PROOF_FUTURE`] of its own clock and
    * newer than the last one it took, so a proof works once. No socket opens without one, so
    * strangers who know the host id, which is in every webhook URL, have nothing to hold open or
-   * push out. `held` lists the streams plxd still holds, for [`settleStreams`].
+   * push out. `held` lists the streams plxd still holds, for [`settleStreams`]. `region` is where
+   * plxd's IP is, kept as a tag for placing its stream objects (PLX-1606).
    */
-  private async hostSocket(proof: string, held: string | null) {
+  private async hostSocket(proof: string, held: string | null, region: DurableObjectLocationHint | undefined) {
     const owner = await this.owner();
     if (!owner) return json(404, { error: "not_registered" });
     const [at = "", signature = ""] = proof.split(".");
@@ -688,10 +733,14 @@ export class HostRelay extends DurableObject<Env> {
     this.closeHost(4409, "replaced");
     const { kept, again } = await this.settleStreams(owner.hostId, held);
     const [client, server] = Object.values(new WebSocketPair());
-    // The second tag names the host in this socket's log lines, with no storage read to fail.
-    this.ctx.acceptWebSocket(server!, ["host", short(owner.hostId)]);
+    // The second tag names the host in this socket's log lines, with no storage read to fail. A
+    // tag outlives hibernation, and streams are made only while this socket is open.
+    const tags = ["host", short(owner.hostId)];
+    if (region) tags.push(`${REGION_TAG}${region}`);
+    this.ctx.acceptWebSocket(server!, tags);
     logEvent("host_connected", {
       ...this.context(server!),
+      region: region ?? null,
       open_before: openBefore,
       streams_kept: kept,
       streams_announced: again.length,

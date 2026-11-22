@@ -57,14 +57,15 @@ type Side = "client" | "host";
  * A stream's object, or null when `stream`, which a request's path can name, can't be one. A
  * stream's id is its object's unique id, which skips the global check a new name costs. A UUID is
  * a stream from before PLX-1358, whose object has a name: its host's object may still list it
- * after a deploy. `idFromString` throws on an id that isn't this namespace's.
+ * after a deploy. `idFromString` throws on an id that isn't this namespace's. `options` carries the
+ * host's location hint, which counts only when this call makes the object (PLX-1606).
  */
-export function streamObject(env: Env, hostId: string, stream: string) {
+export function streamObject(env: Env, hostId: string, stream: string, options?: DurableObjectNamespaceGetDurableObjectOptions) {
   if (/^[0-9a-f-]{36}$/.test(stream))
-    return env.STREAMS.get(env.STREAMS.idFromName(`${hostId}/${stream}`));
+    return env.STREAMS.get(env.STREAMS.idFromName(`${hostId}/${stream}`), options);
   if (!/^[0-9a-f]{64}$/.test(stream)) return null;
   try {
-    return env.STREAMS.get(env.STREAMS.idFromString(stream));
+    return env.STREAMS.get(env.STREAMS.idFromString(stream), options);
   } catch {
     return null;
   }
