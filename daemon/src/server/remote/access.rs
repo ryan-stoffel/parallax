@@ -49,12 +49,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{
-    HOUR, Request, StoredSession, clean_name, host_key, host_name, lock, new_session,
-    read_sessions, refused, routes, write_sessions,
+    HOSTED_OFF, HOUR, Made, Request, StoredSession, clean_name, host_key, host_name, hosted_on,
+    lock, new_session, read_sessions, refused, routes, write_sessions,
 };
 use crate::agents::store_error;
 use crate::clerk;
-use crate::remote::{self, HostKey, Proven};
+use crate::remote::{self, Proven};
 use crate::server::Daemon;
 
 /// At most this many new devices' requests start an hour (0091).
@@ -145,6 +145,10 @@ struct Pending {
     expires_at: jiff::Timestamp,
     /// A device approved it, so the client's next call gets its session.
     approved: bool,
+    /// A sign-in for it came through the hosted client (0108), so its Allow is read-only unless
+    /// the approver says otherwise.
+    #[serde(default)]
+    hosted: bool,
 }
 
 /// The hour [`MAX_REQUESTS`] and [`super::MAX_SETUP_RUNS`] are counted in.
@@ -170,8 +174,8 @@ fn count_start(starts: &mut VecDeque<jiff::Timestamp>, max: usize, now: jiff::Ti
 /// Where a request stands for the client that made it.
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
-    /// Approved: a session, named so.
-    Approved(String),
+    /// Approved: a session, named so, and whether the request came through the hosted client.
+    Approved(String, bool),
     /// Still waiting, with the host's value once the client sent its own.
     Waiting(Option<[u8; remote::APPROVAL_VALUE_BYTES]>),
 }
@@ -197,8 +201,13 @@ impl Access {
     }
 
     /// Starts a request for `thumbprint`, named `name`, or finds the one it has: its id and the
-    /// host's commitment.
-    fn start(&self, thumbprint: &str, name: &str) -> Result<(String, String), &'static str> {
+    /// host's commitment. A `hosted` sign-in marks the request the hosted client's, for good.
+    fn start(
+        &self,
+        thumbprint: &str,
+        name: &str,
+        hosted: bool,
+    ) -> Result<(String, String), &'static str> {
         let mut state = self.live();
         if state
             .setup_device
@@ -207,12 +216,21 @@ impl Access {
         {
             return Err("this computer is waiting for another of your devices");
         }
-        if let Some(pending) = &state.pending {
+        if let Some(pending) = &mut state.pending {
             if pending.thumbprint != thumbprint {
                 return Err("another device's request is waiting");
             }
-            let commitment = remote::approval_commitment(&pending.host_value);
-            return Ok((pending.id.clone(), commitment));
+            let marked = hosted && !pending.hosted;
+            pending.hosted |= hosted;
+            let found = (
+                pending.id.clone(),
+                remote::approval_commitment(&pending.host_value),
+            );
+            drop(state);
+            if marked {
+                self.changed();
+            }
+            return Ok(found);
         }
         let now = jiff::Timestamp::now();
         if !count_start(&mut state.started, MAX_REQUESTS, now) {
@@ -230,6 +248,7 @@ impl Access {
             client_value: None,
             expires_at: now + lifetime,
             approved: false,
+            hosted,
         });
         drop(state);
         self.changed();
@@ -262,10 +281,10 @@ impl Access {
             }
         }
         let step = if pending.approved {
-            let name = pending.name.clone();
+            let approved = Step::Approved(pending.name.clone(), pending.hosted);
             state.pending = None;
             changed = true;
-            Step::Approved(name)
+            approved
         } else {
             Step::Waiting(pending.client_value.map(|_| pending.host_value))
         };
@@ -276,19 +295,24 @@ impl Access {
         Ok(step)
     }
 
-    /// Whether request `id` waits for the key `thumbprint`.
-    fn owns(&self, id: &str, thumbprint: &str) -> bool {
+    /// Whether request `id` waits for the key `thumbprint`, and if so, whether it came through the
+    /// hosted client.
+    fn owns(&self, id: &str, thumbprint: &str) -> Option<bool> {
         self.live()
             .pending
             .as_ref()
-            .is_some_and(|p| p.id == id && p.thumbprint == thumbprint)
+            .filter(|p| p.id == id && p.thumbprint == thumbprint)
+            .map(|p| p.hosted)
     }
 
-    /// The key request `id` asks for, if it waits and has a code to compare.
-    fn approvable(&self, id: &str) -> Result<String, &'static str> {
+    /// The key request `id` asks for, and whether it came through the hosted client, if it waits
+    /// and has a code to compare.
+    fn approvable(&self, id: &str) -> Result<(String, bool), &'static str> {
         let state = self.live();
         match state.pending.as_ref().filter(|p| p.id == id) {
-            Some(pending) if pending.client_value.is_some() => Ok(pending.thumbprint.clone()),
+            Some(pending) if pending.client_value.is_some() => {
+                Ok((pending.thumbprint.clone(), pending.hosted))
+            }
             Some(_) => Err("the request has no code yet"),
             None => Err("no such request: it lapsed or was denied"),
         }
@@ -409,6 +433,7 @@ impl Access {
                 .client_value
                 .map(|value| remote::approval_code(&p.host_value, &value, host_id, &p.thumbprint)),
             expires_at: p.expires_at.to_string(),
+            hosted: p.hosted,
         });
         (pending, state.setup_approved.clone())
     }
@@ -738,18 +763,28 @@ pub(crate) async fn merge(
     Ok(())
 }
 
-/// `access/approve`: approves request `id`'s key, so its client's next step gets a session.
+/// `access/approve`: approves request `id`'s key, so its client's next step gets a session. With
+/// `read_only`, or by default for a hosted client's request (0108), the key gets the read-only mark
+/// in the same write, so its first session is read-only.
 pub(crate) async fn approve(
     daemon: &Daemon,
     cancel: &CancellationToken,
     id: &str,
+    read_only: Option<bool>,
 ) -> Result<(), ErrorObject> {
     let access = &daemon.remote.access;
-    let thumbprint = access.approvable(id).map_err(ErrorObject::invalid_params)?;
+    let (thumbprint, hosted) = access.approvable(id).map_err(ErrorObject::invalid_params)?;
+    let read_only = read_only.unwrap_or(hosted);
     let key = thumbprint.clone();
-    update(daemon, cancel, move |lists| approve_key(lists, key)).await?;
+    update(daemon, cancel, move |lists| {
+        if read_only {
+            lists.read_only_clients.insert(key.clone());
+        }
+        approve_key(lists, key)
+    })
+    .await?;
     access.mark_approved(&thumbprint);
-    info!(%thumbprint, "approved a new device");
+    info!(%thumbprint, read_only, "approved a new device");
     Ok(())
 }
 
@@ -920,9 +955,16 @@ fn limited(why: &str) -> (u16, serde_json::Value) {
     )
 }
 
-/// A new session for `proven`'s key, named `label`, as pairing answers with it.
-async fn session(daemon: &Daemon, proven: &Proven, label: &str) -> (u16, serde_json::Value) {
-    let token = match new_session(daemon, proven, label, false).await {
+/// A new session for `proven`'s key, named `label`, as pairing answers with it. A `hosted` one
+/// works only while `hostedClient` is on (0108).
+async fn session(
+    daemon: &Daemon,
+    proven: &Proven,
+    label: &str,
+    hosted: bool,
+) -> (u16, serde_json::Value) {
+    let made = if hosted { Made::Hosted } else { Made::Paired };
+    let token = match new_session(daemon, proven, label, made).await {
         Ok(token) => token,
         Err(refusal) => return refusal,
     };
@@ -937,11 +979,14 @@ async fn session(daemon: &Daemon, proven: &Proven, label: &str) -> (u16, serde_j
     )
 }
 
-/// `POST /api/auth/account`: a Clerk token from a client signed in to this host's account.
+/// `POST /api/auth/account`: a Clerk token from a client signed in to this host's account. The
+/// sign-in is the hosted client's when the token's OAuth application or `hosted_stream` says so,
+/// judged here each time and never from anything another computer recorded (0108), and while
+/// `hostedClient` is off it gets nothing, approved key or not.
 pub(super) async fn sign_in(
     daemon: &Daemon,
-    _: &HostKey,
     request: &Request,
+    hosted_stream: bool,
 ) -> (u16, serde_json::Value) {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -981,6 +1026,10 @@ pub(super) async fn sign_in(
     if let Err(why) = clerk::check_sign_in(&verified, &accounts, now) {
         return refused(why);
     }
+    let hosted = verified.hosted || hosted_stream;
+    if hosted && !hosted_on(daemon).await {
+        return removed(HOSTED_OFF);
+    }
     // Only a good token gets its proof remembered, so strangers can't grow the map.
     if !daemon.remote.first_use(&proven) {
         return refused("a replayed DPoP proof");
@@ -992,11 +1041,15 @@ pub(super) async fn sign_in(
         return removed(remote::DEVICE_REMOVED);
     }
     if lists.approved_clients.contains(&proven.thumbprint) {
-        info!(name = %clean_name(&body.client_label), "an approved device signed in");
-        return session(daemon, &proven, &body.client_label).await;
+        info!(name = %clean_name(&body.client_label), hosted, "an approved device signed in");
+        return session(daemon, &proven, &body.client_label, hosted).await;
     }
     let name = clean_name(&body.client_label);
-    match daemon.remote.access.start(&proven.thumbprint, &name) {
+    match daemon
+        .remote
+        .access
+        .start(&proven.thumbprint, &name, hosted)
+    {
         Ok((id, commitment)) => {
             info!(%name, "a new device asks to be approved");
             (
@@ -1066,6 +1119,7 @@ pub(super) async fn peer(daemon: &Daemon, request: &Request) -> (u16, serde_json
         thumbprint: proven.thumbprint.clone(),
         created_at: jiff::Timestamp::now().to_string(),
         browser: false,
+        hosted: false,
         peer: true,
     };
     let name = session.name.clone();
@@ -1147,11 +1201,12 @@ pub(crate) async fn close_peers(daemon: &Daemon) {
     }
 }
 
-/// `POST /api/auth/approval`: the next step of a new device's request, from the key it is for.
+/// `POST /api/auth/approval`: the next step of a new device's request, from the key it is for. A
+/// hosted client's request, or any on a hosted stream, gets nothing while `hostedClient` is off.
 pub(super) async fn approval(
     daemon: &Daemon,
-    _: &HostKey,
     request: &Request,
+    hosted_stream: bool,
 ) -> (u16, serde_json::Value) {
     #[derive(Deserialize)]
     struct Approval {
@@ -1186,8 +1241,11 @@ pub(super) async fn approval(
     let access = &daemon.remote.access;
     // Only the request's own key gets its proof remembered, so strangers can't grow the map, and
     // a replayed proof changes nothing.
-    if !access.owns(&body.request, &proven.thumbprint) {
+    let Some(hosted) = access.owns(&body.request, &proven.thumbprint) else {
         return refused("no such request: it lapsed, was denied, or is another key's");
+    };
+    if (hosted || hosted_stream) && !hosted_on(daemon).await {
+        return removed(HOSTED_OFF);
     }
     if !daemon.remote.first_use(&proven) {
         return refused("a replayed DPoP proof");
@@ -1210,7 +1268,9 @@ pub(super) async fn approval(
             Err(why) => return refused(why),
         };
         let host_value = match step {
-            Step::Approved(name) => return session(daemon, &proven, &name).await,
+            Step::Approved(name, hosted) => {
+                return session(daemon, &proven, &name, hosted || hosted_stream).await;
+            }
             Step::Waiting(host_value) => host_value,
         };
         if std::mem::take(&mut allow) {
@@ -1250,13 +1310,13 @@ mod tests {
     #[test]
     fn a_waiting_request_takes_one_value_and_is_never_replaced_unless_denied() {
         let access = Access::default();
-        let (id, commitment) = access.start(KEY, "phone").unwrap();
+        let (id, commitment) = access.start(KEY, "phone", false).unwrap();
         assert_eq!(
-            access.start(KEY, "phone").unwrap(),
+            access.start(KEY, "phone", false).unwrap(),
             (id.clone(), commitment.clone())
         );
         assert_eq!(
-            access.start(OTHER, "laptop"),
+            access.start(OTHER, "laptop", false),
             Err("another device's request is waiting")
         );
         // No code to approve until the client sends its value.
@@ -1277,18 +1337,18 @@ mod tests {
         let code = remote::approval_code(&host_value, &value, "host", KEY);
         assert_eq!(pending.unwrap().code.as_deref(), Some(code.as_str()));
 
-        assert_eq!(access.approvable(&id).as_deref(), Ok(KEY));
+        assert_eq!(access.approvable(&id), Ok((KEY.to_owned(), false)));
         access.mark_approved(KEY);
         assert_eq!(
             access.step(&id, KEY, None),
-            Ok(Step::Approved("phone".to_owned()))
+            Ok(Step::Approved("phone".to_owned(), false))
         );
         assert!(access.step(&id, KEY, None).is_err(), "used up");
 
-        let (denied, _) = access.start(OTHER, "laptop").unwrap();
+        let (denied, _) = access.start(OTHER, "laptop", false).unwrap();
         access.deny(&denied).unwrap();
         assert!(
-            access.start(KEY, "phone").is_ok(),
+            access.start(KEY, "phone", false).is_ok(),
             "a denial frees the slot"
         );
     }
@@ -1296,16 +1356,16 @@ mod tests {
     #[test]
     fn a_named_device_alone_can_ask_and_allow_while_its_setup_code_lasts() {
         let access = Access::default();
-        let (other, _) = access.start(OTHER, "laptop").unwrap();
+        let (other, _) = access.start(OTHER, "laptop", false).unwrap();
         let later = jiff::Timestamp::now() + jiff::SignedDuration::from_mins(10);
         access.setup_started(Some(KEY.to_owned()), later);
         assert!(access.step(&other, OTHER, None).is_err(), "dropped");
         assert_eq!(
-            access.start(OTHER, "laptop"),
+            access.start(OTHER, "laptop", false),
             Err("this computer is waiting for another of your devices"),
             "a caught token can't hold the slot"
         );
-        let (id, _) = access.start(KEY, "phone").unwrap();
+        let (id, _) = access.start(KEY, "phone", false).unwrap();
         assert_eq!(access.named_device(&id, KEY), None, "no code yet");
         let value = [7; remote::APPROVAL_VALUE_BYTES];
         access.step(&id, KEY, Some(&value)).unwrap();
@@ -1317,18 +1377,47 @@ mod tests {
         assert_eq!(access.named_device(&id, KEY), None);
         access.setup_started(None, later);
         assert_eq!(access.named_device(&id, KEY), None);
-        assert!(access.start(OTHER, "laptop").is_err(), "KEY's still waits");
+        assert!(
+            access.start(OTHER, "laptop", false).is_err(),
+            "KEY's still waits"
+        );
+    }
+
+    #[test]
+    fn a_hosted_sign_in_marks_the_request_for_good_and_its_approval() {
+        let access = Access::default();
+        let (id, _) = access.start(KEY, "browser", false).unwrap();
+        assert_eq!(access.owns(&id, KEY), Some(false));
+        access.start(KEY, "browser", true).unwrap();
+        access.start(KEY, "browser", false).unwrap();
+        assert_eq!(
+            access.owns(&id, KEY),
+            Some(true),
+            "a later sign-in can't unmark it"
+        );
+        let value = [7; remote::APPROVAL_VALUE_BYTES];
+        access.step(&id, KEY, Some(&value)).unwrap();
+        assert_eq!(access.approvable(&id), Ok((KEY.to_owned(), true)));
+        assert!(
+            access.view("host").0.unwrap().hosted,
+            "the Allow dialog hears it"
+        );
+        access.mark_approved(KEY);
+        assert_eq!(
+            access.step(&id, KEY, None),
+            Ok(Step::Approved("browser".to_owned(), true))
+        );
     }
 
     #[test]
     fn at_most_five_requests_start_an_hour() {
         let access = Access::default();
         for _ in 0..MAX_REQUESTS {
-            let (id, _) = access.start(KEY, "phone").unwrap();
+            let (id, _) = access.start(KEY, "phone", false).unwrap();
             access.deny(&id).unwrap();
         }
         assert_eq!(
-            access.start(KEY, "phone"),
+            access.start(KEY, "phone", false),
             Err("too many new devices asked this hour")
         );
     }

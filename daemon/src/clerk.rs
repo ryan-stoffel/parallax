@@ -26,6 +26,11 @@ pub const DEVELOPMENT_ISSUER: &str = "https://adjusted-mastodon-8705.clerk.accou
 /// `PLXD_CLERK_CLIENT_IDS` lists others, separated by commas.
 pub const DEFAULT_CLIENT_ID: &str = "mp9Q72aAbB0LC83O";
 
+/// The hosted browser client's OAuth applications on production (0108), whose access tokens count
+/// and mark a sign-in as the hosted client's. None until its application exists.
+/// `PLXD_CLERK_HOSTED_CLIENT_IDS` lists them, separated by commas.
+pub const DEFAULT_HOSTED_CLIENT_IDS: &[&str] = &[];
+
 /// The desktop app's OAuth application on the development instance.
 /// `PLXD_CLERK_LEGACY_CLIENT_IDS` lists others, separated by commas.
 pub const DEVELOPMENT_CLIENT_ID: &str = "SXDueyOLOJ2v4Vmq";
@@ -55,19 +60,24 @@ pub struct Config {
     pub issuer: String,
     /// The OAuth applications whose access tokens count, by `client_id`.
     pub client_ids: Vec<String>,
+    /// The hosted browser client's OAuth applications (0108), whose access tokens count too, and
+    /// say the sign-in came through it.
+    pub hosted_client_ids: Vec<String>,
     /// The origins a browser's session token may come from (its `azp`). Empty accepts no browser;
     /// a session token without `azp`, as Clerk's native SDKs send, passes.
     pub authorized_parties: Vec<String>,
 }
 
 impl Config {
-    /// `PLXD_CLERK_ISSUER`, `PLXD_CLERK_CLIENT_IDS`, and `PLXD_CLERK_AUTHORIZED_PARTIES` (comma
-    /// lists), else the desktop app's instance and application, and no browser.
+    /// `PLXD_CLERK_ISSUER`, `PLXD_CLERK_CLIENT_IDS`, `PLXD_CLERK_HOSTED_CLIENT_IDS`, and
+    /// `PLXD_CLERK_AUTHORIZED_PARTIES` (comma lists), else the desktop app's instance and
+    /// application, the hosted client's, and no browser.
     #[must_use]
     pub fn from_env() -> Self {
         Self::read(
             "PLXD_CLERK_ISSUER",
             "PLXD_CLERK_CLIENT_IDS",
+            Some("PLXD_CLERK_HOSTED_CLIENT_IDS"),
             DEFAULT_ISSUER,
             DEFAULT_CLIENT_ID,
         )
@@ -75,19 +85,27 @@ impl Config {
 
     /// The legacy instance, whose accounts are moving to the home one (PLX-1465):
     /// `PLXD_CLERK_LEGACY_ISSUER` and `PLXD_CLERK_LEGACY_CLIENT_IDS`, else the development
-    /// instance and the desktop app's application there. None when it's the home instance.
+    /// instance and the desktop app's application there. None when it's the home instance. It has
+    /// no hosted client (0108).
     #[must_use]
     pub fn legacy_from_env() -> Option<Self> {
         let legacy = Self::read(
             "PLXD_CLERK_LEGACY_ISSUER",
             "PLXD_CLERK_LEGACY_CLIENT_IDS",
+            None,
             DEVELOPMENT_ISSUER,
             DEVELOPMENT_CLIENT_ID,
         );
         (legacy.issuer != Self::from_env().issuer).then_some(legacy)
     }
 
-    fn read(issuer: &str, client_ids: &str, default_issuer: &str, default_client: &str) -> Self {
+    fn read(
+        issuer: &str,
+        client_ids: &str,
+        hosted_client_ids: Option<&str>,
+        default_issuer: &str,
+        default_client: &str,
+    ) -> Self {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         let list = |value: String| -> Vec<String> {
             value
@@ -97,9 +115,16 @@ impl Config {
                 .map(str::to_owned)
                 .collect()
         };
+        let hosted_default = || {
+            let ids = DEFAULT_HOSTED_CLIENT_IDS.iter();
+            ids.map(|&id| id.to_owned()).collect()
+        };
         Self {
             issuer: var(issuer).unwrap_or_else(|| default_issuer.to_owned()),
             client_ids: var(client_ids).map_or_else(|| vec![default_client.to_owned()], list),
+            hosted_client_ids: hosted_client_ids
+                .map(|name| var(name).map_or_else(hosted_default, list))
+                .unwrap_or_default(),
             authorized_parties: var("PLXD_CLERK_AUTHORIZED_PARTIES")
                 .map(list)
                 .unwrap_or_default(),
@@ -119,6 +144,9 @@ pub struct Verified {
     pub user_id: String,
     /// When it was issued, in seconds since the epoch, if it says.
     pub issued_at: Option<f64>,
+    /// It is an access token of the hosted browser client's application (0108), as its signed
+    /// `client_id` says.
+    pub hosted: bool,
 }
 
 /// A JWT split into what [`check`] needs.
@@ -195,7 +223,8 @@ pub fn subject(token: &str) -> Option<String> {
 /// Checks `jwt` as clerk-verify's `verifyClerkToken` does, at `now` in seconds: signed by `keys`'
 /// key of its `kid`, by `config`'s issuer, unexpired, for no other audience, naming a user, and
 /// an OAuth access token of an allowed application or a session token, from an allowed origin
-/// when it names one.
+/// when it names one. The hosted client's application is allowed too, and marks the token
+/// [`Verified::hosted`].
 ///
 /// # Errors
 ///
@@ -230,8 +259,11 @@ pub fn check(jwt: &Jwt, keys: &Keys, config: &Config, now: f64) -> Result<Verifi
         return Err("no user");
     };
     // An OAuth access token names its application (RFC 9068), a session token its session.
+    let mut hosted = false;
     if let Some(client_id) = text("client_id") {
-        if !config.client_ids.iter().any(|id| id == client_id) {
+        // One listed both ways is the hosted client's, which plxd serves less.
+        hosted = config.hosted_client_ids.iter().any(|id| id == client_id);
+        if !hosted && !config.client_ids.iter().any(|id| id == client_id) {
             return Err("an unknown OAuth application");
         }
     } else {
@@ -246,6 +278,7 @@ pub fn check(jwt: &Jwt, keys: &Keys, config: &Config, now: f64) -> Result<Verifi
         issuer: config.issuer.clone(),
         user_id: user.to_owned(),
         issued_at: number("iat"),
+        hosted,
     })
 }
 
@@ -469,6 +502,7 @@ mod tests {
         Config {
             issuer: ISSUER.to_owned(),
             client_ids: vec!["desktop".to_owned()],
+            hosted_client_ids: vec!["hosted".to_owned()],
             authorized_parties: vec!["https://app.example".to_owned()],
         }
     }
@@ -512,7 +546,19 @@ mod tests {
             c.remove("sid");
             c.insert("client_id".into(), json!("desktop"));
         });
-        assert!(verify(&oauth).is_ok());
+        assert!(!verify(&oauth).unwrap().hosted);
+        assert!(
+            !verified.hosted,
+            "a session token is no OAuth application's"
+        );
+        let hosted = session(|c| {
+            c.remove("sid");
+            c.insert("client_id".into(), json!("hosted"));
+        });
+        assert!(
+            verify(&hosted).unwrap().hosted,
+            "known by its signed client_id"
+        );
         let browser = session(|c| {
             c.insert("azp".into(), json!("https://app.example"));
         });
@@ -595,6 +641,7 @@ mod tests {
             issuer: ISSUER.to_owned(),
             user_id: "user_1".to_owned(),
             issued_at: iat,
+            hosted: false,
         };
         let account = |issuer: &str, user: &str| vec![(issuer.to_owned(), user.to_owned())];
         let mine = account(ISSUER, "user_1");
@@ -664,6 +711,7 @@ mod tests {
         let legacy = Config {
             issuer: LEGACY.to_owned(),
             client_ids: vec!["legacy-app".to_owned()],
+            hosted_client_ids: Vec::new(),
             authorized_parties: Vec::new(),
         };
         let clerk = Clerk::new(config(), Some(legacy));

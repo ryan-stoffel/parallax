@@ -251,13 +251,14 @@ pub use queue::{
     QueueResult, QueueSteerParams, QueuedMessage,
 };
 pub use remote::{
-    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequest,
-    AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
-    AccessState, RelayCheckParams, RelayCheckPart, RelayCheckResult, RelayHost, RelayHostsParams,
-    RelayHostsResult, RelayIdParams, RelayIdResult, RelayMoveParams, RelayMoveResult,
-    RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams,
-    RelaySignParams, RelaySignResult, RelayStatus, RelayUsage, RemotePairParams, RemotePairResult,
-    RemoteRevokeParams, RemoteSession, RemoteSessionsParams, RemoteSessionsResult,
+    AccessApproveParams, AccessForgetHostParams, AccessGetParams, AccessMergeParams,
+    AccessRemoveParams, AccessRequest, AccessRequestParams, AccessSetReadOnlyParams,
+    AccessSetupCodeParams, AccessSetupCodeResult, AccessState, RelayCheckParams, RelayCheckPart,
+    RelayCheckResult, RelayHost, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
+    RelayMoveParams, RelayMoveResult, RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams,
+    RelayRemoveParams, RelaySignParams, RelaySignResult, RelayStatus, RelayUsage, RemotePairParams,
+    RemotePairResult, RemoteRevokeParams, RemoteSession, RemoteSessionsParams,
+    RemoteSessionsResult,
 };
 pub use remote_control::{
     RemoteControlOrigin, RemoteControlSession, RemoteControlState, ThreadRemoteControlOriginParams,

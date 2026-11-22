@@ -20,6 +20,7 @@ mod context;
 mod events;
 mod git;
 mod handshake;
+mod hosted;
 mod inbox;
 mod keys;
 mod landing;

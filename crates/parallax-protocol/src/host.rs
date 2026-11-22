@@ -384,6 +384,11 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote_web: Option<bool>,
+    /// The new `hostedClient`, behind the `hostedClient` capability (0108). Absent leaves it. Off
+    /// closes every hosted and guest stream and every hosted-client key's sockets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hosted_client: Option<bool>,
     /// The new `relay`, behind the `relay` capability. Absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -483,6 +488,12 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote_web: Option<bool>,
+    /// Whether plxd serves the hosted browser client (0108): the relay streams it opens, guest
+    /// links' streams, and the keys that sign in through it. Off by default. While it's off, plxd
+    /// refuses all three. An older plxd, without the `hostedClient` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hosted_client: Option<bool>,
     /// Whether plxd keeps a connection to Parallax Relay, for phone notifications and its
     /// webhooks' public URL, and while `remote` is on too, so this user's other devices reach it
     /// from anywhere (PLX-652, 0068, PLX-1146). Off until set, or until the host first registers.

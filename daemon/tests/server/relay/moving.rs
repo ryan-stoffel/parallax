@@ -25,6 +25,7 @@ async fn on_development(
     config.clerk_legacy = Some(plxd::clerk::Config {
         issuer: plxd::clerk::issuer_of(token).unwrap(),
         client_ids: Vec::new(),
+        hosted_client_ids: Vec::new(),
         authorized_parties: Vec::new(),
     });
     let server = InProcess::start(config);

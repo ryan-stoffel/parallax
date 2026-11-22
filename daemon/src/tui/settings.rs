@@ -1271,6 +1271,7 @@ mod tests {
                 connect: None,
                 remote: None,
                 remote_web: None,
+                hosted_client: None,
                 relay: None,
                 agent_work: None,
                 device_name: None,

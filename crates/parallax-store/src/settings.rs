@@ -59,6 +59,10 @@ const REMOTE: &str = "remote";
 /// The `host_settings` key for whether the remote listener serves the web client (PLX-651).
 const REMOTE_WEB: &str = "remote_web";
 
+/// The `host_settings` key for whether plxd serves the hosted browser client's streams and keys
+/// (0108).
+const HOSTED_CLIENT: &str = "hosted_client";
+
 /// The `host_settings` key for whether plxd keeps a connection to Parallax Relay (PLX-652, 0068).
 const RELAY: &str = "relay";
 
@@ -425,6 +429,25 @@ impl Store {
     /// A database error.
     pub fn set_remote_web(&self, on: bool) -> Result<(), StoreError> {
         self.set_flag(REMOTE_WEB, on)
+    }
+
+    /// Whether plxd serves the hosted browser client: its marked relay streams, guests' streams,
+    /// and the keys that sign in through it (0108). Off unless set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn hosted_client(&self) -> Result<bool, StoreError> {
+        self.flag_default_off(HOSTED_CLIENT)
+    }
+
+    /// Sets the host's hosted client setting.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_hosted_client(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(HOSTED_CLIENT, on)
     }
 
     /// Whether plxd keeps a connection to Parallax Relay (PLX-652, 0068), for pushes and webhooks,
