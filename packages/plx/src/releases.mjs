@@ -36,21 +36,40 @@
  *   `.sha256` asset is, or neither. {@link withSha256} makes it an {@link Installer}.
  */
 
-const RELEASES_URL = "https://api.github.com/repos/ryan-stoffel/parallax/releases?per_page=30";
+const RELEASES_URL = "https://api.github.com/repos/ryan-stoffel/parallax/releases";
 
 const OS_NAMES = { macos: "macOS", linux: "Linux", windows: "Windows" };
 
 /** The app's name for a channel: a nightly build is "Parallax (Nightly)" (PLX-286). @param {Channel} channel */
 export const appName = (channel) => (channel === "nightly" ? "Parallax (Nightly)" : "Parallax");
 
-/** The release list, newest first, from GitHub's API. */
+/**
+ * The newest 30 releases, newest first, from GitHub's API, then the newest stable when it's older
+ * than those. 30 is about two weeks of nightlies, and a stable is promoted less often.
+ */
 export async function fetchReleases() {
-  const response = await fetch(RELEASES_URL, {
+  const releases = /** @type {Release[]} */ (await getJson(`${RELEASES_URL}?per_page=30`, "the release list"));
+  // GitHub answers 404 when there's no stable release.
+  const latest = /** @type {Release | undefined} */ (await getJson(`${RELEASES_URL}/latest`, "the latest release", true));
+  if (latest && !releases.some((r) => r.tag_name === latest.tag_name)) releases.push(latest);
+  return releases;
+}
+
+/**
+ * The JSON GitHub's API answers at `url`, or undefined for a 404 when `missingOk`.
+ * @param {string} url
+ * @param {string} what What the URL is, for the error.
+ * @param {boolean} [missingOk]
+ * @returns {Promise<unknown>}
+ */
+async function getJson(url, what, missingOk = false) {
+  const response = await fetch(url, {
     headers: { accept: "application/vnd.github+json", "user-agent": "plx-cli" },
     signal: AbortSignal.timeout(20_000),
   });
-  if (!response.ok) throw new Error(`GitHub answered ${response.status} ${response.statusText} for the release list.`);
-  return /** @type {Release[]} */ (await response.json());
+  if (missingOk && response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`GitHub answered ${response.status} ${response.statusText} for ${what}.`);
+  return response.json();
 }
 
 /**
@@ -78,6 +97,19 @@ const RELAY_SINCE = "v2610.13019.13940";
  * @param {string} tag
  */
 export const supportsRelay = (tag) => tag.localeCompare(RELAY_SINCE, "en", { numeric: true }) >= 0;
+
+/**
+ * The release `plx connect` installs with no `--channel`: the newest stable when it supports the
+ * relay, else the newest nightly.
+ * @param {Release[]} releases
+ */
+export function pickDefault(releases) {
+  const stable = releases.find((r) => !r.draft && !r.prerelease);
+  return stable && supportsRelay(stable.tag_name) ? stable : pickRelease(releases, "nightly");
+}
+
+/** The channel `release` is on. @param {Release} release @returns {Channel} */
+export const channelOf = (release) => (release.prerelease ? "nightly" : "stable");
 
 /**
  * The asset in `release` for `os` and `arch`: the dmg on macOS (arm64 only) and the NSIS exe on

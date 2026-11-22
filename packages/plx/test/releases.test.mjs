@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { pickAsset, pickRelease, supportsRelay, withSha256 } from "../src/releases.mjs";
+import { fetchReleases, pickAsset, pickDefault, pickRelease, supportsRelay, withSha256 } from "../src/releases.mjs";
 
 /** Each asset's GitHub digest, made up from its name. @param {string} name */
 const digest = (name) => `sha256:${Buffer.from(name).toString("hex").padEnd(64, "0").slice(0, 64)}`;
@@ -38,6 +38,32 @@ const releases = [release("v2610.1.1-nightly", true, [], true), newestNightly, s
 test("picks the newest non-draft release of each channel", () => {
   assert.equal(pickRelease(releases, "nightly"), newestNightly);
   assert.equal(pickRelease(releases, "stable"), stable);
+});
+
+test("the default is the newest stable that supports the relay, else the newest nightly", () => {
+  const relayNightly = release("v2611.10423.14450-nightly", true, []);
+  const oldStable = release("v2610.10118.11324", false, []);
+  const relayStable = release("v2611.10101.10000", false, []);
+  assert.equal(pickDefault([relayNightly]), relayNightly);
+  assert.equal(pickDefault([relayNightly, oldStable]), relayNightly);
+  assert.equal(pickDefault([relayNightly, relayStable, oldStable]), relayStable);
+  assert.equal(pickDefault([release("v2611.10501.10000", false, [], true), relayNightly, oldStable]), relayNightly);
+});
+
+test("the release list ends with the latest stable when it's older than the page", async () => {
+  const page = [release("v2611.10423.14450-nightly", true, [])];
+  const latest = release("v2611.10101.10000", false, []);
+  const real = globalThis.fetch;
+  /** @param {unknown} body */
+  const answer = (body) => new Response(JSON.stringify(body), { status: body ? 200 : 404 });
+  try {
+    globalThis.fetch = async (url) => answer(String(url).endsWith("/latest") ? latest : page);
+    assert.deepEqual((await fetchReleases()).map((r) => r.tag_name), ["v2611.10423.14450-nightly", "v2611.10101.10000"]);
+    globalThis.fetch = async (url) => answer(String(url).endsWith("/latest") ? null : page);
+    assert.deepEqual((await fetchReleases()).map((r) => r.tag_name), ["v2611.10423.14450-nightly"]);
+  } finally {
+    globalThis.fetch = real;
+  }
 });
 
 test("a release supports the relay from the first build that has it", () => {

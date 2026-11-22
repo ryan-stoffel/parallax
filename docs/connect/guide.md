@@ -45,7 +45,7 @@ plx gives its sign-in to `plxd` once to register the computer, and nothing keeps
 
 ### Releases
 
-plx installs the newest nightly. `--channel stable` asks for a stable release, and Parallax has none yet.
+plx installs the newest stable release when it supports Parallax Relay, from `v2610.13019.13940` on, and otherwise the newest nightly. Today that's the nightly. `--channel stable` or `--channel nightly` picks one.
 
 ## Add a phone or another device
 

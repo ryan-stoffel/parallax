@@ -131,6 +131,26 @@ test("connect and add stop before sign-in, naming the fix, when the release can'
   }
 });
 
+test("connect with no channel installs the newest stable with the relay, else the newest nightly", async () => {
+  const nightly = { tag_name: "v2611.10423.14450-nightly", prerelease: true, assets: [] };
+  const oldStable = { tag_name: "v2610.10118.11324", prerelease: false, assets: [] };
+  const relayStable = { tag_name: "v2611.10101.10000", prerelease: false, assets: [] };
+  /** @type {[import("../src/releases.mjs").Release[], string][]} */
+  const cases = [
+    [[nightly], "nightly"],
+    [[nightly, oldStable], "nightly"],
+    [[nightly, relayStable], "stable"],
+  ];
+  for (const [list, channel] of cases) {
+    const fake = fakes();
+    fake.deps.release = (channel) => connect.findRelease(channel, async () => list);
+    const { code, out } = await printed(() => connect.connect({}, fake.deps));
+    assert.equal(code, 0, out);
+    assert.equal(fake.installed[0]?.split(" ").pop(), channel, list.map((r) => r.tag_name).join(" "));
+    fake.done();
+  }
+});
+
 test("install downloads the given release's plxd, and fails when it has none for the OS", async () => {
   const name = "parallax-plxd-1.0.0-nightly-linux-x64";
   const asset = { name, browser_download_url: `https://dl/${name}`, digest: `sha256:${"a".repeat(64)}` };

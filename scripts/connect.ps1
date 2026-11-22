@@ -51,8 +51,9 @@ function Connect-Parallax {
 
   # npm's upgrade notice would read as something to do.
   $env:NPM_CONFIG_UPDATE_NOTIFIER = 'false'
-  # Named because this script can reach users before a plx-cli that defaults to nightly does. The
-  # last --channel wins, so one given to Connect-Parallax overrides it.
+  # No --channel, so plx picks one: the newest stable with Parallax Relay, else the newest nightly.
+  # A plx-cli older than that default installs the nightly. A --channel given to Connect-Parallax
+  # wins.
   # Found first, under 'Stop': past here a missing npx would leave nothing to fail the exit code.
   $npx = (Get-Command npx.cmd).Source
   # When a caller captures stderr, Windows PowerShell makes each of a command's stderr lines an
@@ -62,6 +63,6 @@ function Connect-Parallax {
   # npx fails rather than run one. A hyphen range, because cmd runs npx.cmd and takes > and ^ as its
   # own. Its spaces make PowerShell quote it, and npx.cmd passes the quotes on.
   $plx = if ([Console]::IsInputRedirected) { 'plx-cli@0.7.0 - 99' } else { 'plx-cli@latest' }
-  & $npx -y $plx connect --channel nightly @args
+  & $npx -y $plx connect @args
   exit $LASTEXITCODE
 }

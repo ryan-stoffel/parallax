@@ -6,7 +6,7 @@
 import https from "node:https";
 
 import { localOs, sshTarget, step, StepFailed } from "./install.mjs";
-import { fetchReleases, pickAsset, pickRelease, supportsRelay, withSha256 } from "./releases.mjs";
+import { channelOf, fetchReleases, pickAsset, pickDefault, pickRelease, supportsRelay, withSha256 } from "./releases.mjs";
 import { localRunner, sshRunner } from "./run.mjs";
 import { installScript, REMOTE_PORT } from "./scripts.mjs";
 
@@ -20,7 +20,8 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
 /**
  * What the commands reach outside this process, so tests can fake each.
  * @typedef {object} Deps
- * @property {(channel: Channel) => Promise<Release>} release Finds the release to install.
+ * @property {(channel?: Channel) => Promise<Release>} release Finds the release to install, the
+ *   default one without `channel`.
  * @property {boolean} terminal Whether stdin is a terminal. Without one, nobody is there to answer
  *   or to wait, so setup ends at a printed code, and approves no device from input.
  * @property {() => Promise<string>} signIn Signs in and resolves to a Clerk access token.
@@ -38,7 +39,7 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
 
 /**
  * @typedef {object} Options
- * @property {Channel} channel
+ * @property {Channel} [channel] The release's channel. Without it, {@link pickDefault} chooses.
  * @property {string} [user] The SSH user for `add`.
  * @property {string} [port] The SSH port for `add`.
  * @property {string} [device] The `DPoP` key thumbprint of the device whose Allow is enough, from
@@ -106,7 +107,7 @@ export function connect(options, deps) {
       const target = await deps.details(runner, os);
       return [`${target.label}: ${target.version} (${target.arch})`, target];
     });
-    await deps.install(runner, target, "this computer", release, options.channel);
+    await deps.install(runner, target, "this computer", release, channelOf(release));
     await withPlxd(
       deps,
       async (plxd) => {
@@ -133,8 +134,9 @@ export function add(destination, options, deps) {
   return exitCode(async () => {
     const release = await deps.release(options.channel);
     const token = await signInStep(deps, "Signed in to Parallax Connect");
-    const details = await sshTarget(runner, destination, target, `npx plx-cli connect --channel ${options.channel}`);
-    await deps.install(runner, details, destination, release, options.channel);
+    const channel = channelOf(release);
+    const details = await sshTarget(runner, destination, target, `npx plx-cli connect --channel ${channel}`);
+    await deps.install(runner, details, destination, release, channel);
     await withPlxd(
       deps,
       async (plxd) => {
@@ -148,18 +150,20 @@ export function add(destination, options, deps) {
 }
 
 /**
- * The newest release of `channel`, or a failed step that names the fix when there's none or it's
- * older than the relay. Runs before sign-in, so nobody signs in to a setup that can't finish.
- * @param {Channel} channel
+ * The newest release of `channel`, or without one {@link pickDefault}'s, or a failed step that
+ * names the fix when there's none or it's older than the relay. Runs before sign-in, so nobody
+ * signs in to a setup that can't finish.
+ * @param {Channel | undefined} channel
  * @param {() => Promise<Release[]>} [releases]
  * @returns {Promise<Release>}
  */
 export function findRelease(channel, releases = fetchReleases) {
-  return step(`Finding the newest ${channel} release`, async () => {
-    const release = pickRelease(await releases(), channel);
+  return step(channel ? `Finding the newest ${channel} release` : "Finding the release to install", async () => {
+    const list = await releases();
+    const release = channel ? pickRelease(list, channel) : pickDefault(list);
     if (!supportsRelay(release.tag_name)) {
       const fix = channel === "stable" ? "Run again with --channel nightly." : "Try again once a newer nightly is out.";
-      throw new Error(`The newest ${channel} release, ${release.tag_name}, is too old for Parallax Relay. ${fix}`);
+      throw new Error(`The newest ${channelOf(release)} release, ${release.tag_name}, is too old for Parallax Relay. ${fix}`);
     }
     return [`Parallax ${release.tag_name.replace(/^v/, "")} supports Parallax Relay`, release];
   });
