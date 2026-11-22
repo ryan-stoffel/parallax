@@ -31,10 +31,12 @@ import { allowedUser, verifySession } from "./clerk";
 import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import {
+  CONTROL_MINTED,
   forwarded,
   HOOK_METHODS,
   type HookReply,
   HostRelay,
+  MINTED_HEADER,
   PEER_HEADER,
   readCapped,
   TIME_HEADER,
@@ -158,12 +160,21 @@ async function relayed(
 ) {
   const start = performance.now();
   const host = env.HOSTS.get(env.HOSTS.idFromName(hostId));
+  // Stream ids are minted here, at the edge plxd or the client came in at, and never by the host's
+  // object: a stream whose id that object minted while running far from plxd stays slow on plxd's
+  // side, wherever the stream object runs (PLX-1623). Minting is local and stores nothing.
+  const mint = () => env.STREAMS.newUniqueId().toString();
   const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
   const ticket = new URL(request.url).searchParams.get("ticket");
   const byToken = action === "connect" && upgrade && ticket === null && !request.headers.has(PEER_HEADER);
   if (!byToken) {
     if (!(await limit).success) return limited();
-    if (action === "host") return host.fetch(request);
+    if (action === "host") {
+      // Set here whatever plxd sent, so only ids this Worker minted reach the object.
+      const forwarded = new Request(request);
+      forwarded.headers.set(MINTED_HEADER, Array.from({ length: CONTROL_MINTED }, mint).join(","));
+      return host.fetch(forwarded);
+    }
     if (!upgrade) return json(426, { error: "upgrade_required" });
   }
   if (action === "streams") {
@@ -184,11 +195,11 @@ async function relayed(
   let hop: Promise<void> | undefined;
   let opened: Awaited<ReturnType<HostRelay["open"]>>;
   if (ticket !== null) {
-    opened = await host.redeem(ticket);
+    opened = await host.redeem(ticket, mint());
   } else if (request.headers.has(PEER_HEADER)) {
     const user = await peerUser(env, request, `connect/${hostId}`);
     if (user instanceof Response) return user;
-    opened = await host.open(user);
+    opened = await host.open(user, false, mint());
   } else {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     // Clerk being down refuses this stream as a bad sign-in does. The account's list tells them apart.
@@ -210,7 +221,7 @@ async function relayed(
     if (!user) return json(401, { error: "unauthorized" });
     if (!allowedUser(env, user)) return json(403, { error: "user_not_allowed" });
     const openStart = performance.now();
-    opened = await host.open(user, timed);
+    opened = await host.open(user, timed, mint());
     if (timed) record("host_open", openStart);
     // The trip to the host's object and back with nothing to do there, made beside the stream's
     // join. What `host_open` takes over this is the object's own work, and any confirmation its
@@ -235,7 +246,7 @@ async function relayed(
   if (response.status === 409) {
     // The stream already has a client: a spare whose claim the host's object lost in a reset after
     // its answer left (PLX-1506). The object stops offering it, and this client takes another, once.
-    const again = await host.retake(timed);
+    const again = await host.retake(timed, mint());
     if ("error" in again) return json(again.status, { error: again.error });
     response = await join(again.stream);
   }

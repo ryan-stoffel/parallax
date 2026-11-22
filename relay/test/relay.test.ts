@@ -14,6 +14,8 @@ import {
   MAX_HOOK_BYTES,
   MAX_REMOVAL,
   MAX_STREAMS,
+  MINTED_HEADER,
+  PROOF_HEADER,
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
@@ -513,13 +515,14 @@ describe("streams", () => {
     side.ws.send(record.slice().reverse());
     expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(record.slice().reverse());
 
-    // The relay keeps nothing of a stream's bytes: the host's object only counts it as open.
+    // The relay keeps nothing of a stream's bytes: the host's object only counts it as open, and keeps
+    // ids the Worker minted for its next standbys (PLX-1623).
     const stub = hosts.get(hosts.idFromName(host.id));
     const stored = await runInDurableObject(stub, async (_: HostRelay, state) => ({
       keys: [...(await state.storage.list()).keys()],
       held: state.storage.sql.exec("SELECT count(*) AS n FROM held").one().n,
     }));
-    expect(stored).toEqual({ keys: ["lastProof", "owner", "streams"], held: 0 });
+    expect(stored).toEqual({ keys: ["lastProof", "minted", "owner", "streams"], held: 0 });
     expect(Object.keys(await openStreams(host))).toEqual([open.stream]);
 
     client.ws.close(1000);
@@ -1038,22 +1041,26 @@ describe("streams", () => {
     const spare = JSON.parse((await control.next()) as string) as Open;
     const side = opened(await join(host, spare));
     // Every write the host's object makes from the client's open on.
-    const puts: { value: unknown; options: unknown }[] = [];
+    const puts: unknown[][] = [];
     const original = HostRelay.prototype.open;
-    const spy = vi.spyOn(HostRelay.prototype, "open").mockImplementation(function (this: HostRelay, user, timed) {
+    const spy = vi.spyOn(HostRelay.prototype, "open").mockImplementation(function (this: HostRelay, ...args) {
       const { storage } = (this as unknown as { ctx: DurableObjectState }).ctx;
-      const put = storage.put.bind(storage) as (key: string, value: unknown, options?: unknown) => Promise<void>;
-      vi.spyOn(storage, "put").mockImplementation(((key: string, value: unknown, options?: unknown) => {
-        puts.push({ value, options });
-        return put(key, value, options);
+      const put = storage.put.bind(storage) as (...args: unknown[]) => Promise<void>;
+      vi.spyOn(storage, "put").mockImplementation(((...args: unknown[]) => {
+        puts.push(args);
+        return put(...args);
       }) as typeof storage.put);
-      return original.call(this, user, timed);
+      return original.apply(this, args);
     });
     try {
       const client = opened(await connect(host, token));
       expect(await client.next()).toBe("ready");
       expect(await side.next()).toBe("ready");
-      expect(puts).toEqual([{ value: { [spare.stream]: {} }, options: { allowUnconfirmed: true } }]);
+      // One write, unconfirmed, which also queues the id the Worker minted for this connect.
+      expect(puts).toEqual([[
+        { streams: { [spare.stream]: {} }, minted: [expect.stringMatching(/^[0-9a-f]{64}$/)] },
+        { allowUnconfirmed: true },
+      ]]);
     } finally {
       spy.mockRestore();
     }
@@ -1528,6 +1535,79 @@ describe("standby spare object (PLX-1574)", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("stream ids the Worker mints (PLX-1623)", () => {
+  /** Counts `newUniqueId` calls, which the host's object makes only when no minted id is left. */
+  function minting() {
+    const namespace = testEnv.STREAMS;
+    let count = 0;
+    testEnv.STREAMS = new Proxy(namespace, {
+      get(target, key) {
+        if (key === "newUniqueId")
+          return (...args: Parameters<typeof namespace.newUniqueId>) => {
+            count++;
+            return target.newUniqueId(...args);
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return { count: () => count, restore: () => (testEnv.STREAMS = namespace) };
+  }
+
+  const queued = (host: Host) =>
+    runInDurableObject(hosts.get(hosts.idFromName(host.id)), (_: HostRelay, state) => state.storage.get<string[]>("minted"));
+
+  it("makes spares and their standbys from ids the Worker minted, and mints none in the host's object", async () => {
+    const { host, token, control } = await online();
+    // The control socket's Worker minted the first spare and its standby.
+    const [first, second] = (await queued(host))!;
+    const mints = minting();
+    try {
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true, stream: first });
+      expect(await queued(host)).toEqual([]);
+      // A client takes it, and its Worker's id waits for the standby after next.
+      const client = opened(await connect(host, token));
+      const [third] = (await queued(host))!;
+      expect(third).toMatch(/^[0-9a-f]{64}$/);
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true, stream: second });
+      expect(await queued(host)).toEqual([]);
+      // Only the client's Worker minted: plxd's spare requests reach the host's object alone.
+      expect(mints.count()).toBe(1);
+      client.ws.close();
+    } finally {
+      mints.restore();
+    }
+  });
+
+  it("gives a client with no spare the id its Worker minted, and ignores one that isn't a stream id", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const { host } = await online(user);
+    const stub = hosts.get(hosts.idFromName(host.id));
+    const minted = streams.newUniqueId().toString();
+    expect(await stub.open(account(user), false, minted)).toEqual({ stream: minted });
+    // Not an id, or another namespace's: the host's object mints its own.
+    for (const wrong of ["not-a-stream-id", hosts.newUniqueId().toString()]) {
+      const other = (await stub.retake(false, wrong)) as { stream: string };
+      expect(other.stream).toMatch(/^[0-9a-f]{64}$/);
+      expect(other.stream).not.toBe(wrong);
+    }
+  });
+
+  it("takes minted ids on the control socket only from the Worker, never from plxd", async () => {
+    const host = await newHost();
+    expect((await register(host, await session(`user_${crypto.randomUUID()}`))).status).toBe(200);
+    // plxd names another host's stream object as its own minted id: the Worker replaces it.
+    const elsewhere = streams.newUniqueId().toString();
+    const control = opened(await socket(`/v1/hosts/${host.id}/host`, { [PROOF_HEADER]: await hostProof(host), [MINTED_HEADER]: elsewhere }));
+    expect(JSON.parse((await control.next()) as string)).toMatchObject({ t: "ready" });
+    const ids = (await queued(host))!;
+    expect(ids).toHaveLength(2);
+    expect(ids).not.toContain(elsewhere);
   });
 });
 

@@ -44,6 +44,24 @@ export const HOST_WAIT = 7_000;
 const RECONNECT_WINDOW = 60_000;
 /** How many clients' streams a host may have open at once, its spare included. */
 export const MAX_STREAMS = 16;
+/** How many Worker-minted stream ids a host's object keeps for its next standbys (PLX-1623). */
+export const MAX_MINTED = 4;
+/** The header the Worker puts stream ids it minted in, comma-separated, on plxd's control socket
+ *  request. The Worker always sets it, so what plxd sent there never arrives (PLX-1623). */
+export const MINTED_HEADER = "x-parallax-minted";
+/** How many ids the Worker mints for a control socket: the first spare and its standby. */
+export const CONTROL_MINTED = 2;
+
+/** `id` when it's a stream object's unique id, which the Worker minted, else undefined. */
+function mintedId(env: Env, id: unknown) {
+  if (typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) return undefined;
+  try {
+    env.STREAMS.idFromString(id);
+    return id;
+  } catch {
+    return undefined;
+  }
+}
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -213,9 +231,10 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
-   * it, and counted as open. A spare waits for the next client.
+   * it, and counted as open. A spare waits for the next client. A client's stream takes `minted`,
+   * the id the Worker made for its connect (PLX-1623).
    */
-  protected async newStream(user: string, spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
+  protected async newStream(user: string, spare: boolean, proofRoute = false, minted?: string): Promise<Refusal | { stream: string }> {
     const reserved = await this.ctx.blockConcurrencyWhile(async () => {
       const owner = await this.owner();
       if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
@@ -226,11 +245,11 @@ export class HostRelay extends DurableObject<Env> {
       if (Object.keys(streams).length >= MAX_STREAMS)
         return { status: 429, error: "too_many_streams" } as Refusal;
       const standby = spare ? await this.nextSpare() : undefined;
-      const stream = standby?.id ?? this.env.STREAMS.newUniqueId().toString();
+      const stream = standby?.id ?? mintedId(this.env, minted) ?? this.env.STREAMS.newUniqueId().toString();
       // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
       streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
       // The next standby goes in the same write, so a spare still costs one confirmation.
-      if (standby) await this.ctx.storage.put({ streams, standby: standby.next });
+      if (standby) await this.ctx.storage.put({ streams, standby: standby.next, minted: standby.minted });
       else await this.ctx.storage.put<Streams>("streams", streams);
       return { stream, owner, host, proof };
     });
@@ -278,18 +297,37 @@ export class HostRelay extends DurableObject<Env> {
    * The id for a spare and the next standby (PLX-1574). A stream object Cloudflare made a moment
    * ago is sometimes slow to reach for its first seconds, so each spare takes the standby the last
    * spare made, saved as `standby`, else a new object. The next standby is made now, with a call
-   * that stores nothing, so it has aged by the time a spare needs it. The caller saves `next`.
-   * A standby holds nothing, no socket and no alarm, so one that's never used costs nothing.
+   * that stores nothing, so it has aged by the time a spare needs it. The caller saves `next` and
+   * what's left of `minted`. A standby holds nothing, no socket and no alarm, so one that's never
+   * used costs nothing.
+   *
+   * Both ids come from `minted`, ids the Worker made (PLX-1623): a stream whose id this object
+   * minted while running far from plxd stays slow on plxd's side wherever it runs. This object
+   * mints one only when none is left.
    */
   private async nextSpare() {
     const saved = await this.ctx.storage.get<string>("standby");
-    const next = this.env.STREAMS.newUniqueId();
+    const minted = (await this.ctx.storage.get<string[]>("minted")) ?? [];
+    const take = () => minted.shift() ?? this.env.STREAMS.newUniqueId().toString();
+    const id = saved ?? take();
+    const next = take();
     this.ctx.waitUntil(
-      this.env.STREAMS.get(next)
+      this.env.STREAMS.get(this.env.STREAMS.idFromString(next))
         .hostJoined()
         .catch((error) => logError("host.standby", this.context(), error)),
     );
-    return { id: saved ?? this.env.STREAMS.newUniqueId().toString(), next: next.toString() };
+    return { id, next, minted };
+  }
+
+  /** Queues `ids`, which the Worker minted, for the next standbys, keeping the newest
+   *  [`MAX_MINTED`]. Answers the queue for the caller to save in its own write. */
+  private async queueMinted(ids: (string | undefined)[]) {
+    const queued = (await this.ctx.storage.get<string[]>("minted")) ?? [];
+    for (const id of ids) {
+      const valid = mintedId(this.env, id);
+      if (valid && !queued.includes(valid)) queued.push(valid);
+    }
+    return queued.slice(-MAX_MINTED);
   }
 
   /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
@@ -543,12 +581,12 @@ export class HostRelay extends DurableObject<Env> {
    * spare plxd keeps when there is one, so plxd isn't asked first, else a new one plxd is asked to
    * join. The Worker then brings the client's WebSocket to the stream's object.
    */
-  async open(user: string, timed = false): Promise<Refusal | { stream: string; timing?: { admitMs: number; takeMs: number; spare: boolean } }> {
+  async open(user: string, timed = false, minted?: string): Promise<Refusal | { stream: string; timing?: { admitMs: number; takeMs: number; spare: boolean } }> {
     const start = performance.now();
     const refused = await this.admit(user);
     if (refused) return refused;
     const admitted = performance.now();
-    const taken = await this.take(user, timed);
+    const taken = await this.take(user, timed, minted);
     if ("error" in taken || !timed) return taken;
     return { stream: taken.stream, timing: { admitMs: admitted - start, takeMs: performance.now() - admitted, spare: taken.spare === true } };
   }
@@ -565,11 +603,11 @@ export class HostRelay extends DurableObject<Env> {
    * that's a new stream, whose confirmed reservation also saves that claim. Only the Worker calls
    * this, after the stream refused.
    */
-  async retake(timed = false): Promise<Refusal | { stream: string }> {
+  async retake(timed = false, minted?: string): Promise<Refusal | { stream: string }> {
     const owner = await this.owner();
     if (!owner) return { status: 404, error: "not_found" };
     if (!this.host()) return { status: 503, error: "host_offline" };
-    return this.take(owner.user, timed);
+    return this.take(owner.user, timed, minted);
   }
 
   /**
@@ -587,18 +625,18 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** The stream a ticket opens, once: as [`open`] answers, counted when the ticket was issued. */
-  async redeem(ticket: string): Promise<Refusal | { stream: string }> {
+  async redeem(ticket: string, minted?: string): Promise<Refusal | { stream: string }> {
     const found = this.tickets.get(ticket);
     this.tickets.delete(ticket);
     const owner = await this.owner();
     if (!found || found.expires < Date.now() || found.user !== owner?.user)
       return { status: 401, error: "unauthorized" };
     if (!(await this.reachHost())) return { status: 503, error: "host_offline" };
-    return this.take(found.user);
+    return this.take(found.user, false, minted);
   }
 
   /** The spare stream, else a new one within [`MAX_STREAMS`]. */
-  private async take(user: string, timed = false): Promise<Refusal | { stream: string; spare?: boolean }> {
+  private async take(user: string, timed = false, minted?: string): Promise<Refusal | { stream: string; spare?: boolean }> {
     const taken = await this.ctx.blockConcurrencyWhile(async () => {
       const owner = await this.owner();
       if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
@@ -609,8 +647,8 @@ export class HostRelay extends DurableObject<Env> {
         // The answer doesn't wait for this write's confirmation (PLX-1506). The next open reads it
         // at once. If it's lost, this object resets with the stream still a spare while its client
         // joins: the stream refuses a second client, which [`retake`]s, and plxd's next `spare`
-        // request keeps it counted.
-        await this.ctx.storage.put<Streams>("streams", streams, { allowUnconfirmed: true });
+        // request keeps it counted. The id the Worker minted for this connect waits for a standby.
+        await this.ctx.storage.put({ streams, minted: await this.queueMinted([minted]) }, { allowUnconfirmed: true });
         return { spare, owner };
       }
       return null;
@@ -624,7 +662,7 @@ export class HostRelay extends DurableObject<Env> {
       if (notification) this.ctx.waitUntil(notification.catch((error) => logError("host.take", this.context(), error)));
       return { stream: spare, ...(timed ? { spare: true } : {}) };
     }
-    return this.newStream(user, false);
+    return this.newStream(user, false, false, minted);
   }
 
   /**
@@ -647,7 +685,11 @@ export class HostRelay extends DurableObject<Env> {
       "host.fetch",
       () => this.context(),
       () =>
-        this.hostSocket(request.headers.get(PROOF_HEADER) ?? "", request.headers.get(STREAMS_HEADER)),
+        this.hostSocket(
+          request.headers.get(PROOF_HEADER) ?? "",
+          request.headers.get(STREAMS_HEADER),
+          request.headers.get(MINTED_HEADER)?.split(",") ?? [],
+        ),
     );
   }
 
@@ -656,9 +698,10 @@ export class HostRelay extends DurableObject<Env> {
    * key. The relay takes it only within [`PROOF_PAST`] and [`PROOF_FUTURE`] of its own clock and
    * newer than the last one it took, so a proof works once. No socket opens without one, so
    * strangers who know the host id, which is in every webhook URL, have nothing to hold open or
-   * push out. `held` lists the streams plxd still holds, for [`settleStreams`].
+   * push out. `held` lists the streams plxd still holds, for [`settleStreams`]. `minted` are stream
+   * ids the Worker made for the first spare and its standby (PLX-1623).
    */
-  private async hostSocket(proof: string, held: string | null) {
+  private async hostSocket(proof: string, held: string | null, minted: string[]) {
     const owner = await this.owner();
     if (!owner) return json(404, { error: "not_registered" });
     const [at = "", signature = ""] = proof.split(".");
@@ -677,7 +720,7 @@ export class HostRelay extends DurableObject<Env> {
     }
     if (!this.limits.allow("hostConnect", LIMITS.hostConnect))
       return json(429, { error: "rate_limited" }, { "retry-after": "60" });
-    await this.ctx.storage.put("lastProof", time);
+    await this.ctx.storage.put({ lastProof: time, minted: await this.queueMinted(minted) });
     // Whether the relay still thinks the last connection is alive: see `log.ts`.
     const openBefore = this.ctx
       .getWebSockets("host")
