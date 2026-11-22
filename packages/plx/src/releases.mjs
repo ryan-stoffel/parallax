@@ -44,30 +44,31 @@ const OS_NAMES = { macos: "macOS", linux: "Linux", windows: "Windows" };
 export const appName = (channel) => (channel === "nightly" ? "Parallax (Nightly)" : "Parallax");
 
 /**
- * The newest 30 releases, newest first, from GitHub's API, then the newest stable when it's older
- * than those. 30 is about two weeks of nightlies, and a stable is promoted less often.
+ * The newest 30 releases, newest first, from GitHub's API. With `latestStable`, then the newest
+ * stable when it's older than those, for {@link pickDefault}: 30 is about two weeks of nightlies,
+ * and a stable is promoted less often.
+ * @param {boolean} [latestStable]
  */
-export async function fetchReleases() {
+export async function fetchReleases(latestStable = false) {
   const releases = /** @type {Release[]} */ (await getJson(`${RELEASES_URL}?per_page=30`, "the release list"));
-  // GitHub answers 404 when there's no stable release.
-  const latest = /** @type {Release | undefined} */ (await getJson(`${RELEASES_URL}/latest`, "the latest release", true));
+  if (!latestStable) return releases;
+  // A failure, or GitHub's 404 when there's no stable, means no stable: the default is nightly then.
+  const latest = /** @type {Release | undefined} */ (await getJson(`${RELEASES_URL}/latest`, "the latest release").catch(() => undefined));
   if (latest && !releases.some((r) => r.tag_name === latest.tag_name)) releases.push(latest);
   return releases;
 }
 
 /**
- * The JSON GitHub's API answers at `url`, or undefined for a 404 when `missingOk`.
+ * The JSON GitHub's API answers at `url`.
  * @param {string} url
  * @param {string} what What the URL is, for the error.
- * @param {boolean} [missingOk]
  * @returns {Promise<unknown>}
  */
-async function getJson(url, what, missingOk = false) {
+async function getJson(url, what) {
   const response = await fetch(url, {
     headers: { accept: "application/vnd.github+json", "user-agent": "plx-cli" },
     signal: AbortSignal.timeout(20_000),
   });
-  if (missingOk && response.status === 404) return undefined;
   if (!response.ok) throw new Error(`GitHub answered ${response.status} ${response.statusText} for ${what}.`);
   return response.json();
 }

@@ -154,10 +154,11 @@ export function add(destination, options, deps) {
  * names the fix when there's none or it's older than the relay. Runs before sign-in, so nobody
  * signs in to a setup that can't finish.
  * @param {Channel | undefined} channel
- * @param {() => Promise<Release[]>} [releases]
+ * @param {() => Promise<Release[]>} [releases] The release list. GitHub's, with its latest stable
+ *   only for the default.
  * @returns {Promise<Release>}
  */
-export function findRelease(channel, releases = fetchReleases) {
+export function findRelease(channel, releases = () => fetchReleases(channel === undefined)) {
   return step(channel ? `Finding the newest ${channel} release` : "Finding the release to install", async () => {
     const list = await releases();
     const release = channel ? pickRelease(list, channel) : pickDefault(list);

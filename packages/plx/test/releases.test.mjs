@@ -50,17 +50,33 @@ test("the default is the newest stable that supports the relay, else the newest 
   assert.equal(pickDefault([release("v2611.10501.10000", false, [], true), relayNightly, oldStable]), relayNightly);
 });
 
-test("the release list ends with the latest stable when it's older than the page", async () => {
+test("the release list ends with the latest stable when asked and it's older than the page", async () => {
   const page = [release("v2611.10423.14450-nightly", true, [])];
   const latest = release("v2611.10101.10000", false, []);
   const real = globalThis.fetch;
-  /** @param {unknown} body */
-  const answer = (body) => new Response(JSON.stringify(body), { status: body ? 200 : 404 });
+  /** @type {string[]} */
+  let urls = [];
+  /** @param {() => Response} answerLatest */
+  const github = (answerLatest) => {
+    urls = [];
+    globalThis.fetch = async (url) => (urls.push(String(url)), String(url).endsWith("/latest") ? answerLatest() : Response.json(page));
+  };
+  const tags = async (/** @type {boolean} */ latestStable) => (await fetchReleases(latestStable)).map((r) => r.tag_name);
   try {
-    globalThis.fetch = async (url) => answer(String(url).endsWith("/latest") ? latest : page);
-    assert.deepEqual((await fetchReleases()).map((r) => r.tag_name), ["v2611.10423.14450-nightly", "v2611.10101.10000"]);
-    globalThis.fetch = async (url) => answer(String(url).endsWith("/latest") ? null : page);
-    assert.deepEqual((await fetchReleases()).map((r) => r.tag_name), ["v2611.10423.14450-nightly"]);
+    github(() => Response.json(latest));
+    assert.deepEqual(await tags(true), ["v2611.10423.14450-nightly", "v2611.10101.10000"]);
+    assert.equal(urls.length, 2);
+    github(() => Response.json(latest));
+    assert.deepEqual(await tags(false), ["v2611.10423.14450-nightly"]);
+    assert.equal(urls.length, 1);
+    // No stable, a rate limit, a server error, and no network all read as no stable.
+    for (const failure of [404, 403, 500, 0]) {
+      github(() => {
+        if (!failure) throw new TypeError("fetch failed");
+        return new Response("{}", { status: failure });
+      });
+      assert.deepEqual(await tags(true), ["v2611.10423.14450-nightly"], String(failure));
+    }
   } finally {
     globalThis.fetch = real;
   }
