@@ -19,6 +19,8 @@ export default defineConfig({
           // test's, and the development instance's for the tests of keeping them apart.
           CLERK_ISSUER: "https://clerk.test,https://adjusted-mastodon-8705.clerk.accounts.dev",
           CLERK_CLIENT_IDS: "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq",
+          // The hosted browser client's application on this test's instance only (0108).
+          CLERK_HOSTED_CLIENT_IDS: "hosted_app,",
           CLERK_JWKS: JSON.stringify({ keys: [{ ...publicKey.export({ format: "jwk" }), kid, alg: "RS256" }] }),
           TEST_CLERK_KEY: JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }),
           // Production turns spare placement on (PLX-1544). Tests keep it off, and the placement

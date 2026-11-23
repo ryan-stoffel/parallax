@@ -7,6 +7,7 @@ import {
   isHostJwk,
   Limiter,
   randomToken,
+  same,
   sha256,
   thumbprint,
   verifyEs256,
@@ -19,10 +20,42 @@ import { JOIN_TIMEOUT, streamObject } from "./stream";
 /** The user a host is registered to, and its key. */
 type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
 
+/** Who opened a stream, as its `open` frame tells plxd (0108): the hosted browser client, or the
+ *  holder of guest link `guest`. An ordinary stream has none. */
+export type Mark = { client: "hosted" } | { guest: string };
+
 /** The streams open to this host, by id, each its own [`StreamRelay`]. `spare` marks the one
  *  plxd keeps waiting for the next client (0091). `at` is when plxd was last asked to join a
- *  client's stream, which [`settleStreams`] reads to ask again after a dropped link (PLX-1547). */
-type Streams = Record<string, { spare?: true; pending?: true; at?: number }>;
+ *  client's stream, which [`settleStreams`] reads to ask again after a dropped link (PLX-1547).
+ *  `mark` is a marked stream's, which every `open` for it carries. A spare has none. */
+type Streams = Record<string, { spare?: true; pending?: true; at?: number; mark?: Mark }>;
+
+/** plxd's live guest links (0108), by link id: the SHA-256 of each one's relay pass in hex, and
+ *  its expiry in ms since the epoch. */
+type Guests = Record<string, { pass: string; expires: number }>;
+
+/** Guests' bytes this UTC day, in all and by link, from their streams' reports. */
+type GuestTraffic = { day: string; bytes: number; links: Record<string, number> };
+
+/** A guest link's id as plxd makes it: 16 random bytes in base64url. */
+export const LINK_ID = /^[A-Za-z0-9_-]{22}$/;
+
+/**
+ * Guests' budgets (0108), apart from the owner's and inside the host's own: all of a host's guests
+ * together, and each link. Opens and tickets are per minute, bytes per UTC day. Guests stop at their
+ * share, so the owner keeps at least 20 of [`LIMITS.opens`] and 12 of [`MAX_STREAMS`]. Bytes come
+ * from streams' reports, each within [`REPORT_BYTES`] of the truth, so the guests' 4 streams stop
+ * below 256 + 4 × 8 = 288 MiB, and the owner keeps at least 1,760 MiB of [`MAX_DAILY_BYTES`].
+ */
+export const GUEST_LIMITS = {
+  links: 20,
+  opens: 10,
+  streams: 4,
+  bytes: 256 * 1_048_576,
+  linkTickets: 6,
+  linkStreams: 2,
+  linkBytes: 128 * 1_048_576,
+};
 
 /** Why the relay refused a request, with its HTTP status, and its clock for a proof at the wrong
  *  time. */
@@ -175,8 +208,8 @@ export const registerMessage = (hostId: string, tokenHash: string) =>
  */
 export class HostRelay extends DurableObject<Env> {
   private limits = new Limiter();
-  /** Unused tickets and the user each was for. */
-  private tickets = new Map<string, { user: string; expires: number }>();
+  /** Unused tickets, the user each was for, and the mark of the stream each opens. */
+  private tickets = new Map<string, { user: string; expires: number; mark?: Mark }>();
   /** Webhooks sent to plxd, waiting for its answer, by delivery id. */
   private waiting = new Map<string, (reply: HookReply) => void>();
   private delivering = false;
@@ -237,9 +270,11 @@ export class HostRelay extends DurableObject<Env> {
   /**
    * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
    * it, and counted as open. A spare waits for the next client. Its id, and a spare's next
-   * standby, come from `minted` (PLX-1623).
+   * standby, come from `minted` (PLX-1623). A marked stream (0108) is never a spare, and a guest's
+   * counts against the guests' streams too.
    */
-  protected async newStream(user: string, spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
+  protected async newStream(user: string, wantSpare: boolean, proofRoute = false, mark?: Mark): Promise<Refusal | { stream: string }> {
+    const spare = wantSpare && !mark;
     const reserved = await this.ctx.blockConcurrencyWhile(async () => {
       const owner = await this.owner();
       if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
@@ -247,14 +282,14 @@ export class HostRelay extends DurableObject<Env> {
       if (!host) return { status: 503, error: "host_offline" } as Refusal;
       const proof = await this.ctx.storage.get<number>("lastProof");
       const streams = await this.streams();
-      if (Object.keys(streams).length >= MAX_STREAMS)
+      if (Object.keys(streams).length >= MAX_STREAMS || (mark && "guest" in mark && !guestRoom(streams, mark.guest)))
         return { status: 429, error: "too_many_streams" } as Refusal;
       const minted = (await this.ctx.storage.get<string[]>("minted")) ?? [];
       const fresh = (purpose: string) => minted.shift() ?? this.mintHere(purpose);
       const standby = spare ? await this.nextSpare(fresh) : undefined;
       const stream = standby?.id ?? fresh("stream");
       // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
-      streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
+      streams[stream] = spare ? { pending: true, spare: true } : { pending: true, ...(mark ? { mark } : {}) };
       // The next standby and the queue go in the same write, so a stream still costs one
       // confirmation.
       await this.ctx.storage.put({ streams, minted, ...(standby ? { standby: standby.next } : {}) });
@@ -267,7 +302,8 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * Arms the reserved `stream` with a new one-time token and sends plxd `open` for it on `host`,
-   * the control socket opened with `proof`. A reconnect, removal, `gone`, or report during the arm
+   * the control socket opened with `proof`, with the mark its record keeps, so an `open` sent again
+   * after a dropped link carries it too. A reconnect, removal, `gone`, or report during the arm
    * cancels it, and the stream closes.
    */
   private async announce(owner: Owner, stream: string, host: WebSocket, proof: number | undefined,
@@ -281,9 +317,10 @@ export class HostRelay extends DurableObject<Env> {
         const current = await this.streams();
         // Reconnect, removal, gone or a report may have canceled the reservation during arm.
         if (!current[stream] || currentProof !== proof || !this.host()) return false;
-        current[stream] = spare ? { spare: true } : { at: Date.now() };
+        const mark = current[stream].mark;
+        current[stream] = spare ? { spare: true } : { at: Date.now(), ...(mark ? { mark } : {}) };
         await this.ctx.storage.put<Streams>("streams", current);
-        host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}), ...transport }));
+        host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}), ...transport, ...mark }));
         return true;
       });
       if (!published) {
@@ -432,7 +469,8 @@ export class HostRelay extends DurableObject<Env> {
     const again = await this.ctx.blockConcurrencyWhile(async () => {
       const current = await this.streams();
       const marked = pick("again").filter((id) => current[id]);
-      for (const id of marked) current[id] = { pending: true };
+      // Each keeps its mark (0108), which `announce` sends again.
+      for (const id of marked) current[id] = { pending: true, ...(current[id]!.mark ? { mark: current[id]!.mark } : {}) };
       if (marked.length) await this.ctx.storage.put<Streams>("streams", current);
       return marked;
     });
@@ -634,28 +672,80 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /**
-   * A ticket for one stream to this host, for its own user only. Clients from before 0091, and
-   * plxd's own connection check, which asks over its control socket (PLX-1356).
+   * A ticket for one stream to this host, for its own user only. Clients from before 0091, plxd's
+   * own connection check, which asks over its control socket (PLX-1356), and the hosted browser
+   * client (0108), whose stream is marked `hosted`.
    */
-  async ticket(user: string): Promise<Refusal | { ticket: string }> {
+  async ticket(user: string, hosted = false): Promise<Refusal | { ticket: string }> {
     const refused = await this.admit(user);
     if (refused) return refused;
+    return this.issue(user, hosted ? { client: "hosted" } : undefined);
+  }
+
+  /** A new ticket for `user`'s stream with `mark`, after its checks. */
+  private issue(user: string, mark?: Mark) {
     const now = Date.now();
     for (const [key, ticket] of this.tickets) if (ticket.expires < now) this.tickets.delete(key);
     const ticket = randomToken();
-    this.tickets.set(ticket, { user, expires: now + TICKET_LIFETIME });
+    this.tickets.set(ticket, { user, expires: now + TICKET_LIFETIME, ...(mark ? { mark } : {}) });
     return { ticket };
   }
 
-  /** The stream a ticket opens, once: as [`open`] answers, counted when the ticket was issued. */
-  async redeem(ticket: string): Promise<Refusal | { stream: string }> {
+  /** plxd's guest link `link`, while it's live: listed on plxd's current control socket and not
+   *  past its expiry. */
+  private async liveGuest(link: string) {
+    const found = ((await this.ctx.storage.get<Guests>("guests")) ?? {})[link];
+    return found && found.expires > Date.now() ? found : undefined;
+  }
+
+  /** Guests' bytes this UTC day, which start again from nothing at 00:00 UTC. */
+  private async guestToday(): Promise<GuestTraffic> {
+    const day = new Date().toISOString().slice(0, 10);
+    const saved = await this.ctx.storage.get<GuestTraffic>("guestTraffic");
+    return saved?.day === day ? saved : { day, bytes: 0, links: {} };
+  }
+
+  /**
+   * A ticket for a stream marked as guest link `link`'s (0108), for the holder of its relay pass,
+   * whose SHA-256 in hex is `passHash`. The Worker counted the request against the anonymous limit
+   * first. Then the pass and its expiry, plxd being online, the guests' budgets, and last the host's
+   * own opens and day, so a guest the guests' budgets refuse spends none of the owner's.
+   */
+  async guestTicket(link: string, passHash: string): Promise<Refusal | { ticket: string }> {
+    const found = await this.liveGuest(link);
+    const owner = await this.owner();
+    // A wrong pass, an ended link, and an unknown one answer alike.
+    if (!found || !same(passHash, found.pass) || !owner) return { status: 401, error: "unauthorized" };
+    if (!(await this.reachHost())) return { status: 503, error: "host_offline" };
+    if (!this.limits.allow(`guest:${link}`, GUEST_LIMITS.linkTickets) || !this.limits.allow("guests", GUEST_LIMITS.opens))
+      return { status: 429, error: "rate_limited" };
+    const traffic = await this.guestToday();
+    if (traffic.bytes > GUEST_LIMITS.bytes || (traffic.links[link] ?? 0) > GUEST_LIMITS.linkBytes)
+      return { status: 429, error: "daily_limit" };
+    if (!guestRoom(await this.streams(), link)) return { status: 429, error: "too_many_streams" };
+    if (!this.limits.allow("opens", LIMITS.opens)) return { status: 429, error: "rate_limited" };
+    if (!(await this.count(0))) return { status: 429, error: "daily_limit" };
+    return this.issue(owner.user, { guest: link });
+  }
+
+  /**
+   * The stream a ticket opens, once: as [`open`] answers, counted when the ticket was issued. A
+   * marked ticket's (0108) is always a new stream with its mark, never the spare, which plxd joined
+   * before any client existed, and answers `marked`. A guest's opens only while its link is live.
+   */
+  async redeem(ticket: string): Promise<Refusal | { stream: string; marked?: true }> {
     const found = this.tickets.get(ticket);
     this.tickets.delete(ticket);
     const owner = await this.owner();
     if (!found || found.expires < Date.now() || found.user !== owner?.user)
       return { status: 401, error: "unauthorized" };
+    const mark = found.mark;
+    if (mark && "guest" in mark && !(await this.liveGuest(mark.guest)))
+      return { status: 401, error: "unauthorized" };
     if (!(await this.reachHost())) return { status: 503, error: "host_offline" };
-    return this.take(found.user);
+    if (!mark) return this.take(found.user);
+    const made = await this.newStream(found.user, false, false, mark);
+    return "error" in made ? made : { ...made, marked: true };
   }
 
   /** The spare stream, else a new one within [`MAX_STREAMS`]. */
@@ -690,13 +780,34 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * A stream's report of the bytes it carried since its last, and whether it closed, which frees
-   * its place. Answers whether the host's day has room. When it doesn't, every stream closes.
+   * its place. Answers whether the host's day has room, and for a guest's stream, its link's and
+   * the guests' too. When the host's doesn't, every stream closes. When a guest share's doesn't,
+   * only that share's streams do (0108).
    */
   async report(stream: string, bytes: number, closed: boolean): Promise<boolean> {
+    const mark = (await this.streams())[stream]?.mark;
     if (closed) await this.forgetStream(stream);
-    if (await this.count(bytes)) return true;
     const owner = await this.owner();
-    if (owner) await this.closeStreams(owner.hostId, 4429, "daily limit");
+    if (!(await this.count(bytes))) {
+      if (owner) await this.closeStreams(owner.hostId, 4429, "daily limit");
+      return false;
+    }
+    if (!mark || !("guest" in mark)) return true;
+    const link = mark.guest;
+    const traffic = await this.guestToday();
+    if (bytes > 0) {
+      traffic.bytes += bytes;
+      traffic.links[link] = (traffic.links[link] ?? 0) + bytes;
+      await this.ctx.storage.put("guestTraffic", traffic);
+    }
+    const all = traffic.bytes > GUEST_LIMITS.bytes;
+    if (!all && traffic.links[link]! <= GUEST_LIMITS.linkBytes) return true;
+    const streams = await this.streams();
+    const closing = Object.keys(streams).filter((id) => {
+      const other = streams[id]!.mark;
+      return other && "guest" in other && (all || other.guest === link);
+    });
+    if (owner) await this.closeStreams(owner.hostId, 4429, "guest daily limit", closing);
     return false;
   }
 
@@ -746,11 +857,14 @@ export class HostRelay extends DurableObject<Env> {
     // A host object with no `minted` yet saved its standby before PLX-1623, with an id it minted
     // itself, so that standby goes, in the same write.
     const before = (await this.ctx.storage.get<string[]>("minted")) === undefined;
+    // The last socket's guest links go with it, and this one sends its own (0108).
+    const guests = (await this.ctx.storage.get<Guests>("guests")) !== undefined;
     const queued = await this.queueMinted(minted);
-    // No await between them, so Cloudflare writes both at once.
+    // No await between them, so Cloudflare writes them at once.
     await Promise.all([
       this.ctx.storage.put({ lastProof: time, minted: queued }),
       before ? this.ctx.storage.delete("standby") : undefined,
+      guests ? this.ctx.storage.delete("guests") : undefined,
     ]);
     // Whether the relay still thinks the last connection is alive: see `log.ts`.
     const openBefore = this.ctx
@@ -826,6 +940,20 @@ export class HostRelay extends DurableObject<Env> {
         .sort();
       const before = (await this.ctx.storage.get<string[]>("hooks")) ?? [];
       if (keys.join() !== before.join()) await this.ctx.storage.put("hooks", keys);
+    } else if (parsed?.t === "guests" && Array.isArray(parsed.links)) {
+      // plxd's live guest links (0108), which replace the last list: a link missing from it is
+      // withdrawn. At most GUEST_LIMITS.links, each kept until its expiry, given in seconds.
+      const now = Date.now();
+      const guests: Guests = {};
+      for (const entry of parsed.links as unknown[]) {
+        if (Object.keys(guests).length >= GUEST_LIMITS.links) break;
+        const { link, pass, expires } = (entry ?? {}) as Record<string, unknown>;
+        if (typeof link !== "string" || !LINK_ID.test(link) || typeof pass !== "string" || !/^[0-9a-f]{64}$/.test(pass))
+          continue;
+        if (typeof expires !== "number" || !(expires * 1000 > now)) continue;
+        guests[link] = { pass, expires: expires * 1000 };
+      }
+      await this.ctx.storage.put("guests", guests);
     } else if (parsed?.t === "push") {
       const { run, state, sealed } = parsed;
       const valid =
@@ -920,22 +1048,25 @@ export class HostRelay extends DurableObject<Env> {
     // Only the relay closes this socket with a 4xxx code, which plxd echoes back.
     const by = code >= 4000 ? "relay" : "peer";
     logEvent("socket_closed", { ...this.context(ws), by, code, reason: scrub(reason), clean });
-    this.finishClose(ws);
+    await this.finishClose(ws);
   }
 
   async webSocketError(ws: WebSocket, error: unknown) {
     logError("host.webSocketError", this.context(ws), error);
-    this.finishClose(ws);
+    await this.finishClose(ws);
   }
 
-  /** Completes the closing handshake the other end started, and notes when plxd left. */
-  private finishClose(ws: WebSocket) {
+  /** Completes the closing handshake the other end started, and notes when plxd left. plxd's
+   *  guest links go with the socket that sent them (0108), unless a newer one replaced it. */
+  private async finishClose(ws: WebSocket) {
     this.hostLeft = Date.now();
     try {
       ws.close(1000, "closed");
     } catch {
       // Already closed.
     }
+    if (!this.host() && (await this.ctx.storage.get<Guests>("guests")) !== undefined)
+      await this.ctx.storage.delete("guests");
   }
 
   /**
@@ -1116,6 +1247,13 @@ export class HostRelay extends DurableObject<Env> {
       },
     );
   }
+}
+
+/** Whether `streams` has room for one more of guest link `link`'s: within the guests' streams and
+ *  the link's own. Pending ones count. */
+function guestRoom(streams: Streams, link: string) {
+  const guests = Object.values(streams).flatMap(({ mark }) => (mark && "guest" in mark ? [mark.guest] : []));
+  return guests.length < GUEST_LIMITS.streams && guests.filter((id) => id === link).length < GUEST_LIMITS.linkStreams;
 }
 
 function parse(text: string): Record<string, unknown> | undefined {
