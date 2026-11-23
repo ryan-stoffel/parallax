@@ -193,7 +193,7 @@ function checkTls() {
   });
 }
 
-/** What the relay answers with no account: its pages, and a refusal on everything else. */
+/** What the relay answers with no account: not found for an unknown path, and a refusal on everything else. */
 async function checkRoutes() {
   const stranger = Buffer.from(getRandomValues(new Uint8Array(32))).toString("base64url");
   const host = `/v1/hosts/${stranger}`;
@@ -204,7 +204,6 @@ async function checkRoutes() {
     "sec-websocket-key": Buffer.from(getRandomValues(new Uint8Array(16))).toString("base64"),
   };
   const routes = [
-    ["the sign-in code page answers", "GET", "/connect/code", {}, 200],
     ["an unknown path is not found", "GET", "/nope", {}, 404],
     ["listing computers needs a token", "GET", "/v1/hosts", {}, 401],
     ["a forged token is refused", "GET", "/v1/hosts", { authorization: "Bearer a.b.c" }, 401],

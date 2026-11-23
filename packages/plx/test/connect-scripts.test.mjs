@@ -80,7 +80,7 @@ test("connect.sh from curl | sh with no terminal runs plx with nothing on stdin,
   assert.equal(recorded, "-y plx-cli@>=0.7.0 connect --channel stable\n");
 });
 
-test("connect.sh as a file with no terminal leaves plx the script's stdin for a piped code", { skip: process.platform === "win32" }, async () => {
+test("connect.sh as a file with no terminal leaves plx the script's stdin", { skip: process.platform === "win32" }, async () => {
   const { code, recorded } = await posix(`sh "$CONNECT_SH"`, "the-code\n");
   assert.equal(code, 7);
   assert.equal(recorded, "-y plx-cli@>=0.7.0 connect\nthe-code\n");
