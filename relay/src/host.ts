@@ -297,27 +297,26 @@ export class HostRelay extends DurableObject<Env> {
     });
     if ("error" in reserved) return reserved;
     const { stream, owner, host, proof } = reserved;
-    return this.announce(owner, stream, host, proof, spare, proofRoute);
+    return this.announce(owner, stream, host, proof, spare, proofRoute, mark);
   }
 
   /**
-   * Arms the reserved `stream` with a new one-time token and sends plxd `open` for it on `host`,
-   * the control socket opened with `proof`, with the mark its record keeps, so an `open` sent again
-   * after a dropped link carries it too. A reconnect, removal, `gone`, or report during the arm
-   * cancels it, and the stream closes.
+   * Arms the reserved `stream` with a new one-time token, and a guest's stream with its link, and
+   * sends plxd `open` for it on `host`, the control socket opened with `proof`, with its `mark`
+   * (0108). A reconnect, removal, `gone`, or report during the arm cancels it, and the stream closes.
    */
   private async announce(owner: Owner, stream: string, host: WebSocket, proof: number | undefined,
-    spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
+    spare: boolean, proofRoute = false, mark?: Mark): Promise<Refusal | { stream: string }> {
     const object = this.streamObject(owner.hostId, stream)!;
     try {
       const token = randomToken();
-      const transport = await this.armStream(object, { hostId: owner.hostId, stream, tokenHash: await sha256(token) }, spare, proofRoute);
+      const guest = mark && "guest" in mark ? { guest: mark.guest } : {};
+      const transport = await this.armStream(object, { hostId: owner.hostId, stream, tokenHash: await sha256(token), ...guest }, spare, proofRoute);
       const published = await this.ctx.blockConcurrencyWhile(async () => {
         const currentProof = await this.ctx.storage.get<number>("lastProof");
         const current = await this.streams();
         // Reconnect, removal, gone or a report may have canceled the reservation during arm.
         if (!current[stream] || currentProof !== proof || !this.host()) return false;
-        const mark = current[stream].mark;
         current[stream] = spare ? { spare: true } : { at: Date.now(), ...(mark ? { mark } : {}) };
         await this.ctx.storage.put<Streams>("streams", current);
         host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}), ...transport, ...mark }));
@@ -397,7 +396,7 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   protected async armStream(object: NonNullable<ReturnType<HostRelay["streamObject"]>>,
-    armed: { hostId: string; stream: string; tokenHash: string }, _spare: boolean, _proof = false): Promise<Record<string, boolean>> {
+    armed: { hostId: string; stream: string; tokenHash: string; guest?: string }, _spare: boolean, _proof = false): Promise<Record<string, boolean>> {
     await object.arm(armed);
     return {};
   }
@@ -470,9 +469,10 @@ export class HostRelay extends DurableObject<Env> {
       const current = await this.streams();
       const marked = pick("again").filter((id) => current[id]);
       // Each keeps its mark (0108), which `announce` sends again.
-      for (const id of marked) current[id] = { pending: true, ...(current[id]!.mark ? { mark: current[id]!.mark } : {}) };
+      const again = marked.map((id) => ({ id, mark: current[id]!.mark }));
+      for (const { id, mark } of again) current[id] = { pending: true, ...(mark ? { mark } : {}) };
       if (marked.length) await this.ctx.storage.put<Streams>("streams", current);
-      return marked;
+      return again;
     });
     await this.closeStreams(hostId, 1000, "the host reconnected", pick("gone"));
     return { kept: pick("stays").length, again };
@@ -780,20 +780,23 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * A stream's report of the bytes it carried since its last, and whether it closed, which frees
-   * its place. Answers whether the host's day has room, and for a guest's stream, its link's and
-   * the guests' too. When the host's doesn't, every stream closes. When a guest share's doesn't,
-   * only that share's streams do (0108).
+   * its place. Answers whether the host's day has room, and for the stream of guest link `guest`,
+   * which it was armed with, its link's and the guests' too (0108). When the host's doesn't, every
+   * stream closes. When a guest share's doesn't, only that share's streams do.
    */
-  async report(stream: string, bytes: number, closed: boolean): Promise<boolean> {
-    const mark = (await this.streams())[stream]?.mark;
+  async report(stream: string, bytes: number, closed: boolean, guest?: string): Promise<boolean> {
     if (closed) await this.forgetStream(stream);
-    const owner = await this.owner();
     if (!(await this.count(bytes))) {
+      const owner = await this.owner();
       if (owner) await this.closeStreams(owner.hostId, 4429, "daily limit");
       return false;
     }
-    if (!mark || !("guest" in mark)) return true;
-    const link = mark.guest;
+    return guest === undefined || this.countGuest(guest, bytes);
+  }
+
+  /** Adds `bytes` to guest link `link`'s day and the guests', and closes that share's streams
+   *  when it's past its budget. Answers whether the link's stream goes on. */
+  private async countGuest(link: string, bytes: number): Promise<boolean> {
     const traffic = await this.guestToday();
     if (bytes > 0) {
       traffic.bytes += bytes;
@@ -801,12 +804,13 @@ export class HostRelay extends DurableObject<Env> {
       await this.ctx.storage.put("guestTraffic", traffic);
     }
     const all = traffic.bytes > GUEST_LIMITS.bytes;
-    if (!all && traffic.links[link]! <= GUEST_LIMITS.linkBytes) return true;
+    if (!all && (traffic.links[link] ?? 0) <= GUEST_LIMITS.linkBytes) return true;
     const streams = await this.streams();
     const closing = Object.keys(streams).filter((id) => {
       const other = streams[id]!.mark;
       return other && "guest" in other && (all || other.guest === link);
     });
+    const owner = await this.owner();
     if (owner) await this.closeStreams(owner.hostId, 4429, "guest daily limit", closing);
     return false;
   }
@@ -887,12 +891,12 @@ export class HostRelay extends DurableObject<Env> {
     });
     // `check` says this relay answers plxd's connection check, which an older one ignores.
     server!.send(JSON.stringify({ t: "ready", check: true }));
-    for (const stream of again)
+    for (const { id, mark } of again)
       this.ctx.waitUntil(
         logged(
           "host.announce",
           () => this.context(),
-          () => this.announce(owner, stream, server!, time, false),
+          () => this.announce(owner, id, server!, time, false, false, mark),
         ),
       );
     for (const arrived of this.arrivals) arrived();

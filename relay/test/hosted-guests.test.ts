@@ -391,6 +391,20 @@ describe("guest budgets", () => {
     expect(await owner.next()).toBe("ready");
   });
 
+  it("leave a link's other stream open when one closes with nothing counted", async () => {
+    const { host, control } = await online();
+    const link = await newLink();
+    await share(host, control, [link]);
+    const first = await joined(host, control, await granted(host, link));
+    const second = await joined(host, control, await granted(host, link));
+    first.client.ws.close(1000);
+    await first.side.closed;
+    await expect.poll(async () => Object.keys((await runInDurableObject(testEnv.HOSTS.get(testEnv.HOSTS.idFromName(host.id)),
+      async (_: HostRelay, state) => state.storage.get<object>("streams"))) ?? {}).length).toBe(1);
+    second.client.ws.send(new Uint8Array([5]));
+    expect(new Uint8Array((await second.side.next()) as ArrayBuffer)).toEqual(new Uint8Array([5]));
+  });
+
   it("close a link past 128 MiB, then all guests past 256 MiB, until 00:00 UTC, and never the owner's stream", async () => {
     // Each report is within 8 MiB of the truth, so the guests stop below 288 MiB.
     expect((MAX_DAILY_BYTES - GUEST_LIMITS.bytes - GUEST_LIMITS.streams * REPORT_BYTES) / MiB).toBe(1_760);
