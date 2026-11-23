@@ -104,7 +104,10 @@ impl FakeRelay {
                         }
                     } else {
                         let mut frames = frames.lock().await;
-                        control_socket(socket, &mut frames, &joins, (&unjoined, &guests)).await;
+                        eprintln!("fake relay: plxd's control socket started");
+                        let ended =
+                            control_socket(socket, &mut frames, &joins, (&unjoined, &guests)).await;
+                        eprintln!("fake relay: plxd's control socket ended: {ended}");
                     }
                 });
             }
@@ -150,9 +153,18 @@ impl FakeRelay {
                     open[name] = value.clone();
                 }
                 control.send(open.to_string()).unwrap();
+                // What the relay saw, printed with a failing test's output (PLX-1643).
                 tokio::spawn(async move {
-                    if let Ok(Ok(socket)) = timeout(PATIENCE, join).await {
-                        carry(tcp, socket).await;
+                    match timeout(PATIENCE, join).await {
+                        Ok(Ok(socket)) => {
+                            eprintln!("fake relay: plxd joined stream {id}");
+                            carry(tcp, socket).await;
+                            eprintln!("fake relay: stream {id} ended");
+                        }
+                        Ok(Err(_)) => {
+                            eprintln!("fake relay: plxd said stream {id} is gone, unjoined");
+                        }
+                        Err(_) => eprintln!("fake relay: plxd never joined stream {id}"),
                     }
                 });
             }
@@ -171,37 +183,37 @@ impl FakeRelay {
 }
 
 /// Serves plxd's control socket: says it's ready, sends what waits in `frames`, answers its pings,
-/// drops the stream it says is gone before joining it, and keeps each list of guest links.
+/// drops the stream it says is gone before joining it, and keeps each list of guest links. Answers
+/// why it ended.
 async fn control_socket(
     mut socket: WebSocketStream<TcpStream>,
     frames: &mut mpsc::UnboundedReceiver<String>,
     joins: &Joins,
     (unjoined, guests): (&Mutex<Vec<String>>, &Mutex<Vec<Value>>),
-) {
-    if socket
-        .send(Message::text(r#"{"t":"ready"}"#))
-        .await
-        .is_err()
-    {
-        return;
+) -> String {
+    if let Err(error) = socket.send(Message::text(r#"{"t":"ready"}"#)).await {
+        return format!("ready failed: {error}");
     }
     loop {
         tokio::select! {
             Some(frame) = frames.recv() => {
-                if socket.send(Message::text(frame)).await.is_err() {
-                    return;
+                if let Err(error) = socket.send(Message::text(frame.clone())).await {
+                    return format!("{frame} failed: {error}");
                 }
+                eprintln!("fake relay: sent {frame}");
             }
             read = socket.next() => {
-                let Some(Ok(Message::Text(text))) = read else {
-                    return;
+                let text = match read {
+                    Some(Ok(Message::Text(text))) => text,
+                    other => return format!("read {other:?}"),
                 };
                 if text.as_str() == "ping" {
-                    if socket.send(Message::text("pong")).await.is_err() {
-                        return;
+                    if let Err(error) = socket.send(Message::text("pong")).await {
+                        return format!("pong failed: {error}");
                     }
                     continue;
                 }
+                eprintln!("fake relay: heard {text}");
                 let frame: Value = serde_json::from_str(&text).unwrap_or_default();
                 if frame["t"] == "guests" {
                     guests.lock().unwrap().push(frame["links"].clone());
