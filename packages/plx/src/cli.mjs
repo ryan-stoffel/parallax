@@ -127,8 +127,9 @@ const prompt = (question, signal) => (stdinReader ??= lineReader(process.stdin, 
  */
 export const realDeps = (noBrowser) => ({
   terminal: process.stdin.isTTY === true,
-  signIn: () =>
+  signIn: (command) =>
     signIn({
+      command,
       clerk: clerkOf(process.env),
       browser: canOpenBrowser(process.env, process.platform, noBrowser || process.stdin.isTTY !== true),
       open: openBrowser,

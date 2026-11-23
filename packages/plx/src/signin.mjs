@@ -3,8 +3,9 @@
 // With a browser here: authorization code with PKCE, redirected to a loopback listener (RFC 8252).
 // Without one: Clerk's device authorization grant (RFC 8628), where the user approves a short code
 // on any device and this process polls for the token. When Clerk refuses the grant, sign-in stops
-// with that reason: the pasted code that once filled in for it is gone (PLX-1630), so the desktop
-// application's only redirects are loopback ones. In both flows only this process holds what
+// with that reason: the pasted code that once filled in for it is gone (PLX-1630), along with the
+// desktop application's `relay.parallax.codes/connect/code` redirect. Its loopback redirects and
+// the phone's `parallax://oauth/callback` stay. In both flows only this process holds what
 // redeems the code (the PKCE verifier or the device code), so a code seen elsewhere is useless.
 // The access token is handed to plxd once and never saved.
 
@@ -174,7 +175,22 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  * @property {(url: string) => Promise<boolean>} open Opens `url` in a browser here.
  * @property {number} [timeoutMs] How long the loopback sign-in waits.
  * @property {(ms: number) => Promise<unknown>} [sleep] Waits between device grant polls. Unlike connect's unref'd sleep, this one keeps plx running.
+ * @property {SignInCommand} command The `plx connect` command signing in, for what a refused device
+ *   grant tells the user to do instead.
  */
+
+/** @typedef {"connect" | "add" | "remove"} SignInCommand */
+
+/**
+ * What to do instead when Clerk refuses the device grant, by command. `connect` and `remove` act on
+ * this computer's plxd, and `add` signs in here for another computer.
+ * @type {Record<SignInCommand, string>}
+ */
+const INSTEAD = {
+  connect: "Run it where a browser can open, without --no-browser, or run `plx connect add <this computer>` from a computer that can open one",
+  add: "Run it again from a computer that can open a browser, without --no-browser",
+  remove: "Run it again in this computer's own desktop session, not over SSH and without --no-browser, so a browser can open",
+};
 
 /**
  * Signs in and resolves to the access token, or rejects with why not, for people.
@@ -183,7 +199,7 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  */
 export async function signIn(options) {
   if (options.browser) return signInHere(options);
-  return finishDeviceGrant(await startDeviceGrant(options.clerk), options);
+  return finishDeviceGrant(await startDeviceGrant(options.clerk, options.command), options);
 }
 
 /**
@@ -202,11 +218,12 @@ export async function signIn(options) {
  * Clerk's refusal of the device grant: discovery doesn't list it, or the device endpoint answers
  * 400 `invalid_grant`, as Clerk does for an OAuth application without it, or `unauthorized_client`,
  * RFC 6749's code for that. With no browser here, plx has no other way to sign in.
+ * @param {SignInCommand} command
  * @param {unknown} [why] Clerk's own description, when it sent one.
  */
-const refused = (why) =>
+const refused = (command, why) =>
   new Error(
-    `Clerk refused the device grant, which plx signs in with when it can't open a browser here${typeof why === "string" && why ? `: ${why.replace(/\.$/, "")}` : ""}. Run \`plx connect add <this computer>\` from a computer that can open one, or open an issue with this message.`,
+    `Clerk refused the device grant, which plx signs in with when it can't open a browser here${typeof why === "string" && why ? `: ${why.replace(/\.$/, "")}` : ""}. ${INSTEAD[command]}, or open an issue with this message.`,
   );
 
 /**
@@ -214,9 +231,10 @@ const refused = (why) =>
  * reason for any other failure. Discovery only says the instance offers the grant, so it can't
  * settle a refusal alone: the device endpoint has the last word.
  * @param {Clerk} clerk
+ * @param {SignInCommand} command
  * @returns {Promise<DeviceGrant>}
  */
-async function startDeviceGrant(clerk) {
+async function startDeviceGrant(clerk, command) {
   /** @param {string} url @param {RequestInit} [init] */
   const request = (url, init) =>
     fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }).catch(() => {
@@ -230,10 +248,10 @@ async function startDeviceGrant(clerk) {
   if (typeof tokenEndpoint !== "string" || (endpoint !== undefined && typeof endpoint !== "string") || (grants !== undefined && !Array.isArray(grants))) {
     throw new Error("Clerk didn't start the sign-in: its discovery document is malformed.");
   }
-  if (typeof endpoint !== "string" || !Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) throw refused();
+  if (typeof endpoint !== "string" || !Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) throw refused(command);
   const res = await request(endpoint, { method: "POST", body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }) });
   const body = /** @type {Record<string, unknown>} */ (await res.json().catch(() => ({})));
-  if (res.status === 400 && (body["error"] === "invalid_grant" || body["error"] === "unauthorized_client")) throw refused(body["error_description"] ?? body["error"]);
+  if (res.status === 400 && (body["error"] === "invalid_grant" || body["error"] === "unauthorized_client")) throw refused(command, body["error_description"] ?? body["error"]);
   const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, verification_uri_complete: complete, expires_in: expiresIn, interval } = body;
   if (!res.ok || typeof deviceCode !== "string" || typeof userCode !== "string" || typeof verificationUri !== "string" || typeof expiresIn !== "number") {
     const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");

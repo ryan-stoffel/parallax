@@ -81,6 +81,7 @@ test("the loopback flow takes only the callback with its state, and redeems its 
   const clerk = await fakeClerk();
   const { token, out } = await quietly(() =>
     signIn({
+      command: "connect",
       clerk: clerk.clerk,
       browser: true,
       // The test is the browser: a guess without the state is refused, then Clerk's redirect lands.
@@ -109,6 +110,7 @@ test("the loopback flow reports Clerk's error", async () => {
   await assert.rejects(
     quietly(() =>
       signIn({
+        command: "connect",
         clerk: clerk.clerk,
         browser: true,
         open: async (url) => {
@@ -203,8 +205,8 @@ async function fakeDeviceClerk({ polls = [], metadata, discoveryStatus = 200, de
 }
 
 /** Signs in with no browser against `fake`. @param {Awaited<ReturnType<typeof fakeDeviceClerk>>} fake */
-const signInWithout = (fake) =>
-  signIn({ clerk: fake.clerk, browser: false, open: async () => assert.fail("no browser opens without one"), sleep: fake.sleep });
+const signInWithout = (fake, /** @type {import("../src/signin.mjs").SignInCommand} */ command = "connect") =>
+  signIn({ command, clerk: fake.clerk, browser: false, open: async () => assert.fail("no browser opens without one"), sleep: fake.sleep });
 
 test("the device grant prints the link and the short code, polls as RFC 8628 says, and finishes by itself", async () => {
   const fake = await fakeDeviceClerk({ polls: ["authorization_pending", "slow_down", "authorization_pending", "token"] });
@@ -261,6 +263,7 @@ test("polling stops when the code's own lifetime ends, even if Clerk never says 
     quietly(() =>
       signIn({
         clerk: fake.clerk,
+        command: "connect",
         browser: false,
         open: async () => false,
         sleep: wait,
@@ -278,6 +281,7 @@ test("a wait that wakes after the code's lifetime ends doesn't poll", async () =
     quietly(() =>
       signIn({
         clerk: fake.clerk,
+        command: "connect",
         browser: false,
         open: async () => false,
         // Asked for a millisecond, it wakes well past the 20 ms lifetime, as after a laptop's sleep.
@@ -308,7 +312,7 @@ for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceCl
           out = printed();
         }
       }),
-      /^Error: Clerk refused the device grant, which plx signs in with when it can't open a browser here(: .+)?\. Run `plx connect add <this computer>`/,
+      /^Error: Clerk refused the device grant, which plx signs in with when it can't open a browser here(: .+)?\. Run it where a browser can open/,
     );
     fake.close();
     // No sign-in link is printed, since nothing would take its code.
@@ -316,6 +320,24 @@ for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceCl
     assert.equal(fake.tokenRequests.length, 0);
   });
 }
+
+test("a refused device grant's advice fits the command", async () => {
+  /** @type {[import("../src/signin.mjs").SignInCommand, RegExp][]} */
+  const advice = [
+    ["connect", /\. Run it where a browser can open, without --no-browser, or run `plx connect add <this computer>` from a computer that can open one, or open an issue/],
+    ["add", /\. Run it again from a computer that can open a browser, without --no-browser, or open an issue/],
+    ["remove", /\. Run it again in this computer's own desktop session, not over SSH and without --no-browser, so a browser can open, or open an issue/],
+  ];
+  for (const [command, message] of advice) {
+    const fake = await fakeDeviceClerk({ deviceStatus: 400, device: { error: "unauthorized_client" } });
+    await assert.rejects(quietly(() => signInWithout(fake, command)), message);
+    fake.close();
+  }
+  // Only connect points at add.
+  const fake = await fakeDeviceClerk({ deviceStatus: 400, device: { error: "unauthorized_client" } });
+  await assert.rejects(quietly(() => signInWithout(fake, "remove")), (error) => error instanceof Error && !error.message.includes("plx connect add"));
+  fake.close();
+});
 
 test("a refused device grant names Clerk's own reason", async () => {
   const fake = await fakeDeviceClerk({ deviceStatus: 400, device: { error: "invalid_grant", error_description: CLERK_REFUSAL } });

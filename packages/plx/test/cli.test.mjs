@@ -162,7 +162,7 @@ test("plx connect with no terminal and no device grant exits 1, saying on stderr
   const script = connectScript(`() => ({ token_endpoint: "unused" })`);
   const { code, stdout, stderr } = /** @type {{ code: number, stdout: string, stderr: string }} */ (await noTerminal(script, "ignore"));
   assert.equal(code, 1, stdout);
-  assert.match(stderr, /^✗ Clerk refused the device grant, which plx signs in with when it can't open a browser here\./m);
+  assert.match(stderr, /^✗ Clerk refused the device grant, which plx signs in with when it can't open a browser here\. Run it where a browser can open, without --no-browser, or run `plx connect add <this computer>`/m);
   assert.doesNotMatch(stdout, /oauth\/authorize|Paste the code|Opened your browser|got past sign-in/);
 });
 

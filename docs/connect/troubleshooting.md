@@ -140,7 +140,7 @@ plx prints each failure on a line starting `✗`, and exits 1.
 | `Clerk didn't finish the sign-in: <reason>` | Run it again. |
 | `Sign-in timed out. Run it again.` | Finish in the browser within 10 minutes. With no browser here, use `--no-browser`. |
 | `Clerk didn't accept the code: <reason>.` | Run it again. |
-| `Clerk refused the device grant, which plx signs in with when it can't open a browser here: <reason>. ...` | Run `plx connect add <this computer>` from a computer that can open a browser, or run plx here with a browser and without `--no-browser`. If it keeps happening, [open an issue](https://github.com/ryan-stoffel/parallax/issues/new) with the message. |
+| `Clerk refused the device grant, which plx signs in with when it can't open a browser here: <reason>. ...` | Do what the message says for the command you ran. For `plx connect`, run it where a browser can open, or run `plx connect add <this computer>` from a computer that can. For `add`, run it from a computer with a browser. For `remove`, run it in this computer's own desktop session. If it keeps happening, [open an issue](https://github.com/ryan-stoffel/parallax/issues/new) with the message. |
 
 ## In the desktop app
 
