@@ -1136,7 +1136,7 @@ mod tests {
         let updating = CancellationToken::new();
         updating.cancel();
         let response = |id: i64| Response::success(RequestId::from(id), json!({}));
-        let terminal = Notification {
+        let terminal = || Notification {
             method: "terminal/output".to_owned(),
             params: Some(json!({ "threadId": "t", "terminalId": "t", "data": "secret" })),
         };
@@ -1154,7 +1154,7 @@ mod tests {
                 response: response(1),
                 resync_notice: false,
             },
-            Reply::Notification(terminal),
+            Reply::Notification(terminal()),
             Reply::Subscribe {
                 response: response(2),
                 cursor,
@@ -1178,6 +1178,9 @@ mod tests {
             guest,
         );
         tokio::spawn(writer);
+        // Another while the writer waits, which it takes on its other path.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        replies.send(Reply::Notification(terminal())).await.unwrap();
         let mut frames = FramedRead::new(client, FrameCodec::new());
         let mut seen = Vec::new();
         while let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(300), frames.next()).await {
@@ -1227,7 +1230,8 @@ mod tests {
         // Any other connection gets them all.
         let all = written(None, &log).await;
         let methods: Vec<_> = all.iter().map(|(method, ..)| method.as_str()).collect();
-        assert!(methods.contains(&"terminal/output"), "{methods:?}");
+        let terminal = methods.iter().filter(|m| **m == "terminal/output");
+        assert_eq!(terminal.count(), 2, "{methods:?}");
         assert!(methods.contains(&"host/updating"), "{methods:?}");
         assert_eq!(methods.iter().filter(|m| **m == "events/event").count(), 4);
     }
