@@ -795,6 +795,44 @@ export type ParallaxRequests = {
 	 */
 	"access/setupCode": { params: AccessSetupCodeParams, result: AccessSetupCodeResult },
 	/**
+	 * `guest/create`: a link that shows one thread to one browser for 24 hours (0108), from a
+	 * full-access session while `hostedClient` is on. It ends the thread's live link. Gated on
+	 * `guestLinks`, like every `guest/*` method.
+	 */
+	"guest/create": { params: GuestCreateParams, result: GuestCreateResult },
+	/**
+	 * `guest/list`: the live guest links, whether and when each was bound, and the messages
+	 * their guests suggested.
+	 */
+	"guest/list": { params: GuestListParams, result: GuestListResult },
+	/**
+	 * `guest/revoke`: Stop sharing. Ends the link and closes its guest's connections.
+	 */
+	"guest/revoke": { params: GuestRevokeParams, result: GuestListResult },
+	/**
+	 * `guest/suggest`: a guest's message, which waits until the owner sends or dismisses it.
+	 * Only a guest whose link allows suggestions may send one.
+	 */
+	"guest/suggest": { params: GuestSuggestParams, result: GuestSuggestResult },
+	/**
+	 * `guest/subscribe`: a guest's thread, built for a guest with only what a transcript
+	 * needs, then its entries as `guest/event`. Only a guest calls it, for its link's thread.
+	 */
+	"guest/subscribe": { params: GuestSubscribeParams, result: GuestSubscribeResult },
+	/**
+	 * `guest/history`: the guest's thread's entries before a `seq`, built as
+	 * `guest/subscribe` builds them.
+	 */
+	"guest/history": { params: GuestHistoryParams, result: GuestHistoryResult },
+	/**
+	 * `guest/send`: the owner sends a guest's waiting message to the thread, as its own.
+	 */
+	"guest/send": { params: GuestSuggestionParams, result: GuestListResult },
+	/**
+	 * `guest/dismiss`: the owner drops a guest's waiting message.
+	 */
+	"guest/dismiss": { params: GuestSuggestionParams, result: GuestListResult },
+	/**
 	 * `inbox/list`: an orchestrator's inbox, oldest first, and the event log's `seq` from
 	 * before the read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
@@ -1383,6 +1421,14 @@ export const REQUEST_METHODS = [
 	"access/remove",
 	"access/forgetHost",
 	"access/setupCode",
+	"guest/create",
+	"guest/list",
+	"guest/revoke",
+	"guest/suggest",
+	"guest/subscribe",
+	"guest/history",
+	"guest/send",
+	"guest/dismiss",
 	"inbox/list",
 	"inbox/seen",
 	"github/install",
@@ -1484,6 +1530,10 @@ export type ParallaxNotifications = {
 	 * `events/event`: one event for a subscription. plxd sends it.
 	 */
 	"events/event": EventsEventParams,
+	/**
+	 * `guest/event`: one transcript entry for a guest's `guest/subscribe` (0108). plxd sends it.
+	 */
+	"guest/event": GuestEventParams,
 	/**
 	 * `events/resync`: plxd ended a subscription that fell behind, and the connection
 	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
@@ -9829,6 +9879,342 @@ export type AccessSetupCodeResult = {
 };
 
 /**
+ * Params of `guest/create`: a new link to `threadId`, which ends the thread's live one.
+ */
+export type GuestCreateParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The guest may suggest messages, which wait for the owner. Off when absent.
+	 */
+	canSuggest?: boolean,
+};
+
+/**
+ * Result of `guest/create`.
+ */
+export type GuestCreateResult = {
+	/**
+	 * The new link.
+	 */
+	link: GuestLink,
+	/**
+	 * The link's URL fragment, `<hostId>.<linkId>.<secret>` in base64url, which goes after
+	 * `#` in the hosted client's `/g` page. Only this answer carries the secret.
+	 */
+	fragment: string,
+};
+
+/**
+ * A live guest link, without its secret.
+ */
+export type GuestLink = {
+	/**
+	 * The link's id, 16 bytes in base64url.
+	 */
+	id: string,
+	/**
+	 * The thread it shows.
+	 */
+	threadId: RunId,
+	/**
+	 * When it was made.
+	 */
+	createdAt: string,
+	/**
+	 * When it ends.
+	 */
+	expiresAt: string,
+	/**
+	 * The guest may suggest messages.
+	 */
+	canSuggest?: boolean,
+	/**
+	 * When a browser's key bound it, if one has. Absent means nobody opened it yet.
+	 */
+	boundAt?: string,
+	/**
+	 * The guest's messages waiting for the owner, oldest first.
+	 */
+	suggestions?: Array<GuestSuggestion>,
+};
+
+/**
+ * A guest's message waiting for the owner to send or dismiss it.
+ */
+export type GuestSuggestion = {
+	/**
+	 * Its id, which the message's turn keeps once the owner sends it.
+	 */
+	id: TurnId,
+	/**
+	 * The message.
+	 */
+	text: string,
+	/**
+	 * When the guest sent it.
+	 */
+	at: string,
+};
+
+/**
+ * Params of `guest/list`.
+ */
+export type GuestListParams = Record<symbol, never>;
+
+/**
+ * Result of `guest/list`, `guest/revoke`, `guest/send`, and `guest/dismiss`: the live links.
+ */
+export type GuestListResult = {
+	/**
+	 * The live links, oldest first.
+	 */
+	links: Array<GuestLink>,
+};
+
+/**
+ * Params of `guest/revoke`: Stop sharing.
+ */
+export type GuestRevokeParams = {
+	/**
+	 * The link's id.
+	 */
+	link: string,
+};
+
+/**
+ * Params of `guest/suggest`, from a guest whose link allows it.
+ */
+export type GuestSuggestParams = {
+	/**
+	 * The link's thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The message.
+	 */
+	text: string,
+};
+
+/**
+ * Result of `guest/suggest`.
+ */
+export type GuestSuggestResult = {
+	/**
+	 * The waiting message.
+	 */
+	suggestion: GuestSuggestion,
+};
+
+/**
+ * Params of `guest/subscribe`: the guest's thread, from its snapshot, or from after `afterSeq`
+ * when that gap is short enough to replay.
+ */
+export type GuestSubscribeParams = {
+	/**
+	 * The link's thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The last `seq` the guest has.
+	 */
+	afterSeq?: number,
+};
+
+/**
+ * Result of `guest/subscribe`. `guest/event` notifications follow for the subscription.
+ */
+export type GuestSubscribeResult = {
+	/**
+	 * The subscription, for `events/unsubscribe`.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The thread as it stands. Absent when the gap after `afterSeq` replays instead.
+	 */
+	snapshot?: GuestSnapshot,
+};
+
+/**
+ * A guest's thread at a `seq`.
+ */
+export type GuestSnapshot = {
+	/**
+	 * The event log's `seq` it stands at. Events after it follow.
+	 */
+	seq: number,
+	/**
+	 * The thread.
+	 */
+	thread: GuestThread,
+	/**
+	 * Its newest transcript entries, oldest first, up to `seq`.
+	 */
+	entries: Array<GuestEntry>,
+	/**
+	 * Whether older entries remain, for `guest/history` before the first one.
+	 */
+	more: boolean,
+};
+
+/**
+ * What one event of the thread's log shows a guest: built for the guest from the event, with
+ * only what a transcript needs.
+ */
+export type GuestEntry = {
+	/**
+	 * The event's `seq`.
+	 */
+	seq: number,
+	/**
+	 * When it happened.
+	 */
+	time: string,
+	/**
+	 * What it shows, in order. Never empty.
+	 */
+	items: Array<GuestItem>,
+};
+
+/**
+ * One thing in a guest's transcript, by `kind`.
+ *
+ * A newer plxd may send kinds that are not listed here; skip them.
+ */
+export type GuestItem = { "kind": "turnStarted",
+	/**
+	 * The turn's id.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The message.
+	 */
+	text?: string, } | { "kind": "textDelta",
+	/**
+	 * The reply it belongs to.
+	 */
+	messageId?: string,
+	/**
+	 * The new text.
+	 */
+	text: string, } | { "kind": "text",
+	/**
+	 * The reply's id.
+	 */
+	messageId?: string,
+	/**
+	 * Its text.
+	 */
+	text: string, } | { "kind": "toolCall",
+	/**
+	 * The call's id, which its result names.
+	 */
+	callId: string,
+	/**
+	 * The tool.
+	 */
+	name: string,
+	/**
+	 * Its input, as the thread has it.
+	 */
+	input: JsonValue, } | { "kind": "toolResult",
+	/**
+	 * The call it answers.
+	 */
+	callId: string,
+	/**
+	 * How it ended.
+	 */
+	status: AgentToolStatus,
+	/**
+	 * What it printed.
+	 */
+	output?: string, } | { "kind": "turnFinished",
+	/**
+	 * The turn's id.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The agent's final answer, when its CLI gives one.
+	 */
+	result?: string, } | { "kind": "status",
+	/**
+	 * The new status.
+	 */
+	status: AgentStatus, } | { "kind": "reverted",
+	/**
+	 * The turns.
+	 */
+	turns: Array<TurnId>,
+};
+
+/**
+ * The thread a guest link shows: only what its header needs.
+ */
+export type GuestThread = {
+	/**
+	 * Its run id.
+	 */
+	id: RunId,
+	/**
+	 * Its title, if it has one.
+	 */
+	title?: string,
+	/**
+	 * Whether it's working, waiting, or done.
+	 */
+	status: AgentStatus,
+	/**
+	 * When it was made.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Params of `guest/history`: the page of entries before `before`.
+ */
+export type GuestHistoryParams = {
+	/**
+	 * The link's thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The page is the entries before this `seq`: the first one the guest has.
+	 */
+	before: number,
+};
+
+/**
+ * Result of `guest/history`.
+ */
+export type GuestHistoryResult = {
+	/**
+	 * The entries, oldest first.
+	 */
+	entries: Array<GuestEntry>,
+	/**
+	 * Whether older ones remain.
+	 */
+	more: boolean,
+};
+
+/**
+ * Params of `guest/send` and `guest/dismiss`: the owner's answer to a waiting message.
+ */
+export type GuestSuggestionParams = {
+	/**
+	 * The link's id.
+	 */
+	link: string,
+	/**
+	 * The message's id.
+	 */
+	suggestion: TurnId,
+};
+
+/**
  * Params of `inbox/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
  */
 export type InboxListParams = {
@@ -13402,6 +13788,20 @@ export type EventsEventParams = {
 };
 
 /**
+ * Params of `guest/event`: one entry of a guest's subscription.
+ */
+export type GuestEventParams = {
+	/**
+	 * The subscription.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The entry.
+	 */
+	entry: GuestEntry,
+};
+
+/**
  * Params of `events/resync`: plxd ended a subscription that fell behind its event log's
  * retention (PLX-455). Reload the snapshot it started from and subscribe again. plxd sends it
  * only to a client that declared the `resyncNotice` capability; it closes any other client's
@@ -13563,7 +13963,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits" | "relayUnreachable" | "clerkUnreachable" | "readOnly";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits" | "relayUnreachable" | "clerkUnreachable" | "readOnly" | "guestRefused" | "guestRateLimited";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

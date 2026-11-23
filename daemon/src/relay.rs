@@ -9,7 +9,9 @@
 //!   only ciphertext. plxd also keeps one spare stream open (0091): the relay joins the next client
 //!   to it without asking plxd first, and plxd asks for another once it's taken. A stream the
 //!   relay marks as the hosted browser client's or a guest's ([`Mark`], 0108) is joined only while
-//!   `hostedClient` is on, and the listener serves it less.
+//!   `hostedClient` is on, a guest's only for a live link, and the listener serves it less. plxd
+//!   sends the relay its live guest links (`guests`) whenever they change, and on connecting when
+//!   it has any.
 //! - It answers the webhooks the relay forwards, held ones included, with the same check as
 //!   `/api/hooks` ([`crate::schedules::hook`]), keyed by the relay's delivery id so a redelivery
 //!   fires once.
@@ -1356,6 +1358,9 @@ pub(crate) struct Relay {
     /// Wakes the connection to send the relay its webhook URLs again, after a scheduled task
     /// is saved or deleted.
     pub hooks_changed: Notify,
+    /// Wakes the connection to send the relay the live guest links again, after one starts or
+    /// ends (0108).
+    pub(crate) guests_changed: Notify,
     /// How far the relay's clock is ahead of this computer's, in milliseconds, once the relay
     /// refused a proof for its time. Proofs are signed by the relay's clock from then on.
     clock_offset: AtomicI64,
@@ -1469,6 +1474,7 @@ impl Relay {
             proof: tokio::sync::Mutex::new(None),
             changed: Notify::new(),
             hooks_changed: Notify::new(),
+            guests_changed: Notify::new(),
             clock_offset: AtomicI64::new(0),
             status: Mutex::default(),
             removals: Mutex::default(),
@@ -1521,6 +1527,16 @@ impl Relay {
     pub(crate) fn cut_marked(&self) {
         for stream in self.listed().values() {
             if stream.mark.marked() {
+                stream.cut.cancel();
+            }
+        }
+    }
+
+    /// Ends every joined stream the relay marked as guest link `link`'s, as the link ending does
+    /// (0108).
+    pub(crate) fn cut_guest(&self, link: &str) {
+        for stream in self.listed().values() {
+            if matches!(&stream.mark, Mark::Guest(id) if id == link) {
                 stream.cut.cancel();
             }
         }
@@ -2352,6 +2368,12 @@ async fn serve(
         Message::text(json!({ "t": "hooks", "keys": keys }).to_string())
     };
     sink.send(hooks().await).await.map_err(failed)?;
+    // The live guest links, so the relay counts their guests and refuses the rest (0108). The relay
+    // forgets them when this socket closes, so none to send is none.
+    let guests = || Message::text(daemon.guests.relay_frame());
+    if daemon.guests.any_live() {
+        sink.send(guests()).await.map_err(failed)?;
+    }
     // Any removal the last connection didn't send. None waiting wakes nothing.
     daemon.relay.sent_removals(&[]);
     loop {
@@ -2400,6 +2422,9 @@ async fn serve(
             () = daemon.relay.hooks_changed.notified() => {
                 sink.send(hooks().await).await.map_err(failed)?;
             }
+            () = daemon.relay.guests_changed.notified() => {
+                sink.send(guests()).await.map_err(failed)?;
+            }
             () = daemon.relay.removed.notified() => {
                 if let Some((keys, removal)) = next_removal(daemon).await {
                     sink.send(removal).await.map_err(failed)?;
@@ -2447,12 +2472,15 @@ async fn serve(
                             daemon.relay.check_answered(message);
                         } else if message["t"] == "open" && serving(daemon).await {
                             // A hosted client's or guest's stream, while `hostedClient` is off, is
-                            // never joined, and the relay hears at once that it's gone (0108).
-                            if Mark::of(&message).marked()
-                                && !crate::server::remote::hosted_on(daemon).await
+                            // never joined, nor a guest's for a link that isn't live, and the relay
+                            // hears at once that it's gone (0108).
+                            let mark = Mark::of(&message);
+                            let dead_link = matches!(&mark, Mark::Guest(link) if daemon.guests.get(link).is_none());
+                            if dead_link
+                                || (mark.marked() && !crate::server::remote::hosted_on(daemon).await)
                             {
                                 if let Some((id, _)) = stream_identity(&message) {
-                                    info!("refused a hosted client's stream: the hosted client is off");
+                                    info!(dead_link, "refused a hosted client's or guest's stream");
                                     let gone = json!({ "t": "gone", "stream": id }).to_string();
                                     sink.send(Message::text(gone)).await.map_err(failed)?;
                                 }
@@ -3050,6 +3078,35 @@ mod tests {
 
     const NOTHING: [String; 0] = [];
     const JUST_UNDER: Duration = HOLD.saturating_sub(Duration::from_secs(1));
+
+    #[test]
+    fn a_links_end_cuts_its_own_streams_alone() {
+        let relay = Relay::new(DEFAULT_URL.to_owned());
+        let marks = [
+            Mark::Guest("a".to_owned()),
+            Mark::Guest("b".to_owned()),
+            Mark::Hosted,
+            Mark::None,
+        ];
+        let streams: Vec<_> = marks
+            .into_iter()
+            .enumerate()
+            .map(|(port, mark)| {
+                let stream = Arc::new(RelayStream {
+                    stop: CancellationToken::new(),
+                    end: EndSlot::default(),
+                    mark,
+                    cut: CancellationToken::new(),
+                });
+                let from = SocketAddr::from(([127, 0, 0, 1], u16::try_from(port).unwrap() + 1));
+                relay.listed().insert(from, Arc::clone(&stream));
+                stream
+            })
+            .collect();
+        relay.cut_guest("a");
+        let cut: Vec<_> = streams.iter().map(|s| s.cut.is_cancelled()).collect();
+        assert_eq!(cut, [true, false, false, false]);
+    }
 
     #[test]
     fn an_open_frame_marks_its_stream_and_a_guest_mark_wins() {

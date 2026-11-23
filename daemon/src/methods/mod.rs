@@ -21,7 +21,8 @@
 //! `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`: `secret/request` and
 //! `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`: `provider_updates.rs`; 0057
 //! `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`; 0101 `agentWork`: `peer/*` in
-//! `crate::linked`), and `host.rs` advertises the capability in `initialize`.
+//! `crate::linked`; 0108 `guestLinks`: `guest/*` in `guest.rs`), and `host.rs` advertises the
+//! capability in `initialize`.
 
 mod accounts;
 mod agent;
@@ -32,6 +33,7 @@ pub(crate) mod context;
 mod cursor;
 mod defaults;
 mod events;
+pub(crate) mod guest;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub(crate) mod land;
@@ -55,8 +57,8 @@ use parallax_protocol::jsonrpc::{
     ErrorObject, INVALID_REQUEST, Notification, Request, RequestId, Response,
 };
 use parallax_protocol::methods::{
-    self, EventsSubscribe, EventsUnsubscribe, Initialize, OrchestrationSubscribeShell,
-    OrchestrationSubscribeThread, RequestMethod,
+    self, EventsSubscribe, EventsUnsubscribe, GuestSubscribe, Initialize,
+    OrchestrationSubscribeShell, OrchestrationSubscribeThread, RequestMethod,
 };
 use parallax_protocol::{
     EventsSubscribeResult, EventsUnsubscribeResult, HubsListResult, ProvidersListResult,
@@ -108,6 +110,10 @@ pub(crate) struct Context {
     /// The connection came through the remote listener, from a paired device or another
     /// computer's agents (0065, 0101). It may not go on to a third computer with `peer/*`.
     pub over_remote: bool,
+    /// The connection is a guest link's (0108). [`dispatch`] lets it make only what
+    /// [`guest::admits`] does: reads of the link's one thread, and suggestions if the link takes
+    /// them.
+    pub guest: Option<Arc<crate::server::remote::guest::Link>>,
 }
 
 impl Context {
@@ -159,6 +165,11 @@ pub(crate) fn dispatch(context: Context, request: Request) -> BoxFuture<'static,
 }
 
 async fn answer(mut context: Context, mut request: Request) -> Reply {
+    if let Some(link) = &context.guest
+        && let Err(refusal) = guest::admits(link, &request)
+    {
+        return Reply::Response(Response::error(Some(request.id), refusal));
+    }
     if context.read_only && !read_only::allows_request(&request.method) {
         return Reply::Response(Response::error(Some(request.id), read_only::refusal()));
     }
@@ -190,6 +201,13 @@ async fn answer(mut context: Context, mut request: Request) -> Reply {
         OrchestrationSubscribeThread::NAME => {
             let subscribed = match request.params() {
                 Ok(params) => orchestration::subscribe_thread(&context, params).await,
+                Err(error) => Err(error),
+            };
+            return subscribed_reply(id, subscribed);
+        }
+        GuestSubscribe::NAME => {
+            let subscribed = match request.params() {
+                Ok(params) => guest::subscribe(&context, params).await,
                 Err(error) => Err(error),
             };
             return subscribed_reply(id, subscribed);
@@ -284,6 +302,13 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         AccessSetReadOnly => |p| remote::access_set_read_only(context, p),
         AccessForgetHost => |p| remote::access_forget_host(context, p),
         AccessSetupCode => |p| remote::access_setup_code(context, p),
+        GuestCreate => |p| guest::create(context, p),
+        GuestList => |p| ready(Ok(guest::list(context, p))),
+        GuestRevoke => |p| ready(Ok(guest::revoke(context, &p))),
+        GuestSuggest => |p| ready(guest::suggest(context, p)),
+        GuestHistory => |p| guest::history(context, p),
+        GuestSend => |p| guest::send(context, p),
+        GuestDismiss => |p| ready(guest::dismiss(context, p)),
         RemoteRevoke => |p| remote::revoke(context, p),
         AccountsList => |p| accounts::list(context, p),
         AccountsRefresh => |p| accounts::refresh(context, p),
@@ -635,6 +660,7 @@ mod tests {
             read_only: false,
             over_relay: false,
             over_remote: false,
+            guest: None,
         };
         let request = Request {
             id: 1.into(),

@@ -1,8 +1,11 @@
-//! What a read-only device may call (PLX-1364, 0091). [`methods::dispatch`](super::dispatch) and the
-//! connection's notifications ask here first, so nothing else decides.
+//! What a read-only device and a guest may call (PLX-1364, 0091, 0108).
+//! [`methods::dispatch`](super::dispatch) and the connection's notifications ask here first, so
+//! nothing else decides.
 //!
 //! Both matches name every method with no wildcard, so a new method doesn't compile until someone
-//! picks its side. A name in neither table is refused.
+//! picks its [`Level`]. A name in neither table is refused. A guest's methods are reads of its
+//! link's one thread, which [`super::guest::admits`] checks by thread id, and `guest/suggest`,
+//! which only a guest whose link allows it may send.
 //!
 //! A read here returns data, changes nothing, and takes nothing from the client that picks what
 //! runs: a repo or run id, or a path that stays inside its folder. The methods that read but stay
@@ -50,7 +53,24 @@ pub(super) fn refusal() -> ErrorObject {
 
 /// Whether a read-only device may call the request `method`.
 pub(super) fn allows_request(method: &str) -> bool {
-    RequestName::from_name(method).is_some_and(is_read)
+    RequestName::from_name(method).is_some_and(|method| level(method) != Level::Full)
+}
+
+/// Whether a guest may call the request `method`, for its own thread.
+pub(super) fn allows_guest(method: RequestName) -> bool {
+    level(method) == Level::Guest
+}
+
+/// Who may call a method: every session ([`Level::Guest`]), read-only devices and full ones, or
+/// only full ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Level {
+    /// A guest too, for its link's thread alone (0108).
+    Guest,
+    /// A read-only device too.
+    Read,
+    /// Only a full-access device.
+    Full,
 }
 
 /// Whether a read-only device may send the notification `method`: `$/cancelRequest` only stops its
@@ -60,6 +80,7 @@ pub(crate) fn allows_notification(method: &str) -> bool {
         Some(NotificationName::CancelRequest) => true,
         Some(
             NotificationName::EventsEvent
+            | NotificationName::GuestEvent
             | NotificationName::EventsResync
             | NotificationName::HostUpdating
             | NotificationName::TerminalWrite
@@ -76,11 +97,16 @@ pub(crate) fn allows_notification(method: &str) -> bool {
     }
 }
 
-/// Picks the side of every request method. See the module's docs for what makes a read.
+/// Picks the level of every request method. See the module's docs for what makes a read.
 #[expect(clippy::too_many_lines, reason = "one line per method")]
-fn is_read(method: RequestName) -> bool {
+fn level(method: RequestName) -> Level {
     use RequestName as M;
     match method {
+        // A guest's: its thread's snapshot, live events, and older pages, and its suggestions.
+        M::GuestSubscribe | M::GuestHistory | M::EventsUnsubscribe | M::GuestSuggest => {
+            Level::Guest
+        }
+
         M::Initialize
         | M::HostHealth
         | M::HostVersion
@@ -88,7 +114,6 @@ fn is_read(method: RequestName) -> bool {
         | M::HostSettingsGet
         | M::OrchestratorList
         | M::EventsSubscribe
-        | M::EventsUnsubscribe
         | M::OrchestrationSubscribeShell
         | M::OrchestrationSubscribeThread
         | M::OrchestrationThreadHistory
@@ -135,9 +160,15 @@ fn is_read(method: RequestName) -> bool {
         // still gets notifications.
         | M::RelayPushKey
         // Without a waiting request's code: see `methods::remote::access_get`.
-        | M::AccessGet => true,
+        | M::AccessGet => Level::Read,
 
-        M::HostUpdate
+        // A guest link is made, read, and ended from a full-access session, as pairing codes are.
+        M::GuestCreate
+        | M::GuestList
+        | M::GuestRevoke
+        | M::GuestSend
+        | M::GuestDismiss
+        | M::HostUpdate
         | M::HostAnnounceUpdate
         | M::HostFolders
         | M::HostUpload
@@ -324,13 +355,35 @@ fn is_read(method: RequestName) -> bool {
         | M::PeerCall
         | M::PeerStart
         | M::PeerTask
-        | M::GitStartMerge => false,
+        | M::GitStartMerge => Level::Full,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{allows_notification, allows_request};
+    use parallax_protocol::methods::RequestName;
+
+    use super::{allows_guest, allows_notification, allows_request};
+
+    #[test]
+    fn a_guest_may_call_only_its_threads_reads_and_suggestions() {
+        let allowed: Vec<_> = RequestName::ALL
+            .iter()
+            .filter(|method| allows_guest(**method))
+            .map(|method| method.name())
+            .collect();
+        assert_eq!(
+            allowed,
+            [
+                "events/unsubscribe",
+                "guest/suggest",
+                "guest/subscribe",
+                "guest/history",
+            ]
+        );
+        // Every guest method is open to a read-only device too, so a guest is never more.
+        assert!(allowed.iter().all(|method| allows_request(method)));
+    }
 
     #[test]
     fn a_read_only_device_may_read_threads_and_nothing_that_acts() {

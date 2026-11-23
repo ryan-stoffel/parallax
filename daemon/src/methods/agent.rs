@@ -456,6 +456,7 @@ mod tests {
             read_only: false,
             over_relay: false,
             over_remote: false,
+            guest: None,
         };
         let (run_id, project) = (RunId::generate(), ScopeId::generate());
         daemon
