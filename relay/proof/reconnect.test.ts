@@ -101,6 +101,8 @@ it("data carrier replacement keeps control online, settles once, and never repla
     })).status).toBe(200);
     replacement = await carrierFrom(f.control, f.host.id);
     replacement.ws.send(JSON.stringify({t:"join",id:old.id,token:old.token}));
+    // A join of a stream that already ended only ends plxd's end of it (PLX-1605).
+    expect(JSON.parse(await replacement.next() as string)).toEqual({t:"fin",id:old.id});
     const stale = new Uint8Array(67);
     stale.set(new TextEncoder().encode(old.id)); stale.set([9,9,9],64);
     replacement.ws.send(stale);
