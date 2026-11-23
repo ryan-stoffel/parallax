@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -68,6 +68,8 @@ const fake = vi.hoisted(() => {
     online: true,
     /** Whether the account's last refresh couldn't reach Clerk. */
     clerkDown: false,
+    /** What main last put on the clipboard. */
+    clipboard: undefined as string | undefined,
   };
 });
 vi.mock("electron", () => ({
@@ -86,6 +88,7 @@ vi.mock("electron", () => ({
   },
   powerMonitor: { on: () => {} },
   net: { isOnline: () => fake.online },
+  clipboard: { writeText: (text: string) => void (fake.clipboard = text) },
 }));
 vi.mock("./windows", () => ({
   broadcast: (channel: string, value: unknown) => {
@@ -2276,6 +2279,129 @@ test("a computer saved as removed by an older app finishes leaving the account",
     const saved = JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8"));
     expect(saved.accounts).toEqual([]);
   } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a web browser's request shows as one, and Allow says whether it's read-only (0108)", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const pending = {
+      id: "req-web",
+      name: "Chrome on Windows",
+      thumbprint: "key-web",
+      code: "204817",
+      expiresAt: "2026-11-23T00:10:00Z",
+      hosted: true,
+    };
+    fake.answers.set("access/get", (params: { after?: number }) =>
+      params.after === undefined
+        ? {
+            result: {
+              version: 1,
+              approvedClients: [],
+              removedClients: [],
+              approvedHosts: [],
+              pending,
+            },
+          }
+        : new Promise(() => {}),
+    );
+    const approved: unknown[] = [];
+    fake.answers.set("access/approve", (params: unknown) => {
+      approved.push(params);
+      return { result: {} };
+    });
+    const local = await start({ localName: "macbook" });
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.sent.get("parallax:accessRequests")).toEqual([
+      { id: "req-web", name: "Chrome on Windows", code: "204817", host: "macbook", hosted: true },
+    ]);
+
+    const answer = fake.handlers.get("parallax:answerAccess")!;
+    // Unticked, it says so. With nothing said, plxd's default for a web browser stands: read-only.
+    expect(await answer(null, "req-web", true, false)).toBeUndefined();
+    expect(await answer(null, "req-web", true)).toBeUndefined();
+    expect(approved).toEqual([{ request: "req-web", readOnly: false }, { request: "req-web" }]);
+    expect(await answer(null, "req-web", true, "yes")).toBe("invalid request");
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a guest link's secret stays in main's memory until it's copied: no window, file, or log gets it (0108)", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  fake.clipboard = undefined;
+  const secret = ["not", "a", "real", "guest", "secret"].join("-");
+  const fragment = `host-1.link-1.${secret}`;
+  const link = {
+    id: "link-1",
+    threadId: "thread-1",
+    createdAt: "2026-11-23T00:00:00Z",
+    expiresAt: "2026-11-24T00:00:00Z",
+    canSuggest: true,
+  };
+  // Everything main prints, to whichever console method.
+  const printed: unknown[][] = [];
+  const spies = (["log", "info", "warn", "error", "debug"] as const).map((method) =>
+    vi.spyOn(console, method).mockImplementation((...args) => void printed.push(args)),
+  );
+  try {
+    const created: unknown[] = [];
+    fake.answers.set("guest/create", (params: unknown) => {
+      created.push(params);
+      return { result: { link, fragment } };
+    });
+    const local = await start({});
+    // The connection log, written as the running app writes it.
+    const { startConnectionLog } = await import("./connectionLogFile");
+    startConnectionLog(path.join(fake.userData, "logs"));
+    local.set(connected({ guestLinks: {}, hostedClient: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+
+    // A window can't ask plxd for a link itself, since the answer would hand it the secret.
+    const request = fake.handlers.get("parallax:request")!;
+    expect(await request(null, "local", "guest/create", { threadId: link.threadId })).toMatchObject(
+      { error: { message: "unknown method: guest/create" } },
+    );
+    expect(created).toEqual([]);
+
+    const share = fake.handlers.get("parallax:shareWithGuest")!;
+    const copy = fake.handlers.get("parallax:copyGuestLink")!;
+    const forget = fake.handlers.get("parallax:forgetGuestLink")!;
+    // What the window gets back is the link without its secret.
+    expect(await share(null, "local", link.threadId, true)).toEqual(link);
+    expect(created).toEqual([{ threadId: link.threadId, canSuggest: true }]);
+    expect(fake.clipboard).toBeUndefined();
+
+    // Copy link is the secret's one way out, once.
+    expect(await copy(null, link.id)).toBe(true);
+    expect(fake.clipboard).toBe(`https://app.parallax.codes/g#${fragment}`);
+    fake.clipboard = undefined;
+    expect(await copy(null, link.id)).toBe(false);
+    expect(fake.clipboard).toBeUndefined();
+
+    // A dialog closed before Copy link drops it too.
+    await share(null, "local", link.threadId, false);
+    forget(null, link.id);
+    expect(await copy(null, link.id)).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Nothing main sent a window, wrote under its data folder, or printed holds the secret.
+    expect(JSON.stringify([...fake.sent])).not.toContain(secret);
+    const files = readdirSync(fake.userData, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.join(entry.parentPath, entry.name));
+    expect(files).toContain(path.join(fake.userData, "settings.json"));
+    for (const file of files) expect(readFileSync(file, "utf8"), file).not.toContain(secret);
+    expect(JSON.stringify(printed)).not.toContain(secret);
+  } finally {
+    for (const spy of spies) spy.mockRestore();
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
   }

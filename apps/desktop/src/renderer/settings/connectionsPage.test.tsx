@@ -41,9 +41,11 @@ let remoteWeb = false;
 let relay = false;
 // Absent on a plxd without agent work.
 let agentWork: boolean | undefined;
+// Absent on a plxd without the hosted client.
+let hostedClient: boolean | undefined;
 let sessions: RemoteSession[] = [];
 let hosts: SavedHost[] = [];
-type Set = { remote?: boolean; remoteWeb?: boolean; relay?: boolean };
+type Set = { remote?: boolean; remoteWeb?: boolean; relay?: boolean; hostedClient?: boolean };
 const request = vi.fn(async (_host: string, method: string, params: Set) => {
   const settings = () => ({
     result: {
@@ -52,6 +54,7 @@ const request = vi.fn(async (_host: string, method: string, params: Set) => {
       remoteWeb,
       relay,
       ...(agentWork !== undefined && { agentWork }),
+      ...(hostedClient !== undefined && { hostedClient }),
     },
     logId: "log",
   });
@@ -60,6 +63,7 @@ const request = vi.fn(async (_host: string, method: string, params: Set) => {
     remote = params.remote ?? remote;
     remoteWeb = params.remoteWeb ?? remoteWeb;
     relay = params.relay ?? relay;
+    hostedClient = params.hostedClient ?? hostedClient;
     return settings();
   }
   if (method === "remote/pair")
@@ -125,6 +129,7 @@ beforeEach(() => {
   remoteWeb = false;
   relay = false;
   agentWork = undefined;
+  hostedClient = undefined;
   sessions = [];
   hosts = [{ id: `lan:${"ab".repeat(32)}`, name: "studio", routes: ["192.168.1.20"] }];
   profile = signedIn;
@@ -387,6 +392,7 @@ test("every setting a search finds on Computers or Sharing & access is on that p
     remote = on;
     relay = on;
     agentWork = false;
+    hostedClient = false;
     profile = on ? signedIn : null;
     window.parallax.connectionState = async () => ({
       ...connected,
@@ -764,4 +770,64 @@ test("Reset routes in a card's menu undoes removed routes and the order, once th
   // The footnote says where to undo it.
   await click(cardOf("account:b")!.querySelector('[aria-label="2 routes to build-box"]')!);
   expect(cardOf("account:b")!.textContent).toContain("Reset routes, in this computer's menu");
+});
+
+test("Parallax on the web says what its publisher could read, and Browser link shows a link with no secret (0108)", async () => {
+  const connectCard = () => document.querySelector('section[aria-label="Parallax Connect"]')!;
+  const toggle = () =>
+    connectCard().querySelector('[role="switch"][aria-label="Parallax on the web"]');
+  // A plxd without the hosted client has no switch for it.
+  await show(SharingSettings);
+  expect(toggle()).toBeNull();
+  act(() => unmount());
+
+  relay = true;
+  hostedClient = false;
+  const link = "https://app.parallax.codes/#connect=alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o";
+  window.parallax.browserLink = async () => ({ link });
+  await show(SharingSettings);
+  expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+  expect(connectCard().textContent).toContain(
+    "Whoever publishes that site could read every thread a browser opens.",
+  );
+  // Off, there's no link to show.
+  expect((button("Show link") as HTMLButtonElement).disabled).toBe(true);
+  expect(searchSettings("browser link").map((r) => r.title)).toContain("Browser link");
+
+  await click(toggle()!);
+  expect(request).toHaveBeenCalledWith("local", "host/settings/set", { hostedClient: true });
+  await click(button("Show link"));
+  const dialog = document.querySelector("dialog[open]")!;
+  expect(dialog.textContent).toContain("Browser link");
+  expect(dialog.textContent).toContain("Allow it here only if all six digits match.");
+  expect(dialog.textContent).toContain(link);
+  expect(dialog.querySelector('svg[aria-label="QR code for the link"] path')).not.toBeNull();
+});
+
+test("a web browser is marked in Devices with access, and revoked like any device (0108)", async () => {
+  const web = {
+    id: "s-web",
+    name: "Safari on iPad",
+    createdAt: "2026-11-21T00:00:00Z",
+    readOnly: true,
+    hosted: true,
+  };
+  sessions = [{ id: "s1", name: "phone", createdAt: "2026-11-04T00:00:00Z" }, web];
+  const revokeDevice = vi.fn(async (): Promise<RemoteSessionsResult | string> => ({
+    sessions: [sessions[0]!],
+    listening: true,
+    pairing: false,
+  }));
+  window.parallax.revokeDevice = revokeDevice;
+  await show(SharingSettings);
+  const rows = [
+    ...document.querySelectorAll('section[aria-label="Devices with access"] div.min-h-14'),
+  ].filter((row) => /phone|Safari/.test(row.textContent));
+  expect(rows.map((row) => row.textContent.includes("Web browser"))).toEqual([false, true]);
+  // A browser signs in, so it isn't told to pair again.
+  expect(rows[1]!.textContent).toContain("sign in from that browser again");
+  expect(rows[1]!.textContent).not.toContain("pair it again");
+  await click([...rows[1]!.querySelectorAll("button")].find((b) => b.textContent === "Revoke")!);
+  expect(revokeDevice).toHaveBeenCalledWith("s-web");
+  expect(document.body.textContent).not.toContain("Safari on iPad");
 });

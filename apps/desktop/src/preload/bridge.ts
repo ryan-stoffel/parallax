@@ -7,6 +7,7 @@ import type {
   ErrorData,
   EventsEventParams,
   EventsSubscribeParams,
+  GuestLink,
   LogId,
   ShellSnapshot,
   ThreadSnapshot,
@@ -495,8 +496,33 @@ export interface ParallaxBridge {
    * Calls `listener` now and on every change. Returns the unsubscribe function.
    */
   onAccessRequests(listener: (requests: AccessPrompt[]) => void): () => void;
-  /** Allows or denies a new device's request. Resolves to an error for people, or undefined. */
-  answerAccess(id: string, allow: boolean): Promise<string | undefined>;
+  /**
+   * Allows or denies a new device's request. `readOnly` says how a web browser's request is
+   * allowed (0108): read-only unless it's false. Resolves to an error for people, or undefined.
+   */
+  answerAccess(id: string, allow: boolean, readOnly?: boolean): Promise<string | undefined>;
+  /**
+   * The link a browser takes this computer from at the hosted client (0108): its relay id in the
+   * fragment, and no secret. Resolves to an error for people when plxd can't say its id.
+   */
+  browserLink(): Promise<{ link: string } | string>;
+  /**
+   * Makes a guest link to thread `threadId` on `hostId` (0108), which ends the thread's last one.
+   * Main keeps its secret and no window gets it: `copyGuestLink` is the only way out. Resolves to
+   * the link, or an error for people.
+   */
+  shareWithGuest(
+    hostId: string,
+    threadId: string,
+    canSuggest: boolean,
+  ): Promise<GuestLink | string>;
+  /**
+   * Puts guest link `link`, with its secret, on the clipboard, and has main forget the secret.
+   * Resolves to whether it did: each link is copied once.
+   */
+  copyGuestLink(link: string): Promise<boolean>;
+  /** Has main forget guest link `link`'s secret, uncopied: its dialog closed, or it ended. */
+  forgetGuestLink(link: string): Promise<void>;
   /**
    * Revokes session `id` on this computer. A device signed in with the account also loses its key
    * here and on every other computer this app reaches (0091). Resolves to this computer's sessions,
@@ -877,6 +903,8 @@ export type AccessPrompt = {
   code: string;
   /** The computer it asked, by name. */
   host: string;
+  /** It's a web browser at the hosted client (0108), which Allow lets in read-only by default. */
+  hosted?: true;
 };
 
 /** Parallax Connect on this computer (0056). */
@@ -943,6 +971,8 @@ export const withheldMethods = [
   "access/setupCode",
   // Revoking goes through `revokeDevice`, which also removes the device's key everywhere (0091).
   "remote/revoke",
+  // Its answer carries a guest link's secret, which stays in main (0108): see `shareWithGuest`.
+  "guest/create",
   "terminal/open",
   "terminal/close",
   // A window's device streams go through `openDeviceStream`, which routes what plxd relays.

@@ -23,6 +23,8 @@ import type {
   ScheduledTask,
 } from "../../desktop/src/protocol/generated/protocol";
 import { msg } from "../../desktop/src/i18n";
+import { HOSTED_CLIENT_NAME, isHostedSession } from "../../desktop/src/preload/hostedClient";
+import { HOSTED_READ_ONLY } from "../../desktop/src/renderer/guestLinks";
 import { describeError } from "../../desktop/src/renderer/errors";
 import {
   accountOptions,
@@ -40,6 +42,7 @@ import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
 import { showAlert, showPrompt } from "./dialogStore";
 import { useComputer, useFleet, type Computer } from "./fleet";
+import { BrowserLinkSheet } from "./HostedClient";
 import { ago, type SettingsScreens } from "./nav";
 import { useRemoteSessions } from "./remoteSessions";
 import { NewThreadsSection, PhoneConnections } from "./Settings";
@@ -800,15 +803,24 @@ const fingerprint = (hex: string) => hex.toUpperCase().match(/../g)!.join(" ");
 const iconNames = { laptop: msg("Laptop"), desktop: msg("PC"), mini: msg("Mini PC"), server: msg("Server") };
 
 /**
- * Connections: the host's name and icon for Parallax Connect (0056), and pairing on its network
+ * Connections: the host's name and icon for Parallax Connect (0056), Parallax on the web, its
+ * `hostedClient` switch with Browser link's link and QR code (0108), and pairing on its network
  * (PLX-641): its switch, Open in a browser, Pair a device's one-time code, and the computers
  * paired with it, each to make read-only (PLX-1364) or revoke.
  */
 function ConnectionsPage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
-  const { revoke: revokeSession, makeReadOnly: makeSessionReadOnly } = useFleet();
+  const { revoke: revokeSession, makeReadOnly: makeSessionReadOnly, browserLink } = useFleet();
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
+  // The link Browser link is showing.
+  const [link, setLink] = useState<string>();
+  const hosted = settings?.hostedClient;
+  const openLink = async () => {
+    const answer = await browserLink(id);
+    if ("error" in answer) showAlert(t("Browser link"), answer.error);
+    else setLink(answer.link);
+  };
   const [picking, setPicking] = useState(false);
   const connect = can(m, "connect");
   const remote = can(m, "remote");
@@ -868,7 +880,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
       },
     );
 
-  if (!connect && !remote)
+  if (!connect && !remote && hosted === undefined)
     return (
       <Section>
         <Note>{t("Update plxd on this computer to change its connections here.")}</Note>
@@ -896,6 +908,33 @@ function ConnectionsPage({ m }: { m: Computer }) {
             last
             onPress={() => setPicking(true)}
           />
+        </Section>
+      )}
+      {hosted !== undefined && (
+        <Section>
+          <SwitchRow
+            title={t("Parallax on the web")}
+            detail={t(
+              "Use this computer at {{site}} in a web browser, and share a thread with a guest. Whoever publishes that site could read every thread a browser opens.",
+              { site: HOSTED_CLIENT_NAME },
+            )}
+            value={hosted}
+            onChange={(hostedClient) =>
+              void set({ hostedClient }, hostedClient ? t("Couldn't turn Parallax on the web on") : t("Couldn't turn Parallax on the web off"))
+            }
+            last={!hosted}
+          />
+          {hosted && (
+            <Row
+              title={t("Browser link")}
+              detail={t(
+                "Shows a link and a QR code that open this computer in a browser. They hold no secret: you allow the browser here before it gets in.",
+              )}
+              chevron
+              last
+              onPress={() => void openLink()}
+            />
+          )}
         </Section>
       )}
       {remote && on !== undefined && (
@@ -942,14 +981,16 @@ function ConnectionsPage({ m }: { m: Computer }) {
             <Row
               key={s.id}
               title={s.name || t("Unnamed computer")}
-              detail={
-                s.readOnly
+              detail={`${isHostedSession(s) ? `${t("Web browser")} · ` : ""}${
+                s.readOnly && isHostedSession(s)
+                  ? t(HOSTED_READ_ONLY, { paired: t("Paired {{date}}", { date: new Date(s.createdAt).toLocaleDateString() }) })
+                  : s.readOnly
                   ? t(
                       "Paired {{date}}. Read-only. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.",
                       { date: new Date(s.createdAt).toLocaleDateString() },
                     )
                   : t("Paired {{date}}", { date: new Date(s.createdAt).toLocaleDateString() })
-              }
+              }`}
               last={i === sessions.length - 1}
               right={
                 <View style={{ flexDirection: "row", gap: 16 }}>
@@ -974,6 +1015,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
         onChoose={(deviceIcon) => void set({ deviceIcon }, t("Couldn't change {{computer}}", { computer: m.machine.name }))}
         onClose={() => setPicking(false)}
       />
+      <BrowserLinkSheet link={link} onClose={() => setLink(undefined)} />
     </>
   );
 }

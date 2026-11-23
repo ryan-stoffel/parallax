@@ -3,6 +3,7 @@
 import { t } from "i18next";
 import {  } from "react-native";
 
+import { HOSTED_CLIENT_NAME } from "../../desktop/src/preload/hostedClient";
 import type { RouteChoices } from "../../desktop/src/preload/routeList";
 import { Limited } from "./access";
 import { Denied, type AccountHosts, type Listed } from "./accountHosts";
@@ -177,6 +178,24 @@ export function confirmDevice(device: string, code: string, onAllow: () => void,
     [
       { text: t("Deny"), style: "destructive", onPress: onDeny },
       { text: t("Allow"), onPress: onAllow },
+    ],
+  );
+}
+
+/**
+ * A web browser at the hosted client asks to use the user's computers (0108). It's named as a
+ * browser, since `name` is its own word, and the alert says to compare all six digits, which is
+ * what tells its request from one staged with the same name. Read-only is the button it leads
+ * with, and `onAllow` hears which was chosen.
+ */
+export function confirmBrowser(name: string, code: string, onAllow: (readOnly: boolean) => void, onDeny: () => void) {
+  showAlert(
+    t("Allow this web browser?"),
+    `${formatCode(code)}\n\n${t("{{name}} is a web browser at {{site}}, asking to use your computers. Allow it only if all six digits match the code the browser shows. A matching name isn't enough.", { name, site: HOSTED_CLIENT_NAME })} ${t("Full control also gives whoever publishes {{site}} control of your computers.", { site: HOSTED_CLIENT_NAME })}`,
+    [
+      { text: t("Deny"), style: "destructive", onPress: onDeny },
+      { text: t("Allow Full Control"), onPress: () => onAllow(false) },
+      { text: t("Allow Read-Only"), onPress: () => onAllow(true) },
     ],
   );
 }

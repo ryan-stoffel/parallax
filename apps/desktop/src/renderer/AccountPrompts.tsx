@@ -1,4 +1,5 @@
 import { t } from "i18next";
+import { Globe } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -10,8 +11,10 @@ import {
 } from "react";
 
 import type { AccessPrompt, DeviceHost } from "../preload/bridge";
+import { HOSTED_CLIENT_NAME } from "../preload/hostedClient";
 import { DeviceIcon } from "./DeviceIcon";
 import { primaryButton, quietButton } from "./settings/parts";
+import { Checkbox } from "./ui";
 
 /** 6 digits as both ends show them: "123 456". */
 export const spacedCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
@@ -356,35 +359,59 @@ function AddedDialog({ name, onClose }: { name: string; onClose: () => void }) {
 /**
  * One of the user's devices asks to sign in to their computers (0091). Allow only if that device
  * shows the same code: a request the user didn't start, or another code, is someone else's.
+ *
+ * A request from the hosted client (0108) is named as a web browser, since the name it gives is
+ * its own word. Read-only is ticked, so Allow lets it read threads and change nothing unless the
+ * user unticks it. It says to compare all six digits: a relay could stage a prompt with the
+ * expected name, and only the digits tell that one from the browser's. Deny has the focus and
+ * Enter never allows it, so allowing a browser takes a click on Allow.
  */
 export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClose: () => void }) {
   const [busy, setBusy] = useState<"allow" | "deny">();
   const [error, setError] = useState<string>();
+  const [readOnly, setReadOnly] = useState(true);
+  const deny = useRef<HTMLButtonElement>(null);
+  // After the dialog opens, which focuses its first control: the Read-only box.
+  useEffect(() => {
+    if (request.hosted) deny.current?.focus();
+  }, [request.hosted]);
   const answer = async (allow: boolean) => {
     setBusy(allow ? "allow" : "deny");
-    const failed = await window.parallax.answerAccess(request.id, allow);
+    const failed = await (request.hosted && allow
+      ? window.parallax.answerAccess(request.id, true, readOnly)
+      : window.parallax.answerAccess(request.id, allow));
     setBusy(undefined);
     if (failed) setError(failed);
     else onClose();
   };
   return (
     <Modal
-      title={t("Allow {{name}}?", { name: request.name })}
+      title={
+        request.hosted ? t("Allow this web browser?") : t("Allow {{name}}?", { name: request.name })
+      }
+      icon={
+        request.hosted && <Globe aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+      }
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
-        void answer(true);
+        if (!request.hosted) void answer(true);
       }}
     >
       <p className="mt-1.5 text-body text-muted-foreground">
-        {request.host
+        {request.hosted
           ? t(
-              "It's asking to use your computers, starting with {{host}}. Allow it only if {{name}} shows this code.",
-              { host: request.host, name: request.name },
+              "{{name}} is a web browser at {{site}}, asking to use your computers. Allow it only if all six digits match the code the browser shows. A matching name isn't enough.",
+              { name: request.name, site: HOSTED_CLIENT_NAME },
             )
-          : t("It's asking to use your computers. Allow it only if {{name}} shows this code.", {
-              name: request.name,
-            })}
+          : request.host
+            ? t(
+                "It's asking to use your computers, starting with {{host}}. Allow it only if {{name}} shows this code.",
+                { host: request.host, name: request.name },
+              )
+            : t("It's asking to use your computers. Allow it only if {{name}} shows this code.", {
+                name: request.name,
+              })}
       </p>
       <p
         aria-label={t("Code", { context: "pairing code" })}
@@ -392,6 +419,19 @@ export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClo
       >
         {spacedCode(request.code)}
       </p>
+      {request.hosted && (
+        <div className="mt-3">
+          <Checkbox checked={readOnly} onChange={setReadOnly}>
+            {t("Read-only")}
+          </Checkbox>
+          <p className="mt-1 pl-6 text-meta text-muted-foreground">
+            {t(
+              "It reads threads and can't change anything. Unticked, the browser gets full control of your computers, and so does whoever publishes {{site}}.",
+              { site: HOSTED_CLIENT_NAME },
+            )}
+          </p>
+        </div>
+      )}
       {error && (
         <p role="alert" className="mt-2 text-body text-danger">
           {error}
@@ -399,6 +439,7 @@ export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClo
       )}
       <div className="mt-4 flex justify-end gap-2">
         <button
+          ref={deny}
           type="button"
           className={quietButton}
           disabled={!!busy}
@@ -406,7 +447,12 @@ export function AllowDialog({ request, onClose }: { request: AccessPrompt; onClo
         >
           {busy === "deny" ? t("Denying…") : t("Deny")}
         </button>
-        <button type="submit" className={primaryButton} disabled={!!busy}>
+        <button
+          type={request.hosted ? "button" : "submit"}
+          className={primaryButton}
+          disabled={!!busy}
+          onClick={request.hosted ? () => void answer(true) : undefined}
+        >
           {busy === "allow" ? t("Allowing…") : t("Allow")}
         </button>
       </div>

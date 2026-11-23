@@ -1,11 +1,12 @@
 import { t } from "i18next";
-import { Activity, KeyRound, Plus, Terminal } from "lucide-react";
+import { Activity, KeyRound, Plus, QrCode as QrCodeIcon, Terminal } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
 import { msg } from "../../i18n";
 
 import type { ConnectState } from "../../preload/bridge";
+import { HOSTED_CLIENT_NAME, isHostedSession } from "../../preload/hostedClient";
 import type {
   RelayCheckPart,
   RelayCheckResult,
@@ -14,11 +15,13 @@ import type {
   RemoteSessionsResult,
 } from "../../protocol/generated/protocol";
 import { useCopy } from "../AgentChat";
+import { HOSTED_READ_ONLY } from "../guestLinks";
 import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { dismiss, notify } from "../notifications";
 import { useProfile } from "../profile";
 import { ParallaxMark } from "../logos";
+import { QrCode } from "../QrCode";
 import { Dialog } from "../ui";
 import { AccessRow, badge, card, CollapsibleCard } from "./connectionParts";
 import {
@@ -84,7 +87,8 @@ export function useAccountSignIn() {
 /**
  * How computers reach this one, read from the local plxd, with what changes it: Parallax Connect,
  * its `relay`, which registers it with Parallax Relay (PLX-652); pairing on the same
- * network, its `remote` (PLX-641, 0065), and Open in a browser, its `remoteWeb` (PLX-651); and
+ * network, its `remote` (PLX-641, 0065), and Open in a browser, its `remoteWeb` (PLX-651);
+ * Parallax on the web, its `hostedClient` (0108); and
  * `agentWork` (0101), which it and pairing change in each other. With them, the devices paired with
  * or signed in to this computer, which can be revoked or made read-only (PLX-1364), a pairing code
  * while one is on show, and the account's computers on the relay while Parallax Connect is on.
@@ -101,6 +105,8 @@ export function useLocalAccess() {
   const [on, setOn] = useState<boolean>();
   const [web, setWeb] = useState<boolean>();
   const [relay, setRelay] = useState<boolean>();
+  // This computer's `hostedClient`, on a plxd that has it.
+  const [hosted, setHosted] = useState<boolean>();
   // This computer's `agentWork`, on a plxd that has it.
   const [agentWork, setAgentWork] = useState<boolean>();
   const [relayHosts, setRelayHosts] = useState<RelayHost[]>();
@@ -142,6 +148,7 @@ export function useLocalAccess() {
       setOn(answer.result.remote);
       setWeb(answer.result.remoteWeb);
       setRelay(answer.result.relay);
+      setHosted(answer.result.hostedClient);
       setAgentWork(answer.result.agentWork);
     });
     void readSessions();
@@ -181,6 +188,8 @@ export function useLocalAccess() {
     on,
     web,
     relay,
+    /** `hostedClient`: undefined until plxd answers, and on one that doesn't have it. */
+    hosted,
     agentWork,
     status,
     sessions,
@@ -230,6 +239,22 @@ export function useLocalAccess() {
           answer.error.message,
         );
       setWeb(answer.result.remoteWeb);
+    },
+    // Off, plxd ends every browser and guest on this computer at once (0108).
+    toggleHosted: async (next: boolean) => {
+      retry();
+      const answer = await window.parallax.request(localId, "host/settings/set", {
+        hostedClient: next,
+      });
+      if ("error" in answer)
+        return failed(
+          next
+            ? t("Couldn't turn Parallax on the web on")
+            : t("Couldn't turn Parallax on the web off"),
+          answer.error.message,
+        );
+      setHosted(answer.result.hostedClient);
+      void readSessions();
     },
     // On, it registers this computer under the signed-in account first: main sends the token to plxd.
     toggleRelay: async (next: boolean) => {
@@ -300,7 +325,10 @@ const SSH_SETTING: Record<string, string> = {
  * on, whether it's connected and how many of the account's computers there are, and Check connection
  * (PLX-1356), which opens a real stream back to this computer, says which part failed and what to
  * do, and copies a report with no secret in it. It runs only when asked, since each run counts
- * against the relay's streams a minute. Under it, the setup code another computer adds this one with.
+ * against the relay's streams a minute. Under it, the setup code another computer adds this one with,
+ * and Parallax on the web (0108): this computer's `hostedClient` switch, with what the hosted
+ * client's publisher could read, and Browser link, which shows the link and QR code a browser
+ * takes this computer from, while that switch and Connect are both on.
  */
 export function ConnectCard({
   access,
@@ -320,6 +348,7 @@ export function ConnectCard({
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<RelayCheckResult | string>();
   const [copied, copy] = useCopy();
+  const [showingLink, setShowingLink] = useState(false);
   const check = async () => {
     setChecking(true);
     setResult(await window.parallax.checkRelay());
@@ -435,8 +464,110 @@ export function ConnectCard({
             {t("Show setup code")}
           </button>
         </AccessRow>
+        {access.hosted !== undefined && (
+          <AccessRow
+            title={t("Parallax on the web")}
+            description={t(
+              "Use this computer at {{site}} in a web browser, and share a thread with a guest. Whoever publishes that site could read every thread a browser opens.",
+              { site: HOSTED_CLIENT_NAME },
+            )}
+            status={
+              access.hosted &&
+              !relay && (
+                <span className="mt-1 block text-meta text-warning">
+                  {t("Needs Parallax Connect")}
+                </span>
+              )
+            }
+          >
+            <Switch
+              label={t("Parallax on the web")}
+              checked={access.hosted}
+              onChange={(next) => void access.toggleHosted(next)}
+            />
+          </AccessRow>
+        )}
+        {access.hosted !== undefined && (
+          <AccessRow
+            title={t("Browser link")}
+            description={t(
+              "Shows a link and a QR code that open this computer in a browser. They hold no secret: you allow the browser here before it gets in.",
+            )}
+          >
+            <button
+              type="button"
+              disabled={!access.hosted || !relay}
+              onClick={() => setShowingLink(true)}
+              className={outlineButton}
+            >
+              <QrCodeIcon aria-hidden />
+              {t("Show link")}
+            </button>
+          </AccessRow>
+        )}
       </div>
+      {showingLink && <BrowserLinkDialog onClose={() => setShowingLink(false)} />}
     </section>
+  );
+}
+
+/**
+ * Browser link (0108), a modal dialog open while it's mounted: the link a browser takes this
+ * computer from, as a QR code and as text to copy. The link holds this computer's id and no
+ * secret, so the dialog says what does let the browser in: Allow here, after all six digits match.
+ */
+export function BrowserLinkDialog({ onClose }: { onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const [link, setLink] = useState<{ link: string } | string>();
+  const [copied, copy] = useCopy();
+  useEffect(() => {
+    dialog.current?.showModal();
+    void window.parallax.browserLink().then(setLink);
+  }, []);
+  return (
+    <Dialog ref={dialog} width="sm" aria-labelledby={titleId} onClose={onClose}>
+      <form method="dialog" className="flex flex-col gap-3 px-5 pt-4 pb-4">
+        <div>
+          <h2 id={titleId} className="text-reading font-semibold">
+            {t("Browser link")}
+          </h2>
+          <p className="mt-1.5 text-body text-muted-foreground">
+            {t(
+              "Scan this code, or open the link, in the browser you want to use. The browser then shows a 6-digit code. Allow it here only if all six digits match.",
+            )}
+          </p>
+        </div>
+        {typeof link === "string" ? (
+          <p role="alert" className="text-body text-danger">
+            {link}
+          </p>
+        ) : (
+          link && (
+            <>
+              <QrCode
+                value={link.link}
+                label={t("QR code for the link")}
+                className="mx-auto size-44"
+              />
+              <p className="rounded-md border border-border px-3 py-2 font-mono text-meta break-all select-text">
+                {link.link}
+              </p>
+            </>
+          )
+        )}
+        <div className="flex justify-end gap-2">
+          {typeof link === "object" && (
+            <button type="button" className={quietButton} onClick={() => copy(link.link)}>
+              {copied ? t("Copied") : t("Copy link")}
+            </button>
+          )}
+          <button type="submit" className={primaryButton}>
+            {t("Done")}
+          </button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -596,7 +727,8 @@ export function MoreWaysIn({
 /**
  * Sharing & access' Devices with access, a card that opens and closes: the phones, browsers, and
  * computers paired with or signed in to this computer, counted in its heading, each with Revoke and
- * Make read-only (PLX-1364), shown with pairing off too. Pair a device, in its heading, shows a
+ * Make read-only (PLX-1364), shown with pairing off too. A browser at the hosted client is marked
+ * Web browser (0108). Pair a device, in its heading, shows a
  * short one-time code while this computer advertises itself by name over mDNS, with what a paired
  * computer can do beside it. With pairing off, the card says how to pair one, and is where a search
  * for Pair a device lands.
@@ -664,6 +796,9 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
               <div className="min-w-[min(14rem,100%)] flex-1">
                 <span className="flex items-center gap-2 text-body font-medium">
                   <span className="truncate">{s.name || t("Unnamed computer")}</span>
+                  {isHostedSession(s) && (
+                    <span className={`${badge} text-muted-foreground`}>{t("Web browser")}</span>
+                  )}
                   {s.readOnly && (
                     <span className={`${badge} text-muted-foreground`}>{t("Read-only")}</span>
                   )}
@@ -671,12 +806,14 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
                 <span className="mt-0.5 block text-meta text-muted-foreground">
                   {confirming === s.id
                     ? `${t("Make this computer read-only on all your computers? It can read threads but not change anything.")} ${t(READ_ONLY_FOR_GOOD)}`
-                    : s.readOnly
-                      ? t(
-                          "{{paired}}. It reads threads and can't change anything. For full access, revoke it, then pair it again or choose Start over with a new key on that device.",
-                          { paired },
-                        )
-                      : paired}
+                    : s.readOnly && isHostedSession(s)
+                      ? t(HOSTED_READ_ONLY, { paired })
+                      : s.readOnly
+                        ? t(
+                            "{{paired}}. It reads threads and can't change anything. For full access, revoke it, then pair it again or choose Start over with a new key on that device.",
+                            { paired },
+                          )
+                        : paired}
                 </span>
               </div>
               <div className="ml-auto flex shrink-0 items-center gap-2">

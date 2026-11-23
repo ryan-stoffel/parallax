@@ -50,6 +50,7 @@ import { counts, editRows } from "./diffLogic";
 import { FileCard, openLinked } from "./FileCard";
 import { useComputer, useFleet } from "./fleet";
 import { ForkSheet } from "./ForkSheet";
+import { GuestShareSheet } from "./HostedClient";
 import { GlassButton } from "./Glass";
 import { openLightbox } from "./Lightbox";
 import { MessageMenu } from "./MessageMenu";
@@ -553,6 +554,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const [trace, setTrace] = useState<{ key: string; title: string; items: Item[]; start?: string; n: number }>();
   const [traceOpen, setTraceOpen] = useState(false);
   const [forking, setForking] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const state = computer?.view.state;
   const thread = state?.threads.find((t) => t.id === runId);
   const run = state?.runs[runId];
@@ -632,6 +634,10 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                   // As on the desktop: an orchestrator's chat isn't forked.
                   ...(run && computer && "threadFork" in computer.view.capabilities && !state?.orchestrators.some((o) => o.run === runId)
                     ? [{ type: "action" as const, label: t("Fork"), icon: symbol("arrow.triangle.branch"), onPress: () => setForking(true) }]
+                    : []),
+                  // As on the desktop: a guest link shows one thread that isn't archived or an orchestrator's.
+                  ...(computer && "guestLinks" in computer.view.capabilities && !thread?.archived && !state?.orchestrators.some((o) => o.run === runId)
+                    ? [{ type: "action" as const, label: t("Share with guest"), icon: symbol("person.badge.plus"), onPress: () => setSharing(true) }]
                     : []),
                   {
                     type: "action",
@@ -862,6 +868,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           }
           running={isRunning(transcript.run?.status)}
           stalled={stalled}
+          guests={"guestLinks" in (computer?.view.capabilities ?? {})}
           original={
             original && {
               name: state?.titles[original.id] ?? t("Thread"),
@@ -895,6 +902,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
             onForked={(id) => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: id } }] })}
           />
         )}
+        {computer && <GuestShareSheet computer={computer} runId={runId} open={sharing} onClose={() => setSharing(false)} />}
       </KeyboardAvoidingView>
     </RowContext>
   );

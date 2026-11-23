@@ -21,6 +21,7 @@ import {
   KeyRound,
   Pencil,
   Target,
+  UserRoundPlus,
   X,
 } from "lucide-react-native";
 import { useRef, useState, type ReactNode } from "react";
@@ -31,9 +32,11 @@ import { LayoutAnimation, Pressable, ScrollView, StyleSheet, TextInput, View } f
 import type {
   AgentBackgroundTask,
   AgentTodoItem,
+  GuestLink,
   OrchestrationCommand,
   QueuedMessage,
 } from "../../desktop/src/protocol/generated/protocol";
+import { setGuestLinks, useGuestLink } from "../../desktop/src/renderer/guestLinks";
 import { useInbox } from "../../desktop/src/renderer/Inbox";
 import { latestPlan } from "../../desktop/src/renderer/plans";
 import { questionsOf } from "../../desktop/src/renderer/questions";
@@ -477,6 +480,33 @@ function QueueList({
   );
 }
 
+/**
+ * The messages the thread's guest suggested (0108), each whole, so it's read before Send makes it
+ * the user's own turn. Dismiss drops it.
+ */
+function GuestList({ hostId, link, connected }: { hostId: string; link: GuestLink; connected: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const off = busy || !connected;
+  async function answer(method: "guest/send" | "guest/dismiss", suggestion: string) {
+    setBusy(true);
+    const done = await window.parallax.request(hostId, method, { link: link.id, suggestion });
+    setBusy(false);
+    if ("error" in done) showAlert(t("Couldn't answer the guest's message"), done.error.message);
+    else setGuestLinks(hostId, done.result);
+  }
+  return (
+    <>
+      {(link.suggestions ?? []).map((s) => (
+        <View key={s.id} style={[styles.line, { alignItems: "flex-start" }]}>
+          <T style={{ ...text, flex: 1 }}>{s.text}</T>
+          <Action icon={ArrowUp} label={t("Send")} disabled={off} onPress={() => void answer("guest/send", s.id)} />
+          <Action icon={X} label={t("Dismiss")} disabled={off} onPress={() => void answer("guest/dismiss", s.id)} />
+        </View>
+      ))}
+    </>
+  );
+}
+
 /** What a settled turn waits on, in full, and Stop, which ends it all. */
 function WaitingList({
   hostId,
@@ -537,6 +567,7 @@ export function ThreadStrips({
   running,
   stalled,
   connected,
+  guests,
   parent,
   original,
 }: {
@@ -555,6 +586,8 @@ export function ThreadStrips({
   /** Whether the transcript stopped updating or the computer is away, so nothing shows in progress. */
   stalled: boolean;
   connected: boolean;
+  /** Whether the computer's plxd makes guest links (0108), so the thread may have a guest's messages. */
+  guests: boolean;
   /** The thread this one is a child of, and how to open it. */
   parent?: { name: string; open: () => void };
   /** The thread this one was forked from, and how to open it. */
@@ -568,6 +601,28 @@ export function ThreadStrips({
   const { items: inboxItems } = useInbox(hostId, inbox?.orchestrator ?? "", connected && !!inbox && focused, false);
   const secret = waitingSecrets(items)[0];
   const tabs: Tab[] = [];
+
+  // Messages the thread's guest suggested lead the line: each waits on Send or Dismiss.
+  const guestLink = useGuestLink(hostId, runId, connected && guests);
+  const suggested = guestLink?.suggestions?.length ?? 0;
+  if (guestLink && suggested > 0) {
+    const from = (
+      <>
+        <Icon icon={UserRoundPlus} size={14} color={c.mutedForeground} />
+        <T muted numberOfLines={1} style={text}>
+          {t("From your guest")}
+        </T>
+        <Count n={suggested} />
+      </>
+    );
+    tabs.push({
+      key: "guest",
+      label: t("Messages your guest suggested"),
+      full: from,
+      compact: from,
+      panel: <GuestList hostId={hostId} link={guestLink} connected={connected} />,
+    });
+  }
 
   if (parent)
     tabs.push({

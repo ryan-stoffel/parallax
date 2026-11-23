@@ -1,4 +1,4 @@
-import { app, ipcMain, net, powerMonitor, type WebContents } from "electron";
+import { app, clipboard, ipcMain, net, powerMonitor, type WebContents } from "electron";
 import { t } from "i18next";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
@@ -16,6 +16,7 @@ import {
   type AccessState,
   type CliKind,
   type DeviceStreamParams,
+  type GuestLink,
   type RelayCheckResult,
   type RelayHost,
   type RelayHostsResult,
@@ -44,6 +45,7 @@ import {
   type SubscribeParams,
   type WatchParams,
 } from "../preload/bridge";
+import { connectLink, guestLink } from "../preload/hostedClient";
 import { editRoutes, routeList, type RouteEdit } from "../preload/routeList";
 import {
   accountId,
@@ -329,11 +331,25 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
   ipcMain.handle("parallax:makeDeviceReadOnly", (_event, id: unknown) => makeDeviceReadOnly(id));
   ipcMain.handle("parallax:turnOnReach", (_event, hostId: unknown) => turnOnReach(hostId));
-  ipcMain.handle("parallax:answerAccess", (_event, id: unknown, allow: unknown) =>
-    typeof id === "string" && typeof allow === "boolean"
-      ? answerAccess(id, allow)
-      : "invalid request",
+  ipcMain.handle(
+    "parallax:answerAccess",
+    (_event, id: unknown, allow: unknown, readOnly: unknown) =>
+      typeof id === "string" &&
+      typeof allow === "boolean" &&
+      (readOnly === undefined || typeof readOnly === "boolean")
+        ? answerAccess(id, allow, readOnly)
+        : "invalid request",
   );
+  ipcMain.handle("parallax:browserLink", () => browserLink());
+  ipcMain.handle(
+    "parallax:shareWithGuest",
+    (_event, hostId: unknown, threadId: unknown, canSuggest: unknown) =>
+      shareWithGuest(hostId, threadId, canSuggest === true),
+  );
+  ipcMain.handle("parallax:copyGuestLink", (_event, link: unknown) => copyGuestLink(link));
+  ipcMain.handle("parallax:forgetGuestLink", (_event, link: unknown) => {
+    if (typeof link === "string") guestSecrets.delete(link);
+  });
 
   ipcMain.handle("parallax:hosts", () => listedHosts(settings));
   ipcMain.handle("parallax:sshSuggestions", () => sshSuggestions(homedir()));
@@ -3058,7 +3074,13 @@ function showRequest(hostId: string, pending: AccessRequest | undefined): void {
         ? localName()
         : (accountOf(hostId)?.name ?? deviceOf(hostId)?.name ?? deviceOf(hostId)?.hostName ?? "");
     const shown = prompts.get(pending.id) ?? {
-      prompt: { id: pending.id, name: pending.name, code: pending.code, host },
+      prompt: {
+        id: pending.id,
+        name: pending.name,
+        code: pending.code,
+        host,
+        ...(pending.hosted && { hosted: true as const }),
+      },
       hosts: new Set<string>(),
     };
     shown.hosts.add(hostId);
@@ -3070,16 +3092,26 @@ function showRequest(hostId: string, pending: AccessRequest | undefined): void {
 
 /**
  * `window.parallax.answerAccess`: allows or denies a new device's request on a computer showing
- * it. Allowing copies the device's key to the user's other computers. Resolves to an error for
+ * it. Allowing copies the device's key to the user's other computers. `readOnly` says how a web
+ * browser's request is allowed (0108): absent, plxd allows it read-only. Resolves to an error for
  * people.
  */
-async function answerAccess(id: string, allow: boolean): Promise<string | undefined> {
+async function answerAccess(
+  id: string,
+  allow: boolean,
+  readOnly?: boolean,
+): Promise<string | undefined> {
   const shown = prompts.get(id);
   if (!shown) return t("That request isn't waiting anymore.");
   let why = t("Parallax isn't connected to that computer.");
   for (const hostId of shown.hosts) {
-    const method = allow ? "access/approve" : "access/deny";
-    const answer = await connections.get(hostId)?.request(method, { request: id });
+    const host = connections.get(hostId);
+    const answer = allow
+      ? await host?.request("access/approve", {
+          request: id,
+          ...(readOnly !== undefined && { readOnly }),
+        })
+      : await host?.request("access/deny", { request: id });
     if (!answer) continue;
     if ("error" in answer) {
       why = answer.error.message;
@@ -3091,6 +3123,59 @@ async function answerAccess(id: string, allow: boolean): Promise<string | undefi
   return allow
     ? t("Parallax couldn't allow it: {{why}}", { why })
     : t("Parallax couldn't deny it: {{why}}", { why });
+}
+
+/**
+ * `window.parallax.browserLink`: the link a browser takes this computer from (0108), its relay id
+ * in the fragment and no secret, or why there's none, for people.
+ */
+async function browserLink(): Promise<{ link: string } | string> {
+  const own = await connections.get("local")?.request("relay/id", {});
+  if (!own) return t("Parallax isn't connected to this computer's plxd.");
+  return "error" in own ? own.error.message : { link: connectLink(own.result.hostId) };
+}
+
+/**
+ * The secrets of the guest links this app made and hasn't copied yet (0108), by link id: each
+ * `guest/create`'s `fragment`. Here in memory and nowhere else. No window is sent one, and none is
+ * written to settings, a log, or usage data. Copying a link takes its secret out, as does closing
+ * its dialog or ending it.
+ */
+const guestSecrets = new Map<string, string>();
+
+/**
+ * `window.parallax.shareWithGuest`: makes a guest link to thread `threadId` on `hostId`, which
+ * ends the thread's last one, and keeps its secret here until `copyGuestLink`. Answers the link
+ * without its secret, or why not, for people.
+ */
+async function shareWithGuest(
+  hostId: unknown,
+  threadId: unknown,
+  canSuggest: boolean,
+): Promise<GuestLink | string> {
+  const host = typeof hostId === "string" ? connections.get(hostId) : undefined;
+  if (!host || typeof threadId !== "string") return "invalid request";
+  const answer = await host.request("guest/create", {
+    threadId,
+    ...(canSuggest && { canSuggest }),
+  });
+  if ("error" in answer) return answer.error.message;
+  const { link, fragment } = answer.result;
+  guestSecrets.set(link.id, fragment);
+  return link;
+}
+
+/**
+ * `window.parallax.copyGuestLink`: puts guest link `link` on the clipboard and forgets its secret.
+ * Answers whether it had one: a link is copied once, and a new link replaces a lost one.
+ */
+async function copyGuestLink(link: unknown): Promise<boolean> {
+  if (typeof link !== "string") return false;
+  const fragment = guestSecrets.get(link);
+  if (fragment === undefined) return false;
+  guestSecrets.delete(link);
+  await clipboard.writeText(guestLink(fragment));
+  return true;
 }
 
 /**

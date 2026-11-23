@@ -21,14 +21,16 @@ import type { ConnectionState, KeyStanding, RpcResponse } from "../../desktop/sr
 import type { RouteEdit } from "../../desktop/src/preload/routeList";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
-import type { AccessState, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
+import type { AccessState, GuestLink, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
+import { connectLink } from "../../desktop/src/preload/hostedClient";
 import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { logAppEvent } from "./connectionLog";
 import { lacks } from "./access";
 import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { allowThisPhone, askToAllow, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
+import { allowThisPhone, askToAllow, confirmBrowser, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
 import { showAlert } from "./dialogStore";
+import { createGuestLink } from "./guestShare";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
@@ -95,6 +97,16 @@ interface FleetValue {
    * this phone reaches. Nothing undoes it (0091). Answers that computer's sessions, or why not.
    */
   makeReadOnly: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
+  /**
+   * The link a browser takes computer `id` from at the hosted client (0108): its relay id in the
+   * fragment, and no secret. Answers why not, for people, when it can't say its id.
+   */
+  browserLink: (id: string) => Promise<{ link: string } | { error: string }>;
+  /**
+   * Makes a guest link to thread `threadId` on computer `id` (0108). Its secret stays in
+   * `guestShare`. Answers the link without it, or why not, for people.
+   */
+  shareWithGuest: (id: string, threadId: string, canSuggest: boolean) => Promise<GuestLink | string>;
   /** Unsent text, by thread. */
   drafts: Map<string, string>;
 }
@@ -423,13 +435,16 @@ export function FleetProvider({
         const pending = state.pending;
         if (!pending?.code || asked.has(pending.id)) continue;
         asked.add(pending.id);
-        const decide = (method: "access/approve" | "access/deny") =>
-          void host.request(method, { request: pending.id }).then((done) => {
+        // `readOnly` says how a web browser's request is allowed (0108).
+        const decide = (method: "access/approve" | "access/deny", readOnly?: boolean) =>
+          void host.request(method, { request: pending.id, ...(readOnly !== undefined && { readOnly }) }).then((done) => {
             if ("error" in done) showAlert(t("Couldn't answer the request"), done.error.message);
             // Approved here, it's approved on the computers that accept this one's lists.
             else if (method === "access/approve") void share();
           });
-        confirmDevice(pending.name, pending.code, () => decide("access/approve"), () => decide("access/deny"));
+        if (pending.hosted)
+          confirmBrowser(pending.name, pending.code, (readOnly) => decide("access/approve", readOnly), () => decide("access/deny"));
+        else confirmDevice(pending.name, pending.code, () => decide("access/approve"), () => decide("access/deny"));
       }
     })();
   }
@@ -622,6 +637,17 @@ export function FleetProvider({
       if ("error" in answer) return { error: answer.error.message };
       void share();
       return answer.result as RemoteSessionsResult;
+    },
+    async browserLink(id) {
+      const answer = await fleet.hosts.get(id)?.request("relay/id", {});
+      if (!answer) return { error: t("That computer isn't connected.") };
+      if ("error" in answer) return { error: answer.error.message };
+      return { link: connectLink((answer.result as { hostId: string }).hostId) };
+    },
+    async shareWithGuest(id, threadId, canSuggest) {
+      const host = fleet.hosts.get(id);
+      if (!host) return t("That computer isn't connected.");
+      return createGuestLink((method, params) => host.request(method, params), threadId, canSuggest);
     },
     drafts,
   };
