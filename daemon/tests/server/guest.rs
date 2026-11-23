@@ -577,7 +577,10 @@ async fn a_guest_gets_only_its_threads_transcript_built_for_it() {
         assert!(shown.iter().any(|k| k == kind), "{kind} in {shown:?}");
     }
     let snapshot_text = answer.to_string();
-    assert!(snapshot_text.contains("Reading the code."), "the agent's reply");
+    assert!(
+        snapshot_text.contains("Reading the code."),
+        "the agent's reply"
+    );
     assert!(!snapshot_text.contains(&other.to_string()));
 
     // Older pages are built the same way.
