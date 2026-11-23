@@ -3080,6 +3080,35 @@ mod tests {
     const JUST_UNDER: Duration = HOLD.saturating_sub(Duration::from_secs(1));
 
     #[test]
+    fn a_links_end_cuts_its_own_streams_alone() {
+        let relay = Relay::new(DEFAULT_URL.to_owned());
+        let marks = [
+            Mark::Guest("a".to_owned()),
+            Mark::Guest("b".to_owned()),
+            Mark::Hosted,
+            Mark::None,
+        ];
+        let streams: Vec<_> = marks
+            .into_iter()
+            .enumerate()
+            .map(|(port, mark)| {
+                let stream = Arc::new(RelayStream {
+                    stop: CancellationToken::new(),
+                    end: EndSlot::default(),
+                    mark,
+                    cut: CancellationToken::new(),
+                });
+                let from = SocketAddr::from(([127, 0, 0, 1], u16::try_from(port).unwrap() + 1));
+                relay.listed().insert(from, Arc::clone(&stream));
+                stream
+            })
+            .collect();
+        relay.cut_guest("a");
+        let cut: Vec<_> = streams.iter().map(|s| s.cut.is_cancelled()).collect();
+        assert_eq!(cut, [true, false, false, false]);
+    }
+
+    #[test]
     fn an_open_frame_marks_its_stream_and_a_guest_mark_wins() {
         let mark = |open: Value| Mark::of(&open);
         assert_eq!(mark(json!({ "t": "open", "stream": "s" })), Mark::None);

@@ -445,12 +445,17 @@ async fn guest_sign_in_refuses_a_bad_body_a_missing_proof_and_a_replayed_one() {
     let replayed = https(port, "POST", path, &[("DPoP", &fresh)], &body).await;
     assert_eq!(replayed.0, 401, "a replayed proof");
 
-    // A ticket opens no guest's socket.
+    // A ticket opens no guest's socket, even beside the bound key's proof.
     let (tls, _) = remote::open(&guest.route, None).await.unwrap();
-    let request = format!("wss://{}/ws?wsTicket=anything", guest.route)
+    let mut request = format!("wss://{}/ws?wsTicket=anything", guest.route)
         .into_client_request()
         .unwrap();
+    let proof = guest
+        .key
+        .proof("GET", &format!("https://{}/ws", guest.route), None);
+    request.headers_mut().insert("dpop", proof.parse().unwrap());
     assert!(tokio_tungstenite::client_async(request, tls).await.is_err());
+    assert!(guest.socket().await.is_some(), "without one it opens");
     host.server.stop().await;
 }
 
@@ -548,6 +553,32 @@ async fn a_guest_sees_only_its_threads_events_of_the_listed_kinds() {
             "{hidden}"
         );
     }
+    // Older pages hold the same, though the thread's own log has more kinds.
+    let (page, _) = socket
+        .call(
+            "orchestration/threadHistory",
+            json!({ "threadId": thread, "before": 1_000_000 }),
+        )
+        .await;
+    let page = page["result"]["events"].as_array().unwrap().clone();
+    assert!(!page.is_empty());
+    for logged in &page {
+        assert!(
+            SHOWN.contains(&logged["event"]["kind"].as_str().unwrap()),
+            "{logged}"
+        );
+    }
+    let owner = host
+        .client
+        .call::<parallax_protocol::methods::OrchestrationThreadHistory>(
+            parallax_protocol::ThreadHistoryParams {
+                thread_id: thread,
+                before: 1_000_000,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(owner.events.len() > page.len(), "the owner's page has more");
 
     // Another turn on the other thread, then on this one: only this one's listed events come.
     for run in [other, thread] {

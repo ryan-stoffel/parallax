@@ -497,22 +497,44 @@ pub(super) fn admit(
     if !link.bound_to(&proven.thumbprint) {
         return Err(refused("a key this guest link isn't bound to"));
     }
+    let connection = closes_with(&link.ended, closing);
+    Ok((link, connection))
+}
+
+/// A token for one connection that `closing` or `ended` cancels, whichever comes first.
+fn closes_with(ended: &CancellationToken, closing: &CancellationToken) -> CancellationToken {
     let connection = closing.child_token();
-    let (ended, closes) = (link.ended.clone(), connection.clone());
+    let (ended, closes) = (ended.clone(), connection.clone());
     tokio::spawn(async move {
         tokio::select! {
             () = ended.cancelled() => closes.cancel(),
             () = closes.cancelled() => {}
         }
     });
-    Ok((link, connection))
+    connection
 }
 
 #[cfg(test)]
 mod tests {
     use parallax_protocol::{ParallaxEvent, RunId};
 
-    use super::{derive, shown};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{closes_with, derive, shown};
+
+    #[tokio::test]
+    async fn a_guests_connection_closes_when_its_link_ends_or_its_listener_closes() {
+        let (ended, closing) = (CancellationToken::new(), CancellationToken::new());
+        let connection = closes_with(&ended, &closing);
+        ended.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), connection.cancelled())
+            .await
+            .expect("the link's end closes it");
+        assert!(!closing.is_cancelled(), "and nothing else");
+        let other = closes_with(&CancellationToken::new(), &closing);
+        closing.cancel();
+        assert!(other.is_cancelled(), "the listener's close does too");
+    }
 
     #[test]
     fn the_secret_derives_two_unrelated_keys_the_same_way_each_time() {
