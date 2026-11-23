@@ -861,5 +861,16 @@ async fn a_guests_suggestion_waits_until_the_owner_sends_or_dismisses_it() {
     assert!(sent, "the sent message is in the thread");
     let again = host.client.call::<GuestSend>(answer(first)).await;
     assert_eq!(kind(&again.unwrap_err()), ErrorKind::GuestRefused);
+
+    // Only a guest suggests.
+    let owner = host
+        .client
+        .call::<parallax_protocol::methods::GuestSuggest>(parallax_protocol::GuestSuggestParams {
+            thread_id: thread,
+            text: "Mine".to_owned(),
+        })
+        .await;
+    assert_eq!(kind(&owner.unwrap_err()), ErrorKind::GuestRefused);
+    assert!(host.links().await[0].suggestions.is_empty());
     host.server.stop().await;
 }
