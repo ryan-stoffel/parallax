@@ -36,6 +36,7 @@ import {
   HOOK_METHODS,
   type HookReply,
   HostRelay,
+  JOIN_MINTED,
   MINTED_HEADER,
   PEER_HEADER,
   readCapped,
@@ -185,10 +186,10 @@ async function relayed(
     if (!object) return json(404, { error: "not_found" });
     const url = `https://stream/host?host=${hostId}&token=${encodeURIComponent(token)}`;
     const joined = await object.fetch(url, { headers: { upgrade: "websocket" } });
-    // plxd joined one of its streams: one more id for the host's next, after the 101 goes. A
+    // plxd joined one of its streams: ids for the host's next streams, after the 101 goes. A
     // refused join, which anyone can try, adds none.
     if (joined.status === 101)
-      ctx?.waitUntil(host.supply(mint()).catch((error) => logError("worker.supply", { host: short(hostId) }, error)));
+      ctx?.waitUntil(host.supply(Array.from({ length: JOIN_MINTED }, mint)).catch((error) => logError("worker.supply", { host: short(hostId) }, error)));
     return joined;
   }
   // Only a successful authenticated client open exposes numeric durations, never logs or IDs.

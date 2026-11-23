@@ -45,14 +45,17 @@ const RECONNECT_WINDOW = 60_000;
 /** How many clients' streams a host may have open at once, its spare included. */
 export const MAX_STREAMS = 16;
 /** How many stream ids, minted by Workers at plxd's edge, a host's object keeps for its next
- *  streams (PLX-1623). */
-export const MAX_MINTED = 4;
+ *  streams (PLX-1623). Enough for a burst of connects before plxd's joins refill it. */
+export const MAX_MINTED = 8;
 /** The header the Worker puts stream ids it minted in, comma-separated, on plxd's control socket
  *  request. The Worker always sets it, so what plxd sent there never arrives (PLX-1623). */
 export const MINTED_HEADER = "x-parallax-minted";
-/** How many ids the Worker mints for a control socket: the first spare, its standby, and one
- *  more, for a client that comes before plxd's first join refills the queue. */
-export const CONTROL_MINTED = 3;
+/** How many ids the Worker mints for a control socket: the first spare and its standby, and two
+ *  for clients that come before plxd's first join refills the queue. */
+export const CONTROL_MINTED = 4;
+/** How many ids the Worker mints each time plxd joins a stream. Each stream uses one, so two
+ *  fill the queue back up after a burst, or after streams plxd never joined. */
+export const JOIN_MINTED = 2;
 
 /** `id` when it's a stream object's unique id, which the Worker minted, else undefined. */
 function mintedId(env: Env, id: unknown) {
@@ -339,14 +342,14 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /**
-   * An id the Worker minted at plxd's edge after plxd joined one of this host's streams, for a
-   * later stream (PLX-1623). Each stream plxd joins adds one, as each spare or client stream uses
-   * one, so the queue refills where it's spent. Only the Worker calls this.
+   * Ids the Worker minted at plxd's edge after plxd joined one of this host's streams, for later
+   * streams (PLX-1623): [`JOIN_MINTED`] each time, while a stream uses one, so the queue stays full
+   * up to [`MAX_MINTED`]. Only the Worker calls this.
    */
-  async supply(id: string) {
+  async supply(ids: string[]) {
     await this.ctx.blockConcurrencyWhile(async () => {
       if (!(await this.owner())) return;
-      await this.ctx.storage.put("minted", await this.queueMinted([id]));
+      await this.ctx.storage.put("minted", await this.queueMinted(ids));
     });
   }
 

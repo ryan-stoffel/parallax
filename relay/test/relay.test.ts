@@ -10,6 +10,7 @@ import {
   CONTROL_MINTED,
   hookKey,
   HostRelay,
+  JOIN_MINTED,
   LIMITS,
   MAX_DAILY_BYTES,
   MAX_HOOK_BYTES,
@@ -1558,15 +1559,15 @@ describe("stream ids minted at plxd's edge (PLX-1623)", () => {
     const mints = hostMints();
     try {
       const { host, token, control } = await online();
-      // The control socket's Worker minted the first spare, its standby, and one more.
-      const [first, second, third] = (await queued(host))!;
+      // The control socket's Worker minted the first spare, its standby, and some to spare.
+      const [first, second, ...rest] = (await queued(host))!;
       control.ws.send(JSON.stringify({ t: "spare" }));
       const spare = JSON.parse((await control.next()) as string) as Open;
       expect(spare).toMatchObject({ spare: true, stream: first });
-      expect(await queued(host)).toEqual([third]);
-      // plxd joining it adds one, minted by the Worker plxd joined through.
+      expect(await queued(host)).toEqual(rest);
+      // plxd joining it adds more, minted by the Worker plxd joined through.
       opened(await join(host, spare));
-      await expect.poll(async () => (await queued(host))?.length).toBe(2);
+      await expect.poll(async () => (await queued(host))?.length).toBe(rest.length + JOIN_MINTED);
       const after = await queued(host);
       // A client taking it adds none.
       opened(await connect(host, token));
@@ -1600,17 +1601,23 @@ describe("stream ids minted at plxd's edge (PLX-1623)", () => {
     try {
       const { host, control } = await online();
       // As plxd does when an unused spare ends, or after a wake: it asks again, with no client.
-      for (let refresh = 0; refresh < 5; refresh++) {
+      const refresh = async () => {
         control.ws.send(JSON.stringify({ t: "spare" }));
-        opened(await join(host, JSON.parse((await control.next()) as string) as Open));
-        await expect.poll(async () => (await queued(host))?.length).toBe(2);
+        const open = JSON.parse((await control.next()) as string) as Open;
+        expect(open).toMatchObject({ spare: true });
+        return open;
+      };
+      for (let refreshes = 0; refreshes < 5; refreshes++) {
+        const open = await refresh();
+        const left = (await queued(host))!.length;
+        opened(await join(host, open));
+        await expect.poll(async () => (await queued(host))?.length).toBe(Math.min(left + JOIN_MINTED, MAX_MINTED));
       }
       expect(mints.seen).toEqual([]);
-      for (let refresh = 0; refresh < 3; refresh++) {
-        control.ws.send(JSON.stringify({ t: "spare" }));
-        expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true });
-      }
-      expect(await queued(host)).toEqual([]);
+      // Unjoined, each refresh spends one and adds none, until the host object mints its own.
+      while ((await queued(host))!.length) await refresh();
+      expect(mints.seen).toEqual([]);
+      await refresh();
       expect(mints.seen).toEqual(["standby"]);
     } finally {
       mints.restore();
