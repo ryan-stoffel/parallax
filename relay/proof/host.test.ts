@@ -73,3 +73,42 @@ it("forwards final bytes before FIN, accounts original frame minimum, and keeps 
     }
   } finally { release(); spy.mockRestore(); await closeThenUnregister(f); }
 });
+// A client's TLS ClientHello goes right behind its upgrade (PLX-1568). The stream object holds it
+// until plxd joins (PLX-1579), so the proof host must too, or every candidate's first stream ends.
+it("holds a client's frame from before plxd's join and passes it on after", async () => {
+  const f = await fixture();
+  try {
+    const response = socket(`/v1/hosts/${f.host.id}/proof-connect`, {authorization:`Bearer ${f.token}`});
+    const message = JSON.parse(await f.control.next() as string);
+    const client = opened(await response);
+    client.ws.send(new Uint8Array([1,2,3]));
+    await expect.poll(() => runInDurableObject(f.stub, (host: ProofHost) =>
+      (host as unknown as {slots: Map<string, {early?: ArrayBuffer[]}>}).slots.get(message.stream)?.early?.length)).toBe(1);
+    f.carrier.ws.send(JSON.stringify({t:"join",id:message.stream,token:message.token}));
+    expect(await client.next()).toBe("ready");
+    expect(JSON.parse(await f.carrier.next() as string).t).toBe("ready");
+    const frame = new Uint8Array(await f.carrier.next() as ArrayBuffer);
+    expect(new TextDecoder().decode(frame.slice(0,64))).toBe(message.stream);
+    expect([...frame.slice(64)]).toEqual([1,2,3]);
+    client.ws.close();
+    await client.closed;
+  } finally { await closeThenUnregister(f); }
+});
+// plxd drops a `fin` for a stream it hasn't joined yet, then joins it (PLX-1605). Without a second
+// `fin`, plxd's end of that stream stays forever, and the 16th such end refuses every new stream.
+it("answers plxd's join or fin of a stream that already ended with fin", async () => {
+  const f = await fixture();
+  try {
+    const response = socket(`/v1/hosts/${f.host.id}/proof-connect`, {authorization:`Bearer ${f.token}`});
+    const message = JSON.parse(await f.control.next() as string);
+    const client = opened(await response);
+    client.ws.close();
+    await client.closed;
+    const fin = {t:"fin", id:message.stream};
+    expect(JSON.parse(await f.carrier.next() as string)).toEqual(fin);
+    f.carrier.ws.send(JSON.stringify({t:"join",id:message.stream,token:message.token}));
+    expect(JSON.parse(await f.carrier.next() as string)).toEqual(fin);
+    f.carrier.ws.send(JSON.stringify(fin));
+    expect(JSON.parse(await f.carrier.next() as string)).toEqual(fin);
+  } finally { await closeThenUnregister(f); }
+});

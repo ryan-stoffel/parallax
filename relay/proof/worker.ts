@@ -3,12 +3,14 @@ import worker, { type Env, network, StreamRelay, UserAccount } from "../src/inde
 import { HostRelay } from "../src/host";
 import { verifySession } from "../src/clerk";
 import { randomToken, same, sha256 } from "../src/crypto";
-import { JOIN_TIMEOUT, MIN_FRAME_BYTES, REPORT_BYTES, REPORT_AFTER } from "../src/stream";
+import { EARLY_BYTES, EARLY_FRAMES, JOIN_TIMEOUT, MIN_FRAME_BYTES, REPORT_BYTES, REPORT_AFTER } from "../src/stream";
 export { StreamRelay, UserAccount };
 
 type Slot = {
   tokenHash: string; client?: WebSocket; joined: boolean; bytes: number;
   due: number; ending: boolean;
+  /** The client's frames from before plxd joined, held as the stream object holds them (PLX-1579). */
+  early?: ArrayBuffer[];
 };
 export class ProofHost extends HostRelay {
   private slots = new Map<string, Slot>();
@@ -45,6 +47,10 @@ export class ProofHost extends HostRelay {
       s.due = Infinity;
       s.client.send("ready");
       this.signal(id, "ready");
+      // Each `data` sends before its first await, so the held frames go first and in order.
+      const held = s.early ?? [];
+      s.early = undefined;
+      for (const bytes of held) void this.data(id, bytes, false);
     }
   }
   async proofConnect(user: string): Promise<Response> {
@@ -135,7 +141,12 @@ export class ProofHost extends HostRelay {
     if (message.length > 512) { this.carrier?.close(4400, "bad control"); return; }
     const m = JSON.parse(message);
     const s = this.slots.get(m.id);
-    if (!s || s.ending) return;
+    if (!s || s.ending) {
+      // Its `fin` may have reached plxd before plxd had the stream, which plxd then drops and joins
+      // anyway. Another `fin` ends plxd's end of it, which would otherwise stay (PLX-1605).
+      if ((m.t === "join" || m.t === "fin") && typeof m.id === "string") this.signal(m.id, "fin");
+      return;
+    }
     if (m.t === "join" && !s.joined && same(await sha256(m.token), s.tokenHash)) {
       s.joined = true; this.ready(m.id);
     } else if (m.t === "fin") await this.finish(m.id);
@@ -143,6 +154,12 @@ export class ProofHost extends HostRelay {
   }
   private async data(id: string, bytes: ArrayBuffer, fromHost: boolean) {
     const s = this.slots.get(id);
+    if (s && !fromHost && !s.ending && !s.joined && s.client) {
+      const held = [...(s.early ?? []), bytes];
+      if (held.length <= EARLY_FRAMES && held.reduce((n, b) => n + b.byteLength, 0) <= EARLY_BYTES) {
+        s.early = held; return;
+      }
+    }
     if (!s || s.ending || !s.joined || !s.client || !this.carrier || bytes.byteLength > 65536) {
       await this.finish(id, 4400, "not ready"); return;
     }
