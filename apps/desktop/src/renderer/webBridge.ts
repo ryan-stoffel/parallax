@@ -26,6 +26,7 @@ import type {
   DeviceStreamParams,
   EventsEventParams,
   EventsResyncParams,
+  GuestCreateResult,
   InitializeResult,
   LogId,
   SubscribeShellResult,
@@ -71,6 +72,11 @@ const say = (text: string, values: Record<string, string | number> = {}) =>
     : text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values[name]));
 
 const notHere = () => say(msg("Only the desktop app can do this."));
+
+// `guestLink` of ../preload/hostedClient, copied as the constants above are.
+const guestLink = (fragment: string) => `https://app.parallax.codes/g#${fragment}`;
+/** The secrets of guest links made here and not copied yet, by link id. In memory only (0108). */
+const guestSecrets = new Map<string, string>();
 
 /** A paired browser's session: its token, and the `DPoP` key it's bound to, which never leaves. */
 export type Session = { token: string; key: CryptoKeyPair };
@@ -758,6 +764,28 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     deviceKey: async () => undefined,
     onAccessRequests: (listener) => (listener([]), () => {}),
     answerAccess: async () => notHere(),
+    browserLink: async () => notHere(),
+    // A page has no main process, so it holds a guest link's secret itself, in `guestSecrets`,
+    // until it's copied (0108).
+    shareWithGuest: async (hostId, threadId, canSuggest) => {
+      if (hostId !== LOCAL) return notHere();
+      const answer = await host.request("guest/create", {
+        threadId,
+        ...(canSuggest && { canSuggest }),
+      });
+      if ("error" in answer) return answer.error.message;
+      const { link, fragment } = answer.result as GuestCreateResult;
+      guestSecrets.set(link.id, fragment);
+      return link;
+    },
+    copyGuestLink: async (link) => {
+      const fragment = guestSecrets.get(link);
+      if (fragment === undefined) return false;
+      guestSecrets.delete(link);
+      await navigator.clipboard.writeText(guestLink(fragment));
+      return true;
+    },
+    forgetGuestLink: async (link) => void guestSecrets.delete(link),
     revokeDevice: async () => notHere(),
     makeDeviceReadOnly: async () => notHere(),
     turnOnReach: async () => notHere(),

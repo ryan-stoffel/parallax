@@ -34,6 +34,7 @@ import {
   type Capabilities,
   type DeviceStateResult,
   type EventsEventParams,
+  type GuestLink,
   type HostSettings,
   type ImportableSession,
   type JsonValue,
@@ -213,6 +214,8 @@ const capabilities: Capabilities = Object.fromEntries(
     "repoGrep",
     "githubSetup",
     "githubStatus",
+    "guestLinks",
+    "hostedClient",
     "hostFolders",
     "inbox",
     "integrationBranch",
@@ -677,7 +680,63 @@ const threadResult = (runId: string, change: Partial<Thread> = {}) => {
 
 // Remote pairing (PLX-641): this computer's switch and the sessions of computers paired with it,
 // and the computers this app paired with.
-const lan = { on: false, relay: false, sessions: [] as RemoteSession[], hosts: [] as LanHost[] };
+// The hosted browser client (0108): this computer's switch and its guest links. `#guest` starts
+// with the switch and Parallax Connect on, a web browser signed in and another asking, and a link
+// to Rework the updater whose guest suggested two messages.
+const guestShown = location.hash.includes("guest");
+const lan = {
+  on: false,
+  relay: guestShown,
+  sessions: (guestShown
+    ? [
+        { id: "s-phone", name: "Ryan's iPhone", createdAt: "2026-11-02T18:04:00Z" },
+        {
+          id: "s-web",
+          name: "Safari on iPad",
+          createdAt: "2026-11-21T09:30:00Z",
+          readOnly: true,
+          hosted: true,
+        },
+      ]
+    : []) as RemoteSession[],
+  hosts: [] as LanHost[],
+};
+const hosted = {
+  on: guestShown,
+  links: (guestShown
+    ? [
+        {
+          id: "preview-link",
+          threadId: ids.updater,
+          createdAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+          expiresAt: new Date(Date.now() + 21 * 3_600_000).toISOString(),
+          canSuggest: true,
+          boundAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          suggestions: [
+            {
+              id: "019ab000-0000-7000-8000-000000000001",
+              text: "Can it also show which channel a build follows in About?",
+              at: new Date(Date.now() - 600_000).toISOString(),
+            },
+            {
+              id: "019ab000-0000-7000-8000-000000000002",
+              text: "Please add a test for a nightly that sees a newer stable.",
+              at: new Date(Date.now() - 120_000).toISOString(),
+            },
+          ],
+        },
+      ]
+    : []) as GuestLink[],
+};
+/** Drops suggestion `p.suggestion` from link `p.link`, as sending or dismissing it does. */
+const answerGuest = (p: { link: string; suggestion: string }) => {
+  hosted.links = hosted.links.map((link) =>
+    link.id === p.link
+      ? { ...link, suggestions: link.suggestions?.filter((s) => s.id !== p.suggestion) ?? [] }
+      : link,
+  );
+  return { links: hosted.links };
+};
 let relayHosts: RelayHost[] = [
   {
     hostId: "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
@@ -938,11 +997,21 @@ const handlers: { [M in Method]?: Handler<M> } = {
     connect: !!connect.on,
     remote: lan.on,
     relay: lan.relay,
+    hostedClient: hosted.on,
     deviceIcon: connect.icon,
   }),
+  "guest/list": () => ({ links: hosted.links }),
+  "guest/revoke": (p) => {
+    hosted.links = hosted.links.filter((link) => link.id !== p.link);
+    return { links: hosted.links };
+  },
+  "guest/send": answerGuest,
+  "guest/dismiss": answerGuest,
   "host/settings/set": (p) => {
     lan.on = p.remote ?? lan.on;
     lan.relay = p.relay ?? lan.relay;
+    hosted.on = p.hostedClient ?? hosted.on;
+    if (!hosted.on) hosted.links = [];
     worktrees.clean = p.cleanWorktrees ?? worktrees.clean;
     worktrees.prefix = p.branchPrefix ?? worktrees.prefix;
     for (const name of Object.keys(worktreeRules) as (keyof typeof worktreeRules)[])
@@ -955,6 +1024,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
       connect: p.connect ?? !!connect.on,
       remote: lan.on,
       relay: lan.relay,
+      hostedClient: hosted.on,
       deviceIcon: connect.icon,
     };
   },
@@ -1898,7 +1968,9 @@ const accounts: DeviceHost[] = accountsShown
   : [];
 let accessRequests: AccessPrompt[] = accountsShown
   ? [{ id: "req-1", name: "Ryan's iPhone", code: "731905", host: "studio" }]
-  : [];
+  : location.hash.includes("guestallow")
+    ? [{ id: "req-web", name: "Chrome on Windows", code: "204817", host: "macbook", hosted: true }]
+    : [];
 const accessListeners = new Set<(requests: AccessPrompt[]) => void>();
 const setupApprovedListeners = new Set<(name: string) => void>();
 
@@ -2638,6 +2710,29 @@ export const mockBridge: ParallaxBridge = {
     for (const l of accessListeners) l([...accessRequests]);
     return undefined;
   },
+  browserLink: () =>
+    delay({
+      link: "https://app.parallax.codes/#connect=tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+    }),
+  // The preview makes no secret: Copy link puts a made-up one on the clipboard.
+  shareWithGuest: (_hostId, threadId, canSuggest) => {
+    if (!hosted.on) return delay("Parallax on the web is off on this computer.");
+    const now = Date.now();
+    const link: GuestLink = {
+      id: `link-${now}`,
+      threadId,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 24 * 3_600_000).toISOString(),
+      ...(canSuggest && { canSuggest }),
+    };
+    hosted.links = [...hosted.links.filter((each) => each.threadId !== threadId), link];
+    return delay(link);
+  },
+  copyGuestLink: async (link) => {
+    await navigator.clipboard?.writeText(`https://app.parallax.codes/g#preview.${link}.secret`);
+    return true;
+  },
+  forgetGuestLink: async () => {},
 
   acpRegistry: () => delay([]),
 

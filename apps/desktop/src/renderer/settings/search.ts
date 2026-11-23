@@ -795,6 +795,16 @@ export const settingsIndex: SettingEntry[] = [
       msg("show setup code add this computer account"),
     ],
     [
+      msg("Parallax on the web"),
+      msg("Use this computer in a web browser, and share threads with guests"),
+      msg("hosted web browser guest share link qr code"),
+    ],
+    [
+      msg("Browser link"),
+      msg("A link and QR code that open this computer in a browser"),
+      msg("open in a browser web link qr code hosted"),
+    ],
+    [
       "SSH",
       msg("How another computer adds this one over SSH"),
       msg("ssh remote login sshd server"),

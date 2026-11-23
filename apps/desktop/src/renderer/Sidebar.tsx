@@ -27,6 +27,7 @@ import {
   GitBranch,
   GitFork,
   MonitorUp,
+  UserRoundPlus,
   GitMerge,
   Globe,
   HardDrive,
@@ -221,6 +222,7 @@ import { cancelPrefetch, prefetchThread } from "./threadWatches";
 import { RemoteControlBadge } from "./ClaudeRemoteControl";
 import { isRemoteControl } from "./remoteControl";
 import { MoveThread } from "./MoveThread";
+import { ShareWithGuest } from "./ShareWithGuest";
 
 const row =
   "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
@@ -579,6 +581,8 @@ export function ThreadList({
   const [toDelete, setToDelete] = useState<Item>();
   // The thread Move to another computer is moving (PLX-1538).
   const [toMove, setToMove] = useState<Item & { kind: "thread" }>();
+  // The thread Share with guest is open for (0108).
+  const [toShare, setToShare] = useState<Item & { kind: "thread" }>();
   // Its key, once its host says a deleted thread's worktree and branch stay on disk.
   const [keptOnDelete, setKeptOnDelete] = useState<string>();
   const [deleting, setDeleting] = useState(false);
@@ -1333,6 +1337,11 @@ export function ThreadList({
         onMove={
           !item.orchestration && "threadMove" in view.capabilities
             ? () => setToMove(item)
+            : undefined
+        }
+        onShare={
+          !item.orchestration && !thread.archived && "guestLinks" in view.capabilities
+            ? () => setToShare(item)
             : undefined
         }
         projectPicker={
@@ -2142,6 +2151,13 @@ export function ThreadList({
           repo={toMove.repo}
           onClose={() => setToMove(undefined)}
           onOpen={(hostId, threadId) => onSelect(hostId, { kind: "thread", threadId })}
+        />
+      )}
+      {toShare && (
+        <ShareWithGuest
+          hostId={toShare.host.id}
+          runId={toShare.thread.id}
+          onClose={() => setToShare(undefined)}
         />
       )}
       <ConfirmDialog
@@ -3438,6 +3454,7 @@ function ThreadRow({
   onOpenInTab,
   onFork,
   onMove,
+  onShare,
   projectPicker,
   onAutoResume,
   onRest,
@@ -3512,6 +3529,8 @@ function ThreadRow({
   onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
   /** Opens Move to another computer (PLX-1538), where its plxd exports threads. */
   onMove?: () => void;
+  /** Opens Share with guest (0108), where its plxd makes guest links. */
+  onShare?: () => void;
   /** The Projects it can be added to (ThreadProjectMenu.tsx), for Add to Project. */
   projectPicker?: { view: ThreadsView; projects: Repo[] };
   /** Sets its run's auto-resume override, or clears it with undefined. */
@@ -3925,6 +3944,13 @@ function ThreadRow({
                 disabled={isRunning(run.status)}
                 title={isRunning(run.status) ? t("Move once this turn finishes") : undefined}
                 onClick={choose(onMove)}
+              />
+            )}
+            {onShare && (
+              <ToolbarMenuRow
+                icon={<UserRoundPlus aria-hidden />}
+                label={t("Share with guest…")}
+                onClick={choose(onShare)}
               />
             )}
             {autoResumable && run && (

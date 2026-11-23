@@ -130,6 +130,8 @@ import {
 } from "./threadContext";
 import { GoalStrip } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
+import { useGuestLink } from "./guestLinks";
+import { GuestSuggestions } from "./GuestSuggestions";
 import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
 import { isQuestion, questionsOf } from "./questions";
 import { QuestionQueue } from "./Question";
@@ -389,6 +391,12 @@ export function AgentChat({
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const queueEnabled = connected && "queue" in connection.capabilities;
+  // The thread's guest link, for the messages its guest suggested (0108).
+  const guestLink = useGuestLink(
+    hostId,
+    runId,
+    connected && "guestLinks" in connection.capabilities,
+  );
   // From when the host starts connecting, so a thread open at launch subscribes right behind
   // `initialize` (PLX-1480).
   const opening = connected || connection?.status === "connecting";
@@ -924,6 +932,13 @@ export function AgentChat({
       />
     );
     tabs.push({ key: "queue", node: strip(false), compact: strip(true) });
+  }
+  // Messages the thread's guest suggested lead the line: each waits on the user's Send or Dismiss.
+  if (guestLink?.suggestions?.length) {
+    const strip = (compact: boolean) => (
+      <GuestSuggestions hostId={hostId} link={guestLink} compact={compact} />
+    );
+    tabs.unshift({ key: "guest", node: strip(false), compact: strip(true) });
   }
   // Leads the line while it asks something of the user, and otherwise sits at its end.
   if (remote) {

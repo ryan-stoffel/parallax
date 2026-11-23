@@ -172,7 +172,13 @@ const bridge: ParallaxBridge = {
   answerCompare: (hostId, allow) => ipcRenderer.invoke("parallax:answerCompare", hostId, allow),
   deviceKey: () => ipcRenderer.invoke("parallax:deviceKey"),
   onAccessRequests: (listener) => follow("parallax:accessRequests", listener),
-  answerAccess: (id, allow) => ipcRenderer.invoke("parallax:answerAccess", id, allow),
+  answerAccess: (id, allow, readOnly) =>
+    ipcRenderer.invoke("parallax:answerAccess", id, allow, readOnly),
+  browserLink: () => ipcRenderer.invoke("parallax:browserLink"),
+  shareWithGuest: (hostId, threadId, canSuggest) =>
+    ipcRenderer.invoke("parallax:shareWithGuest", hostId, threadId, canSuggest),
+  copyGuestLink: (link) => ipcRenderer.invoke("parallax:copyGuestLink", link),
+  forgetGuestLink: (link) => ipcRenderer.invoke("parallax:forgetGuestLink", link),
   revokeDevice: (id) => ipcRenderer.invoke("parallax:revokeDevice", id),
   makeDeviceReadOnly: (id) => ipcRenderer.invoke("parallax:makeDeviceReadOnly", id),
   turnOnReach: (hostId) => ipcRenderer.invoke("parallax:turnOnReach", hostId),

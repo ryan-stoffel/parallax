@@ -150,3 +150,38 @@ test("a device's request comes first, shows its code, and is allowed or denied",
   // Then the new computer's code.
   expect(dialog()?.textContent).toContain("Add build-box");
 });
+
+test("a web browser's request says so, says to compare all six digits, and is read-only unless unticked (0108)", async () => {
+  const web: AccessPrompt = { ...phone, id: "w1", name: "Chrome on Windows", hosted: true };
+  const parallax = await render([], [web, { ...web, id: "w2" }, { ...web, id: "w3" }]);
+  const said = dialog()!.textContent;
+  expect(said).toContain("Allow this web browser?");
+  expect(said).toContain("Chrome on Windows is a web browser at app.parallax.codes");
+  expect(said).toContain("Allow it only if all six digits match the code the browser shows.");
+  const readOnly = () => dialog()!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  expect(readOnly().checked).toBe(true);
+  expect(readOnly().closest("label")?.textContent).toBe("Read-only");
+  expect(said).toContain("and so does whoever publishes app.parallax.codes");
+
+  // Deny has the focus, so Enter denies, and submitting the form another way allows nothing.
+  expect(document.activeElement).toBe(button("Deny"));
+  await act(async () => dialog()!.querySelector("form")!.requestSubmit());
+  expect(parallax.answerAccess).not.toHaveBeenCalled();
+
+  await act(async () => button("Allow").click());
+  expect(parallax.answerAccess).toHaveBeenLastCalledWith("w1", true, true);
+
+  // The next request starts ticked again, with Deny focused, and unticking it allows full access.
+  expect(readOnly().checked).toBe(true);
+  expect(document.activeElement).toBe(button("Deny"));
+  await act(async () => (document.activeElement as HTMLElement).click());
+  expect(parallax.answerAccess).toHaveBeenLastCalledWith("w2", false);
+  await act(async () => readOnly().click());
+  await act(async () => button("Allow").click());
+  expect(parallax.answerAccess).toHaveBeenLastCalledWith("w3", true, false);
+});
+
+test("another device's request has no Read-only box", async () => {
+  await render([], [phone]);
+  expect(dialog()!.querySelector('input[type="checkbox"]')).toBeNull();
+});
