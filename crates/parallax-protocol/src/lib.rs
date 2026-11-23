@@ -48,6 +48,7 @@ mod error;
 mod events;
 pub mod framing;
 mod git;
+mod guest;
 mod handshake;
 mod host;
 mod hub;
@@ -158,6 +159,11 @@ pub use events::{
 };
 pub use git::{
     AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus, RepoGitStatusParams,
+};
+pub use guest::{
+    GuestCreateParams, GuestCreateResult, GuestLink, GuestListParams, GuestListResult,
+    GuestRevokeParams, GuestSuggestParams, GuestSuggestResult, GuestSuggestion,
+    GuestSuggestionParams,
 };
 pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,

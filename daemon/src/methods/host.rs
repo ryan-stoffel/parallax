@@ -380,6 +380,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "git",
     "githubSetup",
     "githubStatus",
+    "guestLinks",
     "hostFolders",
     "hostUpdate",
     "hostedClient",

@@ -162,6 +162,12 @@ pub enum ErrorKind {
     ClerkUnreachable,
     /// This device is read-only on this host and the method isn't a read (PLX-1364).
     ReadOnly,
+    /// A guest asked for something outside its link's one thread, or a `guest/*` call was
+    /// refused: `hostedClient` is off, the thread is archived or gone, the link ended, or
+    /// suggestions are off (0108). The message says which.
+    GuestRefused,
+    /// A guest asked for more than 10 reads in a minute (0108).
+    GuestRateLimited,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

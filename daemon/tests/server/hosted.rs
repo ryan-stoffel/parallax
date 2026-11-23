@@ -43,12 +43,14 @@ type Joins = Arc<Mutex<HashMap<String, oneshot::Sender<WebSocketStream<TcpStream
 /// A relay on loopback. It takes plxd's control socket, and for each connection to a route it
 /// made, announces a stream marked as that route says, then carries the connection over the
 /// stream plxd joins. A stream plxd says is gone before it joined closes its connection.
-struct FakeRelay {
+pub(crate) struct FakeRelay {
     url: String,
     control: mpsc::UnboundedSender<String>,
     joins: Joins,
     /// The streams plxd said were gone without joining them.
     unjoined: Arc<Mutex<Vec<String>>>,
+    /// Each list of guest links plxd sent, oldest first (0108).
+    guests: Arc<Mutex<Vec<Value>>>,
     next: Arc<AtomicUsize>,
     /// While true, plxd's joins wait before their handshake.
     holding: watch::Sender<bool>,
@@ -64,7 +66,9 @@ impl FakeRelay {
         let frames = Arc::new(tokio::sync::Mutex::new(frames));
         let joins = Joins::default();
         let unjoined = Arc::new(Mutex::new(Vec::new()));
+        let guests = Arc::new(Mutex::new(Vec::new()));
         let (all_joins, all_unjoined) = (Arc::clone(&joins), Arc::clone(&unjoined));
+        let all_guests = Arc::clone(&guests);
         let (holding, gate) = watch::channel(false);
         let held = Arc::new(Notify::new());
         let all_held = Arc::clone(&held);
@@ -72,6 +76,7 @@ impl FakeRelay {
             while let Ok((tcp, _)) = listener.accept().await {
                 let frames = Arc::clone(&frames);
                 let (joins, unjoined) = (Arc::clone(&all_joins), Arc::clone(&all_unjoined));
+                let guests = Arc::clone(&all_guests);
                 let (mut gate, held) = (gate.clone(), Arc::clone(&all_held));
                 tokio::spawn(async move {
                     let mut request_line = [0; 512];
@@ -99,7 +104,7 @@ impl FakeRelay {
                         }
                     } else {
                         let mut frames = frames.lock().await;
-                        control_socket(socket, &mut frames, &joins, &unjoined).await;
+                        control_socket(socket, &mut frames, &joins, (&unjoined, &guests)).await;
                     }
                 });
             }
@@ -109,6 +114,7 @@ impl FakeRelay {
             control,
             joins,
             unjoined,
+            guests,
             next: Arc::default(),
             holding,
             held,
@@ -126,7 +132,7 @@ impl FakeRelay {
     }
 
     /// A route whose every connection the relay announces with `mark` added to its `open` frame.
-    async fn route(&self, mark: Value) -> String {
+    pub(crate) async fn route(&self, mark: Value) -> String {
         let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
         let route = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
         let (control, joins, next) = (
@@ -154,18 +160,23 @@ impl FakeRelay {
         route
     }
 
-    fn unjoined(&self) -> Vec<String> {
+    pub(crate) fn unjoined(&self) -> Vec<String> {
         self.unjoined.lock().unwrap().clone()
+    }
+
+    /// The last list of guest links plxd sent, if it sent one.
+    pub(crate) fn guests(&self) -> Option<Value> {
+        self.guests.lock().unwrap().last().cloned()
     }
 }
 
 /// Serves plxd's control socket: says it's ready, sends what waits in `frames`, answers its pings,
-/// and drops the stream it says is gone before joining it.
+/// drops the stream it says is gone before joining it, and keeps each list of guest links.
 async fn control_socket(
     mut socket: WebSocketStream<TcpStream>,
     frames: &mut mpsc::UnboundedReceiver<String>,
     joins: &Joins,
-    unjoined: &Mutex<Vec<String>>,
+    (unjoined, guests): (&Mutex<Vec<String>>, &Mutex<Vec<Value>>),
 ) {
     if socket
         .send(Message::text(r#"{"t":"ready"}"#))
@@ -192,6 +203,9 @@ async fn control_socket(
                     continue;
                 }
                 let frame: Value = serde_json::from_str(&text).unwrap_or_default();
+                if frame["t"] == "guests" {
+                    guests.lock().unwrap().push(frame["links"].clone());
+                }
                 if frame["t"] == "gone"
                     && let Some(id) = frame["stream"].as_str()
                     && joins.lock().unwrap().remove(id).is_some()
@@ -237,7 +251,7 @@ async fn carry(tcp: TcpStream, socket: WebSocketStream<TcpStream>) {
     tokio::join!(up, down);
 }
 
-fn port_of(route: &str) -> u16 {
+pub(crate) fn port_of(route: &str) -> u16 {
     route.rsplit(':').next().unwrap().parse().unwrap()
 }
 
@@ -250,6 +264,17 @@ async fn hosted_host(
     issuer: &str,
     on: bool,
 ) -> (FakeRelay, InProcess, Client, String, String) {
+    hosted_host_with(dir, web, issuer, on, |_| {}).await
+}
+
+/// [`hosted_host`], with `edit` changing the host's config first.
+pub(crate) async fn hosted_host_with(
+    dir: &Path,
+    web: &Path,
+    issuer: &str,
+    on: bool,
+    edit: impl FnOnce(&mut plxd::server::Config),
+) -> (FakeRelay, InProcess, Client, String, String) {
     std::fs::create_dir_all(web.join("assets")).unwrap();
     std::fs::write(web.join("web.html"), "<!doctype html>web").unwrap();
     std::fs::write(web.join("assets/app-1a.js"), "app()").unwrap();
@@ -257,6 +282,7 @@ async fn hosted_host(
     let mut config = config(dir, issuer, &relay.url, free_port());
     config.clerk.hosted_client_ids = vec![HOSTED_APP.to_owned()];
     config.remote_web_dir = Some(web.to_owned());
+    edit(&mut config);
     let (server, mut client, route, host_id) = host_at(config).await;
     client
         .call::<HostSettingsSet>(HostSettingsSetParams {
@@ -278,7 +304,7 @@ async fn direct_host(dir: &Path, issuer: &str) -> (InProcess, Client, String, St
     host_at(config).await
 }
 
-async fn set_hosted(client: &mut Client, on: bool) {
+pub(crate) async fn set_hosted(client: &mut Client, on: bool) {
     let settings = client
         .call::<HostSettingsSet>(HostSettingsSetParams {
             hosted_client: Some(on),
@@ -290,7 +316,7 @@ async fn set_hosted(client: &mut Client, on: bool) {
 }
 
 /// A fresh token of the hosted client's application, for [`USER`].
-fn hosted_token(issuer: &str) -> String {
+pub(crate) fn hosted_token(issuer: &str) -> String {
     oauth_token(issuer, USER, HOSTED_APP)
 }
 
@@ -308,7 +334,7 @@ async fn ask(route: &str, host_id: &str, token: &str, dir: &Path) -> String {
 }
 
 /// [`ask`], then `client` allows the request with `read_only`, and the device gets its session.
-async fn allowed(
+pub(crate) async fn allowed(
     route: &str,
     host_id: &str,
     token: &str,
@@ -347,7 +373,7 @@ async fn approve(
 }
 
 /// The status of `method` `path` at `route`, and the `error` its answer names, if any.
-async fn answer(route: &str, method: &str, path: &str) -> (u16, Option<String>) {
+pub(crate) async fn answer(route: &str, method: &str, path: &str) -> (u16, Option<String>) {
     let (status, _, body) = https(port_of(route), method, path, &[], "").await;
     let error = serde_json::from_slice::<Value>(&body)
         .ok()
@@ -442,12 +468,11 @@ async fn hosted_and_guest_streams_are_refused_while_off_and_a_hosted_browser_sta
     let (status, _) = answer(&ordinary, "GET", "/.well-known/parallax").await;
     assert_eq!(status, 200);
 
-    // On: a hosted stream takes account sign-in, and a guest's serves nothing until guest links
-    // exist (PLX-1618).
+    // On: a hosted stream takes account sign-in, and a guest's for a link that isn't live is still
+    // refused unjoined (PLX-1618).
     set_hosted(&mut client, true).await;
-    let not_found = (404, Some("not_found".to_owned()));
-    assert_eq!(answer(&guest, "POST", "/api/auth/account").await, not_found);
-    assert_eq!(answer(&guest, "GET", "/ws").await, not_found);
+    assert!(remote::open(&guest, None).await.is_err());
+    assert_eq!(relay.unjoined().len(), 3);
     allowed(
         &hosted,
         &host_id,

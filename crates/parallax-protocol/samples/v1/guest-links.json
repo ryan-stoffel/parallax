@@ -1,0 +1,142 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "guest/create",
+    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001", "canSuggest": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "link": {
+        "id": "Hc6PZBF0T9mWb3l1QW8g3A",
+        "threadId": "01936b2e-6a00-7000-8000-000000000001",
+        "createdAt": "2026-11-22T16:00:00Z",
+        "expiresAt": "2026-11-23T16:00:00Z",
+        "canSuggest": true
+      },
+      "fragment": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE.Hc6PZBF0T9mWb3l1QW8g3A.kq0Hn3Zp1wq3yQ7c8m9U4hQe6fS2bV1xT0rN5oY8aLc"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "guest/suggest",
+    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001", "text": "Can you add a test for the empty case?" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "suggestion": {
+        "id": "01936b2f-1000-7000-8000-000000000002",
+        "text": "Can you add a test for the empty case?",
+        "at": "2026-11-22T16:05:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "guest/list",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "links": [
+        {
+          "id": "Hc6PZBF0T9mWb3l1QW8g3A",
+          "threadId": "01936b2e-6a00-7000-8000-000000000001",
+          "createdAt": "2026-11-22T16:00:00Z",
+          "expiresAt": "2026-11-23T16:00:00Z",
+          "canSuggest": true,
+          "boundAt": "2026-11-22T16:02:00Z",
+          "suggestions": [
+            {
+              "id": "01936b2f-1000-7000-8000-000000000002",
+              "text": "Can you add a test for the empty case?",
+              "at": "2026-11-22T16:05:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "guest/send",
+    "params": { "link": "Hc6PZBF0T9mWb3l1QW8g3A", "suggestion": "01936b2f-1000-7000-8000-000000000002" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "links": [
+        {
+          "id": "Hc6PZBF0T9mWb3l1QW8g3A",
+          "threadId": "01936b2e-6a00-7000-8000-000000000001",
+          "createdAt": "2026-11-22T16:00:00Z",
+          "expiresAt": "2026-11-23T16:00:00Z",
+          "canSuggest": true,
+          "boundAt": "2026-11-22T16:02:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "guest/dismiss",
+    "params": { "link": "Hc6PZBF0T9mWb3l1QW8g3A", "suggestion": "01936b2f-2000-7000-8000-000000000003" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": { "links": [] }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "guest/revoke",
+    "params": { "link": "Hc6PZBF0T9mWb3l1QW8g3A" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": { "links": [] }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "agent/diff",
+    "params": { "runId": "01936b2e-6a00-7000-8000-000000000001" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "error": {
+      "code": -32000,
+      "message": "A guest link shows one thread and can't call this.",
+      "data": { "kind": "guestRefused" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "orchestration/threadHistory",
+    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001", "before": 40 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "error": {
+      "code": -32000,
+      "message": "A guest gets 10 reads a minute. Try again shortly.",
+      "data": { "kind": "guestRateLimited" }
+    }
+  }
+]

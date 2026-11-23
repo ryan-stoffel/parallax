@@ -19,6 +19,7 @@ mod connect;
 mod context;
 mod events;
 mod git;
+mod guest;
 mod handshake;
 mod hosted;
 mod inbox;

@@ -35,7 +35,7 @@ use parallax_protocol::methods::{
     NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
 };
 use parallax_protocol::{
-    ErrorKind, EventsResyncParams, HostUpdatingParams, TerminalKey, TerminalResizeParams,
+    ErrorKind, EventsResyncParams, HostUpdatingParams, RunId, TerminalKey, TerminalResizeParams,
     TerminalWriteParams,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
@@ -51,6 +51,7 @@ use super::Daemon;
 use crate::event_log::EventLog;
 use crate::logging::{untrusted, untrusted_id};
 use crate::methods::{self, Context, Cursors, Delivery, Reply, Session, read_only};
+use crate::server::remote::guest;
 
 type InFlight = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
@@ -176,8 +177,9 @@ impl Closed {
 /// `over_connect` says it came through Parallax Connect's listener and its `whois` check
 /// ([`Context::over_connect`]), and `over_remote` through the remote listener
 /// ([`Context::over_remote`]). `read_only` says its device is limited to reads
-/// ([`Context::read_only`]), and `over_relay` that it came through a relay stream
-/// ([`Context::over_relay`]).
+/// ([`Context::read_only`]), `over_relay` that it came through a relay stream
+/// ([`Context::over_relay`]), and `guest` that it is a guest link's ([`Context::guest`]), whose
+/// outgoing events pass [`guest::shown_entry`] alone and whose other notifications never go out.
 #[expect(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,
@@ -192,6 +194,7 @@ pub(crate) async fn serve<S>(
     read_only: bool,
     over_relay: bool,
     over_remote: bool,
+    guest: Option<Arc<guest::Link>>,
 ) -> Closed
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -216,6 +219,7 @@ where
         error: None,
         over_relay,
         over_remote,
+        guest: guest.clone(),
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -228,6 +232,7 @@ where
         daemon.self_update.update_notice.clone(),
         closing,
         stall,
+        guest.map(|link| link.thread),
     );
     debug!("connected");
     let ((session, read_reason, read_error), written) = tokio::join!(reader.run(), writer);
@@ -281,6 +286,7 @@ struct Reader<S> {
     error: Option<String>,
     over_relay: bool,
     over_remote: bool,
+    guest: Option<Arc<guest::Link>>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
@@ -435,6 +441,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             read_only: self.read_only,
             over_relay: self.over_relay,
             over_remote: self.over_remote,
+            guest: self.guest.clone(),
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -620,11 +627,12 @@ async fn run_writer<W: AsyncWrite + Unpin>(
     update_notice: CancellationToken,
     closing: CancellationToken,
     stall: Stall,
+    guest: Option<RunId>,
 ) -> Option<(Reason, Option<String>)> {
     let ended = tokio::select! {
         biased;
         () = closing.cancelled() => None,
-        written = write_loop(sink, queue, &log, &update_notice, &stall) => match written {
+        written = write_loop(sink, queue, &log, &update_notice, &stall, guest) => match written {
             Ok(behind) => behind.then_some((Reason::SubscriberBehind, None)),
             Err(error) => {
                 debug!(%error, "writing failed");
@@ -706,19 +714,23 @@ fn in_names(mut reply: Reply, method: Option<&str>) -> Reply {
     reply
 }
 
-/// Writes until the connection ends. True means it closed because a subscriber fell behind.
+/// Writes until the connection ends. True means it closed because a subscriber fell behind. On a
+/// guest connection of thread `guest` (0108), an event goes out only when [`guest::shown_entry`]
+/// passes it, and no other notification goes out, `host/updating` among them.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut sink: FramedWrite<W, FrameCodec>,
     mut queue: mpsc::Receiver<Reply>,
     log: &EventLog,
     update_notice: &CancellationToken,
     stall: &Stall,
+    guest: Option<RunId>,
 ) -> Result<bool, FrameError> {
     let mut appended = log.watch();
     let mut cursors = Cursors::default();
     let mut resync_notice = false;
     let mut initialized = false;
-    let mut told_of_update = false;
+    // A guest is never told of an update, which is the host's.
+    let mut told_of_update = guest.is_some();
     loop {
         if initialized && !told_of_update && update_notice.is_cancelled() {
             told_of_update = true;
@@ -726,6 +738,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             stall.guard(sink.feed(updating)).await?;
         }
         match queue.try_recv() {
+            Ok(Reply::Notification(_)) if guest.is_some() => continue,
             Ok(reply) => {
                 initialized |= matches!(reply, Reply::Initialized { .. });
                 stall
@@ -742,6 +755,12 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             Err(TryRecvError::Empty) => {}
         }
         match cursors.next(log) {
+            Ok(Some(event))
+                if guest.is_some_and(|thread| !guest::shown_entry(&event.entry, thread)) =>
+            {
+                tokio::task::consume_budget().await;
+                continue;
+            }
             Ok(Some(event)) => {
                 stall.guard(send_event(&mut sink, event)).await?;
                 // A long replay may never wait on the socket; let other tasks run.
@@ -773,6 +792,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             biased;
             () = update_notice.cancelled(), if initialized && !told_of_update => {}
             reply = queue.recv() => match reply {
+                Some(Reply::Notification(_)) if guest.is_some() => {}
                 Some(reply) => {
                     initialized |= matches!(reply, Reply::Initialized { .. });
                     stall
@@ -873,7 +893,7 @@ mod tests {
     use jiff::Timestamp;
     use parallax_protocol::framing::FrameCodec;
     use parallax_protocol::jsonrpc::Message;
-    use parallax_protocol::{Orchestrator, ParallaxEvent, ScopeId};
+    use parallax_protocol::{Orchestrator, ParallaxEvent, RunId, ScopeId};
     use serde_json::{Value, json};
     use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
     use tokio::time::timeout;
@@ -944,6 +964,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         ));
         let (read, mut write) = tokio::io::split(client);
         for request in requests {
@@ -989,6 +1010,7 @@ mod tests {
                 false,
                 false,
                 false,
+                None,
             ));
             (client, stop, closing, serve)
         };
@@ -1094,6 +1116,120 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// What a connection's writer sends for a subscription to every event, after `initialize` and
+    /// a terminal's output, with an update announced, on a guest connection of `guest` or not: each
+    /// frame's method, or `response`, and its event's kind and run.
+    async fn written(
+        guest: Option<RunId>,
+        log: &Arc<crate::event_log::EventLog>,
+    ) -> Vec<(String, Value, Value)> {
+        use parallax_protocol::SubscriptionId;
+        use parallax_protocol::jsonrpc::{Notification, RequestId, Response};
+        use tokio_util::codec::FramedWrite;
+
+        use crate::methods::{Cursor, Reply};
+
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let (replies, queue) = tokio::sync::mpsc::channel(8);
+        let updating = CancellationToken::new();
+        updating.cancel();
+        let response = |id: i64| Response::success(RequestId::from(id), json!({}));
+        let terminal = Notification {
+            method: "terminal/output".to_owned(),
+            params: Some(json!({ "threadId": "t", "terminalId": "t", "data": "secret" })),
+        };
+        let cursor = Cursor {
+            subscription: SubscriptionId::generate(),
+            project: None,
+            all: true,
+            after: 0,
+            run: None,
+            shell: false,
+            legacy: false,
+        };
+        for reply in [
+            Reply::Initialized {
+                response: response(1),
+                resync_notice: false,
+            },
+            Reply::Notification(terminal),
+            Reply::Subscribe {
+                response: response(2),
+                cursor,
+            },
+        ] {
+            replies.send(reply).await.unwrap();
+        }
+        let stall = super::Stall {
+            timeout: PATIENCE,
+            stopping: CancellationToken::new(),
+        };
+        let sink = FramedWrite::new(server, FrameCodec::new());
+        let closing = CancellationToken::new();
+        let writer = super::run_writer(
+            sink,
+            queue,
+            Arc::clone(log),
+            updating,
+            closing.clone(),
+            stall,
+            guest,
+        );
+        tokio::spawn(writer);
+        let mut frames = FramedRead::new(client, FrameCodec::new());
+        let mut seen = Vec::new();
+        while let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(300), frames.next()).await {
+            let message: Value = serde_json::from_slice(&frame).unwrap();
+            let method = message["method"].as_str().unwrap_or("response").to_owned();
+            let event = &message["params"]["event"];
+            seen.push((method, event["kind"].clone(), event["runId"].clone()));
+        }
+        closing.cancel();
+        drop(replies);
+        seen
+    }
+
+    #[tokio::test]
+    async fn a_guests_writer_sends_only_its_threads_listed_events_and_no_other_notification() {
+        let log = Arc::new(crate::event_log::EventLog::new(50));
+        let (thread, other) = (RunId::generate(), RunId::generate());
+        let scope = Some(ScopeId::generate());
+        let output = |run_id| ParallaxEvent::AgentOutput {
+            run_id,
+            items: Vec::new(),
+            compacted: None,
+        };
+        let host_wide = ParallaxEvent::OrchestratorCreated {
+            orchestrator: project("parallax", "/src/parallax"),
+        };
+        for (scope, event) in [
+            (scope, output(other)),
+            (None, host_wide),
+            (scope, ParallaxEvent::AgentWakeupsPaused { run_id: thread }),
+            (scope, output(thread)),
+        ] {
+            log.append_in_memory(Timestamp::now(), scope, event);
+        }
+        let mine = (
+            "events/event".to_owned(),
+            json!("agent.output"),
+            json!(thread),
+        );
+        let response = ("response".to_owned(), Value::Null, Value::Null);
+        assert_eq!(
+            written(Some(thread), &log).await,
+            [response.clone(), response.clone(), mine.clone()],
+            "another thread's event, a host-wide one, an unlisted kind, a terminal's output, and \
+             host/updating never reach a guest"
+        );
+        // Any other connection gets them all.
+        let all = written(None, &log).await;
+        let methods: Vec<_> = all.iter().map(|(method, ..)| method.as_str()).collect();
+        assert!(methods.contains(&"terminal/output"), "{methods:?}");
+        assert!(methods.contains(&"host/updating"), "{methods:?}");
+        assert_eq!(methods.iter().filter(|m| **m == "events/event").count(), 4);
     }
 
     #[tokio::test]

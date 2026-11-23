@@ -141,6 +141,8 @@ pub struct Config {
     pub remote_port: u16,
     /// How long a pairing code works. 5 minutes by default; tests shorten it.
     pub remote_code_lifetime: Duration,
+    /// How long a guest link works (0108). 24 hours by default; tests shorten it.
+    pub guest_link_lifetime: Duration,
     /// The web client's files (PLX-651). By default `PLXD_WEB_DIR`, else the app's renderer build
     /// beside this plxd in the app's resources folder, unpacked from app.asar.
     pub remote_web_dir: Option<PathBuf>,
@@ -200,6 +202,7 @@ impl Config {
                 .and_then(|port| port.parse().ok())
                 .unwrap_or(crate::remote::PORT),
             remote_code_lifetime: remote::CODE_LIFETIME,
+            guest_link_lifetime: remote::guest::LIFETIME,
             remote_web_dir: std::env::var_os("PLXD_WEB_DIR")
                 .map(PathBuf::from)
                 .or_else(|| {
@@ -341,6 +344,8 @@ pub(crate) struct Daemon {
     pub remote: remote::Remote,
     /// The connection to Parallax Relay (PLX-652).
     pub relay: crate::relay::Relay,
+    /// The live guest links (0108).
+    pub(crate) guests: remote::guest::Guests,
     /// The clients of this user's other computers through the relay (0101).
     pub relay_peers: crate::peer::RelayPeers,
     /// How busy this computer is, for `host/health` (0101).
@@ -532,6 +537,7 @@ impl Server {
                 config.remote_code_lifetime,
             ),
             relay: crate::relay::Relay::new(config.relay_url.clone()),
+            guests: remote::guest::Guests::new(config.guest_link_lifetime),
             relay_peers: crate::peer::RelayPeers::default(),
             load: crate::load::Load::default(),
             clerk: crate::clerk::Clerk::new(config.clerk.clone(), config.clerk_legacy.clone()),
@@ -881,6 +887,7 @@ impl Accepted<'_> {
                         false,
                         false,
                         false,
+                        None,
                     )
                     .await
                     .log(connection::Route::Local);
@@ -973,6 +980,7 @@ impl Daemon {
             setup_holds: crate::setup_scripts::Holds::default(),
             remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
             relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
+            guests: remote::guest::Guests::new(remote::guest::LIFETIME),
             relay_peers: crate::peer::RelayPeers::default(),
             load: crate::load::Load::default(),
             clerk: crate::clerk::Clerk::new(

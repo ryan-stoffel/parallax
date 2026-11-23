@@ -127,6 +127,10 @@ use crate::{
     BundleWriteParams, GitStartMergeParams,
 };
 use crate::{
+    GuestCreateParams, GuestCreateResult, GuestListParams, GuestListResult, GuestRevokeParams,
+    GuestSuggestParams, GuestSuggestResult, GuestSuggestionParams,
+};
+use crate::{
     ThreadRemoteControlOriginParams, ThreadRemoteControlOriginResult, ThreadRemoteControlParams,
     ThreadRemoteControlResult,
 };
@@ -203,6 +207,17 @@ macro_rules! method_table {
         }
 
         impl RequestName {
+            /// Every request method, in the table's order.
+            pub const ALL: &[Self] = &[$(Self::$request,)*];
+
+            /// The method's name on the wire.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$request => $request_name,)*
+                }
+            }
+
             /// The method with this name on the wire.
             #[must_use]
             pub fn from_name(name: &str) -> Option<Self> {
@@ -713,6 +728,22 @@ method_table! {
         /// `access/setupCode`: a new code for a signed-in client to type, which replaces any
         /// pairing code waiting.
         AccessSetupCode = "access/setupCode": AccessSetupCodeParams => AccessSetupCodeResult;
+        /// `guest/create`: a link that shows one thread to one browser for 24 hours (0108), from a
+        /// full-access session while `hostedClient` is on. It ends the thread's live link. Gated on
+        /// `guestLinks`, like every `guest/*` method.
+        GuestCreate = "guest/create": GuestCreateParams => GuestCreateResult;
+        /// `guest/list`: the live guest links, whether and when each was bound, and the messages
+        /// their guests suggested.
+        GuestList = "guest/list": GuestListParams => GuestListResult;
+        /// `guest/revoke`: Stop sharing. Ends the link and closes its guest's connections.
+        GuestRevoke = "guest/revoke": GuestRevokeParams => GuestListResult;
+        /// `guest/suggest`: a guest's message, which waits until the owner sends or dismisses it.
+        /// Only a guest whose link allows suggestions may send one.
+        GuestSuggest = "guest/suggest": GuestSuggestParams => GuestSuggestResult;
+        /// `guest/send`: the owner sends a guest's waiting message to the thread, as its own.
+        GuestSend = "guest/send": GuestSuggestionParams => GuestListResult;
+        /// `guest/dismiss`: the owner drops a guest's waiting message.
+        GuestDismiss = "guest/dismiss": GuestSuggestionParams => GuestListResult;
         /// `inbox/list`: an orchestrator's inbox, oldest first, and the event log's `seq` from
         /// before the read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;

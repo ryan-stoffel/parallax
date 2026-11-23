@@ -40,9 +40,10 @@
 //!
 //! A relay stream the relay marked as the hosted browser client's or a guest's (0108) is served
 //! only while the `hostedClient` setting is on. A hosted client's serves `POST /api/auth/account`,
-//! `POST /api/auth/approval`, and `GET /ws` alone, and a guest's nothing yet. Its `/ws` takes a
-//! hosted client's session with its proof, never a ticket. Any other request on one gets 404,
-//! which ends the stream. A sign-in is the hosted client's when its token's OAuth
+//! `POST /api/auth/approval`, and `GET /ws` alone. Its `/ws` takes a hosted client's session with
+//! its proof, never a ticket. A guest's serves `POST /api/auth/guest` and its `/ws` alone
+//! ([`guest`]), and no other stream serves either. Any other request on one gets 404, which ends
+//! the stream. A sign-in is the hosted client's when its token's OAuth
 //! application or its stream says so, judged at each sign-in, and its session works only while
 //! `hostedClient` is on.
 //!
@@ -56,6 +57,7 @@
 //! accepted, and `remote/revoke` closes a session's own.
 
 pub(crate) mod access;
+pub(crate) mod guest;
 mod tls;
 
 use std::collections::{HashMap, VecDeque};
@@ -999,6 +1001,10 @@ impl Serving {
                             access::approval(&daemon, &request, hosted_stream).await
                         }
                         ("POST", "/api/auth/peer") => access::peer(&daemon, &request).await,
+                        ("POST", "/api/auth/guest") => match &mark {
+                            Mark::Guest(link) => guest::sign_in(&daemon, link, &request),
+                            _ => (404, json!({ "error": "not_found" })),
+                        },
                         _ if request.too_large => (413, json!({ "error": "body_too_large" })),
                         (method, hook) if hook.starts_with("/api/hooks/") => {
                             let Request { path, headers, body, .. } = &request;
@@ -1424,11 +1430,46 @@ async fn serve_socket(
     closing: &CancellationToken,
     peer: SocketAddr,
 ) {
-    // A hosted stream opens only a hosted client's session, and only with its proof (0108).
-    let hosted_stream = daemon
+    let mark = daemon
         .relay
         .joined(peer)
-        .is_some_and(|stream| stream.mark == Mark::Hosted);
+        .map(|stream| stream.mark.clone())
+        .unwrap_or_default();
+    let key = request.header("sec-websocket-key");
+    let upgrade = request
+        .header("upgrade")
+        .is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
+    // A guest's stream opens only its link's guest, with the bound key's proof (0108).
+    if let Mark::Guest(link) = &mark {
+        let admitted = guest::admit(&daemon, link, request, closing);
+        let (Ok((link, closing)), Some(key), true) = (admitted.as_ref(), key, upgrade) else {
+            warn!(%peer, "refused a guest's WebSocket");
+            let refusal = admitted
+                .err()
+                .unwrap_or_else(|| (400, json!({ "error": "invalid_request" })));
+            let _ = respond(&mut stream, refusal.0, &refusal.1).await;
+            return;
+        };
+        let level = Level {
+            read_only: true,
+            computer: false,
+            guest: Some(Arc::clone(link)),
+        };
+        let (key, closing) = (key.to_owned(), closing.clone());
+        return open_socket(
+            stream,
+            request,
+            &key,
+            daemon,
+            stop_reading,
+            closing,
+            peer,
+            level,
+        )
+        .await;
+    }
+    // A hosted stream opens only a hosted client's session, and only with its proof (0108).
+    let hosted_stream = mark == Mark::Hosted;
     let session = match request.query("wsTicket") {
         Some(_) if hosted_stream => Err(refused("a hosted client opens its socket with its proof")),
         Some(ticket) => daemon
@@ -1438,10 +1479,6 @@ async fn serve_socket(
         // The proof opens the channel itself, a round trip shorter (0091).
         None => authorize(&daemon, request, "GET").await,
     };
-    let key = request.header("sec-websocket-key");
-    let upgrade = request
-        .header("upgrade")
-        .is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
     let (Ok(session), Some(key), true) = (session.as_ref(), key, upgrade) else {
         warn!(%peer, "refused a WebSocket without a valid ticket or proof");
         let refusal = session
@@ -1466,6 +1503,54 @@ async fn serve_socket(
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
     }
+    let level = Level {
+        read_only,
+        computer,
+        guest: None,
+    };
+    let key = key.to_owned();
+    open_socket(
+        stream,
+        request,
+        &key,
+        daemon,
+        stop_reading,
+        closing,
+        peer,
+        level,
+    )
+    .await;
+}
+
+/// What a socket's connection may do: read only, as another of the user's computers (0101), or as
+/// a guest of one thread (0108).
+struct Level {
+    read_only: bool,
+    computer: bool,
+    guest: Option<Arc<guest::Link>>,
+}
+
+/// Answers a checked `/ws` upgrade whose `Sec-WebSocket-Key` is `key`, and serves the socket at
+/// `level` until `closing` or its end.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the checked request and how its connection came"
+)]
+async fn open_socket(
+    mut stream: tls::Stream<TcpStream>,
+    request: &Request,
+    key: &str,
+    daemon: Arc<Daemon>,
+    stop_reading: CancellationToken,
+    closing: CancellationToken,
+    peer: SocketAddr,
+    level: Level,
+) {
+    let Level {
+        read_only,
+        computer,
+        guest,
+    } = level;
     let accept = derive_accept_key(key.as_bytes());
     let switching = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
@@ -1494,6 +1579,7 @@ async fn serve_socket(
         read_only,
         over_relay,
         true,
+        guest,
     );
     let pumped = pump(
         socket,
@@ -1895,9 +1981,10 @@ pub(crate) async fn hosted_on(daemon: &Daemon) -> bool {
         .unwrap_or(false)
 }
 
-/// Ends every hosted and guest stream and closes every hosted client's connections, as
-/// `hostedClient` turns off (0108). Their sessions stay, for when it turns on again.
+/// Ends every hosted and guest stream, every guest link, and every hosted client's connections, as
+/// `hostedClient` turns off (0108). The hosted client's sessions stay, for when it turns on again.
 pub(crate) async fn close_hosted(daemon: &Daemon) {
+    guest::end_all(daemon, "the hosted client turned off");
     daemon.relay.cut_marked();
     for session in stored_sessions(daemon).await {
         if session.hosted {
@@ -1907,9 +1994,9 @@ pub(crate) async fn close_hosted(daemon: &Daemon) {
 }
 
 /// Whether a stream the relay marked `mark` serves `method` on `route` (0108). A hosted client's
-/// stream serves account sign-in, its approval, and `/ws`. A guest's serves nothing yet: its
-/// sign-in and `/ws` come with guest links (PLX-1618). Everything else is refused, the descriptor,
-/// pairing, peer sign-in, tickets, webhooks, and the web client's files among them.
+/// stream serves account sign-in, its approval, and `/ws`. A guest's serves guest sign-in and its
+/// `/ws`. Everything else is refused, the descriptor, pairing, peer sign-in, tickets, webhooks,
+/// and the web client's files among them.
 fn serves(mark: &Mark, method: &str, route: &str) -> bool {
     match mark {
         Mark::None => true,
@@ -1917,7 +2004,10 @@ fn serves(mark: &Mark, method: &str, route: &str) -> bool {
             (method, route),
             ("POST", "/api/auth/account" | "/api/auth/approval") | ("GET", "/ws")
         ),
-        Mark::Guest(_) => false,
+        Mark::Guest(_) => matches!(
+            (method, route),
+            ("POST", "/api/auth/guest") | ("GET", "/ws")
+        ),
     }
 }
 
