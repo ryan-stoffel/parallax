@@ -1525,8 +1525,7 @@ impl Relay {
     ///
     /// When the connection's peer address can't be read, so nothing can say it's direct.
     pub(crate) fn joined(&self, accepted: &TcpStream) -> io::Result<Option<Arc<RelayStream>>> {
-        let peer = accepted.peer_addr()?;
-        let peer = SocketAddr::new(peer.ip().to_canonical(), peer.port());
+        let peer = canonical(accepted.peer_addr()?);
         Ok(self.listed().get(&peer).cloned())
     }
 
@@ -2545,6 +2544,12 @@ fn local_listener(daemon: &Daemon) -> SocketAddr {
     SocketAddr::new(dialed(remote.address), remote.port)
 }
 
+/// `address` with an IPv4-mapped IPv6 address as plain IPv4, as relay streams are listed and looked
+/// up, whichever family the listener's socket reports.
+fn canonical(address: SocketAddr) -> SocketAddr {
+    SocketAddr::new(address.ip().to_canonical(), address.port())
+}
+
 /// The address plxd dials its own listener on, when it binds `bound`: loopback for every address
 /// or none named, which is also where a relay stream's connection comes from as the listener sees
 /// it, so [`Relay::joined`] finds the stream (PLX-1629).
@@ -2622,14 +2627,14 @@ async fn stream(
                 let _ = done.send(()).await;
             }
         }
-        // Bound first, so the listener can tell this connection is a relay stream when it accepts.
+        // Bound first and listed canonical, so the listener knows a relay stream when it accepts.
         let out = if local.is_ipv4() {
             TcpSocket::new_v4()?
         } else {
             TcpSocket::new_v6()?
         };
         out.bind(SocketAddr::new(local.ip(), 0))?;
-        let from = out.local_addr()?;
+        let from = canonical(out.local_addr()?);
         relay.listed().insert(
             from,
             Arc::new(RelayStream {
