@@ -173,17 +173,22 @@ impl Host {
         listed.unwrap().links
     }
 
-    /// Waits until the relay's last list of guest links has `count`.
-    async fn relay_lists(&self, count: usize) -> Value {
+    /// Waits until the relay's last list of guest links has `count`, none of them `ended`. A link
+    /// replaced by a new one leaves the count as it was, so the count alone can match the list
+    /// from before plxd sent the change.
+    async fn relay_lists(&self, count: usize, ended: Option<&str>) -> Value {
         let mut last = Value::Null;
         for _ in 0..100 {
             last = self.relay.guests().unwrap_or_default();
-            if last.as_array().is_some_and(|links| links.len() == count) {
+            let current = last.as_array().is_some_and(|links| {
+                links.len() == count && links.iter().all(|l| ended.is_none_or(|e| l["link"] != e))
+            });
+            if current {
                 return last;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        panic!("the relay's guest links never reached {count}: {last}");
+        panic!("the relay's guest links never reached {count} without {ended:?}: {last}");
     }
 }
 
@@ -689,7 +694,7 @@ async fn a_live_guest_is_cut_off(how: &str) {
     let mut host = Host::start(lifetime).await;
     let thread = host.thread().await;
     let (link, guest) = host.share(thread, false).await;
-    let listed = host.relay_lists(1).await;
+    let listed = host.relay_lists(1, None).await;
     assert_eq!(listed[0]["link"], link.id);
     let pass = remote::hex(&remote::sha256(&guest.pass));
     assert_eq!(listed[0]["pass"], pass, "the SHA-256 of the relay pass");
@@ -701,14 +706,7 @@ async fn a_live_guest_is_cut_off(how: &str) {
     let live: Vec<_> = host.links().await.into_iter().map(|l| l.id).collect();
     assert!(!live.contains(&link.id), "{how}");
     let left = usize::from(how == "new link");
-    let listed = host.relay_lists(left).await;
-    assert!(
-        listed
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|l| l["link"] != link.id)
-    );
+    host.relay_lists(left, Some(&link.id)).await;
     let unjoined = host.relay.unjoined().len();
     assert!(guest.socket().await.is_none(), "{how}");
     assert_eq!(
