@@ -33,7 +33,7 @@ pub(crate) mod context;
 mod cursor;
 mod defaults;
 mod events;
-mod guest;
+pub(crate) mod guest;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub(crate) mod land;
@@ -57,8 +57,8 @@ use parallax_protocol::jsonrpc::{
     ErrorObject, INVALID_REQUEST, Notification, Request, RequestId, Response,
 };
 use parallax_protocol::methods::{
-    self, EventsSubscribe, EventsUnsubscribe, Initialize, OrchestrationSubscribeShell,
-    OrchestrationSubscribeThread, RequestMethod,
+    self, EventsSubscribe, EventsUnsubscribe, GuestSubscribe, Initialize,
+    OrchestrationSubscribeShell, OrchestrationSubscribeThread, RequestMethod,
 };
 use parallax_protocol::{
     EventsSubscribeResult, EventsUnsubscribeResult, HubsListResult, ProvidersListResult,
@@ -205,6 +205,13 @@ async fn answer(mut context: Context, mut request: Request) -> Reply {
             };
             return subscribed_reply(id, subscribed);
         }
+        GuestSubscribe::NAME => {
+            let subscribed = match request.params() {
+                Ok(params) => guest::subscribe(&context, params).await,
+                Err(error) => Err(error),
+            };
+            return subscribed_reply(id, subscribed);
+        }
         EventsUnsubscribe::NAME => {
             return match request.params::<<EventsUnsubscribe as RequestMethod>::Params>() {
                 Ok(params) => Reply::Unsubscribe {
@@ -299,6 +306,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         GuestList => |p| ready(Ok(guest::list(context, p))),
         GuestRevoke => |p| ready(Ok(guest::revoke(context, &p))),
         GuestSuggest => |p| ready(guest::suggest(context, p)),
+        GuestHistory => |p| guest::history(context, p),
         GuestSend => |p| guest::send(context, p),
         GuestDismiss => |p| ready(guest::dismiss(context, p)),
         RemoteRevoke => |p| remote::revoke(context, p),

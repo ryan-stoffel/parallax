@@ -12,14 +12,17 @@
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
 use parallax_protocol::methods::RequestName;
 use parallax_protocol::{
-    ErrorKind, GuestCreateParams, GuestCreateResult, GuestListParams, GuestListResult,
-    GuestRevokeParams, GuestSuggestParams, GuestSuggestResult, GuestSuggestionParams, RunId,
+    ClientInfo, ErrorKind, GuestCreateParams, GuestCreateResult, GuestEntry, GuestHistoryParams,
+    GuestHistoryResult, GuestListParams, GuestListResult, GuestRevokeParams, GuestSnapshot,
+    GuestSubscribeParams, GuestSubscribeResult, GuestSuggestParams, GuestSuggestResult,
+    GuestSuggestionParams, GuestThread, LoggedEvent, PROTOCOL_VERSION, RunId,
     SubscribeThreadParams, ThreadHistoryParams, ThreadSnapshot,
 };
 
 use super::agent::{check_message, plain_message};
-use super::{Context, read_only};
+use super::{Context, Cursor, Session, read_only};
 use crate::server::remote::guest::{self, Link, refusal};
+use crate::store::store_error;
 
 /// What a guest hears for a method outside its list, another thread, or an ended link.
 const OUTSIDE: &str = "A guest link shows one thread and can't call this.";
@@ -42,12 +45,12 @@ pub(super) fn admits(link: &Link, request: &Request) -> Result<(), ErrorObject> 
         ));
     }
     let thread: Option<RunId> = match method {
-        RequestName::OrchestrationSubscribeThread => request
-            .params::<SubscribeThreadParams>()
+        RequestName::GuestSubscribe => request
+            .params::<GuestSubscribeParams>()
             .ok()
             .map(|p| p.thread_id),
-        RequestName::OrchestrationThreadHistory => request
-            .params::<ThreadHistoryParams>()
+        RequestName::GuestHistory => request
+            .params::<GuestHistoryParams>()
             .ok()
             .map(|p| p.thread_id),
         RequestName::GuestSuggest => request
@@ -64,16 +67,101 @@ pub(super) fn admits(link: &Link, request: &Request) -> Result<(), ErrorObject> 
     Ok(())
 }
 
-/// `snapshot` as a guest of its thread sees it: the events [`guest::shown`] passes, and none of
-/// the thread's permission requests, background tasks, or watched pull requests.
-pub(super) fn snapshot(snapshot: &mut ThreadSnapshot) {
-    let thread = snapshot.thread.id;
-    snapshot
-        .events
-        .retain(|logged| guest::shown(&logged.event, thread));
-    snapshot.requests.clear();
-    snapshot.background.clear();
-    snapshot.watching.clear();
+/// The session plxd gives a guest's connection, which sends no `initialize` (0108).
+pub(crate) fn session() -> Session {
+    Session {
+        protocol: PROTOCOL_VERSION,
+        client: ClientInfo {
+            name: "guest".to_owned(),
+            version: String::new(),
+            machine_id: None,
+        },
+        resync_notice: false,
+        legacy: false,
+    }
+}
+
+/// `guest/subscribe`: the thread's subscription, as `orchestration/subscribeThread` makes it,
+/// with a snapshot built from scratch by [`snapshot`]. Its events go out as `guest/event`, which
+/// the connection builds the same way.
+pub(super) async fn subscribe(
+    context: &Context,
+    params: GuestSubscribeParams,
+) -> Result<(GuestSubscribeResult, Cursor), ErrorObject> {
+    let GuestSubscribeParams {
+        thread_id,
+        after_seq,
+    } = params;
+    let full = SubscribeThreadParams {
+        thread_id,
+        after_seq,
+    };
+    let (result, cursor) = super::orchestration::subscribe_thread(context, full).await?;
+    let snapshot = match result.snapshot {
+        Some(full) => {
+            let title = title(context, thread_id).await?;
+            Some(snapshot(&full, title))
+        }
+        None => None,
+    };
+    let result = GuestSubscribeResult {
+        subscription: result.subscription,
+        snapshot,
+    };
+    Ok((result, cursor))
+}
+
+/// `guest/history`: the page `orchestration/threadHistory` reads, built from scratch.
+pub(super) async fn history(
+    context: &Context,
+    params: GuestHistoryParams,
+) -> Result<GuestHistoryResult, ErrorObject> {
+    let GuestHistoryParams { thread_id, before } = params;
+    let full = ThreadHistoryParams { thread_id, before };
+    let page = super::orchestration::thread_history(context, full).await?;
+    Ok(GuestHistoryResult {
+        entries: entries(&page.events, thread_id),
+        more: page.more,
+    })
+}
+
+/// What `full` shows a guest: the thread's id, title, status, and age, and its events as
+/// [`guest::guest_entry`] builds them. Nothing else of it is read.
+fn snapshot(full: &ThreadSnapshot, title: Option<String>) -> GuestSnapshot {
+    let thread = full.thread.id;
+    GuestSnapshot {
+        seq: full.seq,
+        thread: GuestThread {
+            id: thread,
+            title,
+            status: full.thread.status,
+            created_at: full.thread.created_at,
+        },
+        entries: entries(&full.events, thread),
+        more: full.more,
+    }
+}
+
+fn entries(events: &[LoggedEvent], thread: RunId) -> Vec<GuestEntry> {
+    events
+        .iter()
+        .filter_map(|logged| guest::guest_entry(&logged.event, logged.seq, logged.time, thread))
+        .collect()
+}
+
+/// Thread `thread`'s title, if it has one.
+async fn title(context: &Context, thread: RunId) -> Result<Option<String>, ErrorObject> {
+    let row = context
+        .daemon
+        .reader
+        .run(&context.cancel, move |db| {
+            db.get_thread(thread.into()).map_err(|e| store_error(&e))
+        })
+        .await?;
+    Ok(match row {
+        Some(row) => crate::threads::thread_entry(&row)?.title,
+        None => None,
+    })
 }
 
 /// `guest/create`.
@@ -149,4 +237,26 @@ pub(super) fn dismiss(
         return Err(refusal("No such message is waiting."));
     }
     Ok(list(context, GuestListParams {}))
+}
+
+#[cfg(test)]
+mod tests {
+    use parallax_protocol::RunId;
+
+    use super::snapshot;
+    use crate::server::remote::guest::fixtures::{self, SHOWN, private_in};
+
+    #[test]
+    fn a_guests_snapshot_has_its_threads_transcript_and_no_private_field() {
+        let (thread, other) = (RunId::generate(), RunId::generate());
+        let full = fixtures::snapshot(thread, other);
+        let sent = serde_json::to_string(&snapshot(&full, Some("The title".to_owned()))).unwrap();
+        assert_eq!(private_in(&sent, other), Vec::<String>::new(), "{sent}");
+        for text in SHOWN.iter().chain(&["The title"]) {
+            assert!(sent.contains(text), "{text} in {sent}");
+        }
+        // The full snapshot had every one of them.
+        let full = serde_json::to_string(&full).unwrap();
+        assert!(full.contains("/Users/s3cr3t-user") && full.contains("queued s3cr3t run"));
+    }
 }

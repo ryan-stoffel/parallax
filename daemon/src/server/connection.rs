@@ -31,12 +31,12 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::legacy;
 use parallax_protocol::methods::{
-    CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, HostUpdating, Initialize,
-    NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
+    CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, GuestEvent, HostUpdating,
+    Initialize, NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
 };
 use parallax_protocol::{
-    ErrorKind, EventsResyncParams, HostUpdatingParams, RunId, TerminalKey, TerminalResizeParams,
-    TerminalWriteParams,
+    ErrorKind, EventsResyncParams, GuestEventParams, HostUpdatingParams, RunId, TerminalKey,
+    TerminalResizeParams, TerminalWriteParams,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -178,8 +178,9 @@ impl Closed {
 /// ([`Context::over_connect`]), and `over_remote` through the remote listener
 /// ([`Context::over_remote`]). `read_only` says its device is limited to reads
 /// ([`Context::read_only`]), `over_relay` that it came through a relay stream
-/// ([`Context::over_relay`]), and `guest` that it is a guest link's ([`Context::guest`]), whose
-/// outgoing events pass [`guest::shown_entry`] alone and whose other notifications never go out.
+/// ([`Context::over_relay`]), and `guest` that it is a guest link's ([`Context::guest`]): it
+/// starts initialized, its events go out as the `guest/event` entries [`guest::log_entry`] builds,
+/// and no other notification goes out.
 #[expect(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,
@@ -207,7 +208,8 @@ where
         permits: Arc::new(Semaphore::new(daemon.limits.max_requests_in_flight)),
         daemon: Arc::clone(&daemon),
         replies,
-        session: None,
+        // A guest sends no `initialize`: plxd starts its connection (0108).
+        session: guest.as_ref().map(|_| methods::guest::session()),
         in_flight: InFlight::default(),
         handlers: JoinSet::new(),
         stopped_reading: stop_reading.child_token(),
@@ -715,8 +717,9 @@ fn in_names(mut reply: Reply, method: Option<&str>) -> Reply {
 }
 
 /// Writes until the connection ends. True means it closed because a subscriber fell behind. On a
-/// guest connection of thread `guest` (0108), an event goes out only when [`guest::shown_entry`]
-/// passes it, and no other notification goes out, `host/updating` among them.
+/// guest connection of thread `guest` (0108), an event goes out only as the `guest/event` entry
+/// [`guest::log_entry`] builds from it, and no other notification goes out, `host/updating` among
+/// them.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut sink: FramedWrite<W, FrameCodec>,
     mut queue: mpsc::Receiver<Reply>,
@@ -755,14 +758,22 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             Err(TryRecvError::Empty) => {}
         }
         match cursors.next(log) {
-            Ok(Some(event))
-                if guest.is_some_and(|thread| !guest::shown_entry(&event.entry, thread)) =>
-            {
-                tokio::task::consume_budget().await;
-                continue;
-            }
             Ok(Some(event)) => {
-                stall.guard(send_event(&mut sink, event)).await?;
+                match guest {
+                    // A guest gets only the entry built for it, and nothing for the rest.
+                    Some(thread) => {
+                        if let Some(entry) = guest::log_entry(&event.entry, thread) {
+                            let subscription = event.subscription;
+                            let params = GuestEventParams {
+                                subscription,
+                                entry,
+                            };
+                            let notification = Notification::new::<GuestEvent>(params);
+                            stall.guard(sink.feed(notification)).await?;
+                        }
+                    }
+                    None => stall.guard(send_event(&mut sink, event)).await?,
+                }
                 // A long replay may never wait on the socket; let other tasks run.
                 tokio::task::consume_budget().await;
                 continue;
@@ -1119,12 +1130,9 @@ mod tests {
     }
 
     /// What a connection's writer sends for a subscription to every event, after `initialize` and
-    /// a terminal's output, with an update announced, on a guest connection of `guest` or not: each
-    /// frame's method, or `response`, and its event's kind and run.
-    async fn written(
-        guest: Option<RunId>,
-        log: &Arc<crate::event_log::EventLog>,
-    ) -> Vec<(String, Value, Value)> {
+    /// a terminal's output, with an update announced, on a guest connection of `guest` or not:
+    /// each frame.
+    async fn written(guest: Option<RunId>, log: &Arc<crate::event_log::EventLog>) -> Vec<Value> {
         use parallax_protocol::SubscriptionId;
         use parallax_protocol::jsonrpc::{Notification, RequestId, Response};
         use tokio_util::codec::FramedWrite;
@@ -1184,56 +1192,82 @@ mod tests {
         let mut frames = FramedRead::new(client, FrameCodec::new());
         let mut seen = Vec::new();
         while let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(300), frames.next()).await {
-            let message: Value = serde_json::from_slice(&frame).unwrap();
-            let method = message["method"].as_str().unwrap_or("response").to_owned();
-            let event = &message["params"]["event"];
-            seen.push((method, event["kind"].clone(), event["runId"].clone()));
+            seen.push(serde_json::from_slice(&frame).unwrap());
         }
         closing.cancel();
         drop(replies);
         seen
     }
 
+    /// Each frame's method, or `response`.
+    fn methods(frames: &[Value]) -> Vec<&str> {
+        frames
+            .iter()
+            .map(|frame| frame["method"].as_str().unwrap_or("response"))
+            .collect()
+    }
+
     #[tokio::test]
-    async fn a_guests_writer_sends_only_its_threads_listed_events_and_no_other_notification() {
+    async fn a_guests_writer_sends_only_its_threads_entries_and_no_other_notification() {
         let log = Arc::new(crate::event_log::EventLog::new(50));
         let (thread, other) = (RunId::generate(), RunId::generate());
         let scope = Some(ScopeId::generate());
-        let output = |run_id| ParallaxEvent::AgentOutput {
+        let output = |run_id, text: &str| ParallaxEvent::AgentOutput {
             run_id,
-            items: Vec::new(),
+            items: vec![parallax_protocol::AgentOutputItem::Text {
+                message_id: None,
+                text: text.to_owned(),
+            }],
             compacted: None,
         };
         let host_wide = ParallaxEvent::OrchestratorCreated {
             orchestrator: project("parallax", "/src/parallax"),
         };
         for (scope, event) in [
-            (scope, output(other)),
+            (scope, output(other, "another thread's")),
             (None, host_wide),
             (scope, ParallaxEvent::AgentWakeupsPaused { run_id: thread }),
-            (scope, output(thread)),
+            (scope, output(thread, "mine")),
         ] {
             log.append_in_memory(Timestamp::now(), scope, event);
         }
-        let mine = (
-            "events/event".to_owned(),
-            json!("agent.output"),
-            json!(thread),
-        );
-        let response = ("response".to_owned(), Value::Null, Value::Null);
+        let sent = written(Some(thread), &log).await;
         assert_eq!(
-            written(Some(thread), &log).await,
-            [response.clone(), response.clone(), mine.clone()],
+            methods(&sent),
+            ["response", "response", "guest/event"],
             "another thread's event, a host-wide one, an unlisted kind, a terminal's output, and \
              host/updating never reach a guest"
         );
+        assert_eq!(
+            sent[2]["params"]["entry"]["items"],
+            json!([{ "kind": "text", "text": "mine" }])
+        );
         // Any other connection gets them all.
         let all = written(None, &log).await;
-        let methods: Vec<_> = all.iter().map(|(method, ..)| method.as_str()).collect();
+        let methods = methods(&all);
         let terminal = methods.iter().filter(|m| **m == "terminal/output");
         assert_eq!(terminal.count(), 2, "{methods:?}");
         assert!(methods.contains(&"host/updating"), "{methods:?}");
         assert_eq!(methods.iter().filter(|m| **m == "events/event").count(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_guests_live_events_carry_no_private_field() {
+        use crate::server::remote::guest::fixtures::{SECRET, SHOWN, events, private_in};
+
+        let log = Arc::new(crate::event_log::EventLog::new(50));
+        let (thread, other) = (RunId::generate(), RunId::generate());
+        let scope = Some(ScopeId::generate());
+        for event in events(thread, other) {
+            log.append_in_memory(Timestamp::now(), scope, event);
+        }
+        let sent = serde_json::to_string(&written(Some(thread), &log).await).unwrap();
+        assert_eq!(private_in(&sent, other), Vec::<String>::new(), "{sent}");
+        for text in SHOWN {
+            assert!(sent.contains(text), "{text} in {sent}");
+        }
+        let all = serde_json::to_string(&written(None, &log).await).unwrap();
+        assert!(all.contains(SECRET), "the events had them");
     }
 
     #[tokio::test]

@@ -127,8 +127,9 @@ use crate::{
     BundleWriteParams, GitStartMergeParams,
 };
 use crate::{
-    GuestCreateParams, GuestCreateResult, GuestListParams, GuestListResult, GuestRevokeParams,
-    GuestSuggestParams, GuestSuggestResult, GuestSuggestionParams,
+    GuestCreateParams, GuestCreateResult, GuestEventParams, GuestHistoryParams, GuestHistoryResult,
+    GuestListParams, GuestListResult, GuestRevokeParams, GuestSubscribeParams,
+    GuestSubscribeResult, GuestSuggestParams, GuestSuggestResult, GuestSuggestionParams,
 };
 use crate::{
     ThreadRemoteControlOriginParams, ThreadRemoteControlOriginResult, ThreadRemoteControlParams,
@@ -740,6 +741,12 @@ method_table! {
         /// `guest/suggest`: a guest's message, which waits until the owner sends or dismisses it.
         /// Only a guest whose link allows suggestions may send one.
         GuestSuggest = "guest/suggest": GuestSuggestParams => GuestSuggestResult;
+        /// `guest/subscribe`: a guest's thread, built for a guest with only what a transcript
+        /// needs, then its entries as `guest/event`. Only a guest calls it, for its link's thread.
+        GuestSubscribe = "guest/subscribe": GuestSubscribeParams => GuestSubscribeResult;
+        /// `guest/history`: the guest's thread's entries before a `seq`, built as
+        /// `guest/subscribe` builds them.
+        GuestHistory = "guest/history": GuestHistoryParams => GuestHistoryResult;
         /// `guest/send`: the owner sends a guest's waiting message to the thread, as its own.
         GuestSend = "guest/send": GuestSuggestionParams => GuestListResult;
         /// `guest/dismiss`: the owner drops a guest's waiting message.
@@ -1009,6 +1016,8 @@ method_table! {
         CancelRequest = "$/cancelRequest": CancelRequestParams;
         /// `events/event`: one event for a subscription. plxd sends it.
         EventsEvent = "events/event": EventsEventParams;
+        /// `guest/event`: one transcript entry for a guest's `guest/subscribe` (0108). plxd sends it.
+        GuestEvent = "guest/event": GuestEventParams;
         /// `events/resync`: plxd ended a subscription that fell behind, and the connection
         /// stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
         EventsResync = "events/resync": EventsResyncParams;

@@ -80,6 +80,7 @@ pub(crate) fn allows_notification(method: &str) -> bool {
         Some(NotificationName::CancelRequest) => true,
         Some(
             NotificationName::EventsEvent
+            | NotificationName::GuestEvent
             | NotificationName::EventsResync
             | NotificationName::HostUpdating
             | NotificationName::TerminalWrite
@@ -102,10 +103,9 @@ fn level(method: RequestName) -> Level {
     use RequestName as M;
     match method {
         // A guest's: its thread's snapshot, live events, and older pages, and its suggestions.
-        M::OrchestrationSubscribeThread
-        | M::OrchestrationThreadHistory
-        | M::EventsUnsubscribe
-        | M::GuestSuggest => Level::Guest,
+        M::GuestSubscribe | M::GuestHistory | M::EventsUnsubscribe | M::GuestSuggest => {
+            Level::Guest
+        }
 
         M::Initialize
         | M::HostHealth
@@ -115,6 +115,8 @@ fn level(method: RequestName) -> Level {
         | M::OrchestratorList
         | M::EventsSubscribe
         | M::OrchestrationSubscribeShell
+        | M::OrchestrationSubscribeThread
+        | M::OrchestrationThreadHistory
         | M::OrchestrationThreadRuns
         | M::OrchestrationGetTurnDiff
         | M::OrchestrationGetFullThreadDiff
@@ -375,8 +377,8 @@ mod tests {
             [
                 "events/unsubscribe",
                 "guest/suggest",
-                "orchestration/subscribeThread",
-                "orchestration/threadHistory",
+                "guest/subscribe",
+                "guest/history",
             ]
         );
         // Every guest method is open to a read-only device too, so a guest is never more.

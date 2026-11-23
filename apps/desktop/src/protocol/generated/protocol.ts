@@ -815,6 +815,16 @@ export type ParallaxRequests = {
 	 */
 	"guest/suggest": { params: GuestSuggestParams, result: GuestSuggestResult },
 	/**
+	 * `guest/subscribe`: a guest's thread, built for a guest with only what a transcript
+	 * needs, then its entries as `guest/event`. Only a guest calls it, for its link's thread.
+	 */
+	"guest/subscribe": { params: GuestSubscribeParams, result: GuestSubscribeResult },
+	/**
+	 * `guest/history`: the guest's thread's entries before a `seq`, built as
+	 * `guest/subscribe` builds them.
+	 */
+	"guest/history": { params: GuestHistoryParams, result: GuestHistoryResult },
+	/**
 	 * `guest/send`: the owner sends a guest's waiting message to the thread, as its own.
 	 */
 	"guest/send": { params: GuestSuggestionParams, result: GuestListResult },
@@ -1415,6 +1425,8 @@ export const REQUEST_METHODS = [
 	"guest/list",
 	"guest/revoke",
 	"guest/suggest",
+	"guest/subscribe",
+	"guest/history",
 	"guest/send",
 	"guest/dismiss",
 	"inbox/list",
@@ -1518,6 +1530,10 @@ export type ParallaxNotifications = {
 	 * `events/event`: one event for a subscription. plxd sends it.
 	 */
 	"events/event": EventsEventParams,
+	/**
+	 * `guest/event`: one transcript entry for a guest's `guest/subscribe` (0108). plxd sends it.
+	 */
+	"guest/event": GuestEventParams,
 	/**
 	 * `events/resync`: plxd ended a subscription that fell behind, and the connection
 	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
@@ -9993,6 +10009,198 @@ export type GuestSuggestResult = {
 };
 
 /**
+ * Params of `guest/subscribe`: the guest's thread, from its snapshot, or from after `afterSeq`
+ * when that gap is short enough to replay.
+ */
+export type GuestSubscribeParams = {
+	/**
+	 * The link's thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The last `seq` the guest has.
+	 */
+	afterSeq?: number,
+};
+
+/**
+ * Result of `guest/subscribe`. `guest/event` notifications follow for the subscription.
+ */
+export type GuestSubscribeResult = {
+	/**
+	 * The subscription, for `events/unsubscribe`.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The thread as it stands. Absent when the gap after `afterSeq` replays instead.
+	 */
+	snapshot?: GuestSnapshot,
+};
+
+/**
+ * A guest's thread at a `seq`.
+ */
+export type GuestSnapshot = {
+	/**
+	 * The event log's `seq` it stands at. Events after it follow.
+	 */
+	seq: number,
+	/**
+	 * The thread.
+	 */
+	thread: GuestThread,
+	/**
+	 * Its newest transcript entries, oldest first, up to `seq`.
+	 */
+	entries: Array<GuestEntry>,
+	/**
+	 * Whether older entries remain, for `guest/history` before the first one.
+	 */
+	more: boolean,
+};
+
+/**
+ * What one event of the thread's log shows a guest: built for the guest from the event, with
+ * only what a transcript needs.
+ */
+export type GuestEntry = {
+	/**
+	 * The event's `seq`.
+	 */
+	seq: number,
+	/**
+	 * When it happened.
+	 */
+	time: string,
+	/**
+	 * What it shows, in order. Never empty.
+	 */
+	items: Array<GuestItem>,
+};
+
+/**
+ * One thing in a guest's transcript, by `kind`.
+ *
+ * A newer plxd may send kinds that are not listed here; skip them.
+ */
+export type GuestItem = { "kind": "turnStarted",
+	/**
+	 * The turn's id.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The message.
+	 */
+	text?: string, } | { "kind": "textDelta",
+	/**
+	 * The reply it belongs to.
+	 */
+	messageId?: string,
+	/**
+	 * The new text.
+	 */
+	text: string, } | { "kind": "text",
+	/**
+	 * The reply's id.
+	 */
+	messageId?: string,
+	/**
+	 * Its text.
+	 */
+	text: string, } | { "kind": "toolCall",
+	/**
+	 * The call's id, which its result names.
+	 */
+	callId: string,
+	/**
+	 * The tool.
+	 */
+	name: string,
+	/**
+	 * Its input, as the thread has it.
+	 */
+	input: JsonValue, } | { "kind": "toolResult",
+	/**
+	 * The call it answers.
+	 */
+	callId: string,
+	/**
+	 * How it ended.
+	 */
+	status: AgentToolStatus,
+	/**
+	 * What it printed.
+	 */
+	output?: string, } | { "kind": "turnFinished",
+	/**
+	 * The turn's id.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The agent's final answer, when its CLI gives one.
+	 */
+	result?: string, } | { "kind": "status",
+	/**
+	 * The new status.
+	 */
+	status: AgentStatus, } | { "kind": "reverted",
+	/**
+	 * The turns.
+	 */
+	turns: Array<TurnId>,
+};
+
+/**
+ * The thread a guest link shows: only what its header needs.
+ */
+export type GuestThread = {
+	/**
+	 * Its run id.
+	 */
+	id: RunId,
+	/**
+	 * Its title, if it has one.
+	 */
+	title?: string,
+	/**
+	 * Whether it's working, waiting, or done.
+	 */
+	status: AgentStatus,
+	/**
+	 * When it was made.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Params of `guest/history`: the page of entries before `before`.
+ */
+export type GuestHistoryParams = {
+	/**
+	 * The link's thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The page is the entries before this `seq`: the first one the guest has.
+	 */
+	before: number,
+};
+
+/**
+ * Result of `guest/history`.
+ */
+export type GuestHistoryResult = {
+	/**
+	 * The entries, oldest first.
+	 */
+	entries: Array<GuestEntry>,
+	/**
+	 * Whether older ones remain.
+	 */
+	more: boolean,
+};
+
+/**
  * Params of `guest/send` and `guest/dismiss`: the owner's answer to a waiting message.
  */
 export type GuestSuggestionParams = {
@@ -13577,6 +13785,20 @@ export type EventsEventParams = {
 	 * What happened.
 	 */
 	event: ParallaxEvent,
+};
+
+/**
+ * Params of `guest/event`: one entry of a guest's subscription.
+ */
+export type GuestEventParams = {
+	/**
+	 * The subscription.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The entry.
+	 */
+	entry: GuestEntry,
 };
 
 /**

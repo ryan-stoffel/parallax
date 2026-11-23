@@ -209,22 +209,18 @@ pub(super) async fn subscribe_thread(
         .await?;
     cursor.after = seq;
     let background = agents::background(daemon, thread_id);
-    let mut snapshot = ThreadSnapshot {
-        seq,
-        thread,
-        runs,
-        events,
-        more,
-        requests,
-        background,
-        watching,
-    };
-    if context.guest.is_some() {
-        super::guest::snapshot(&mut snapshot);
-    }
     let result = SubscribeThreadResult {
         subscription: cursor.subscription,
-        snapshot: Some(snapshot),
+        snapshot: Some(ThreadSnapshot {
+            seq,
+            thread,
+            runs,
+            events,
+            more,
+            requests,
+            background,
+            watching,
+        }),
     };
     Ok((result, cursor))
 }
@@ -235,12 +231,7 @@ pub(super) async fn thread_history(
     context: &Context,
     params: ThreadHistoryParams,
 ) -> Result<ThreadHistoryResult, ErrorObject> {
-    let (mut events, more) = page(context, params.thread_id, params.before).await?;
-    // A guest's page has only what it may see (0108).
-    if context.guest.is_some() {
-        events
-            .retain(|logged| crate::server::remote::guest::shown(&logged.event, params.thread_id));
-    }
+    let (events, more) = page(context, params.thread_id, params.before).await?;
     Ok(ThreadHistoryResult { events, more })
 }
 

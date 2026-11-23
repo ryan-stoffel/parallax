@@ -29,14 +29,60 @@ use crate::hosted::{FakeRelay, allowed, answer, hosted_host_with, port_of, set_h
 use crate::remote::{https, open_account, refusal};
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
-/// The event kinds a guest may see.
-const SHOWN: [&str; 5] = [
-    "agent.started",
-    "agent.updated",
-    "agent.output",
-    "agent.finished",
-    "thread.reverted",
+/// The item kinds a guest may see.
+const SHOWN: [&str; 8] = [
+    "turnStarted",
+    "textDelta",
+    "text",
+    "toolCall",
+    "toolResult",
+    "turnFinished",
+    "status",
+    "reverted",
 ];
+
+/// The keys a guest's snapshot, entries, and items may hold, at any depth but a tool call's input.
+const KEYS: [&str; 18] = [
+    "subscription",
+    "snapshot",
+    "seq",
+    "thread",
+    "entries",
+    "more",
+    "id",
+    "title",
+    "status",
+    "createdAt",
+    "time",
+    "items",
+    "kind",
+    "turnId",
+    "text",
+    "messageId",
+    "callId",
+    "name",
+];
+
+/// Every key in `value` outside [`KEYS`], skipping tool call inputs and results' output.
+fn other_keys(value: &Value) -> Vec<String> {
+    let extra = ["input", "output", "result", "entry", "turns"];
+    let mut found = Vec::new();
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                if !KEYS.contains(&key.as_str()) && !extra.contains(&key.as_str()) {
+                    found.push(key.clone());
+                }
+                if key != "input" {
+                    found.extend(other_keys(inner));
+                }
+            }
+        }
+        Value::Array(values) => values.iter().for_each(|v| found.extend(other_keys(v))),
+        _ => {}
+    }
+    found
+}
 
 /// A host behind the fake relay with `hostedClient` on and the fake CLI, whose links last
 /// `lifetime`.
@@ -180,26 +226,15 @@ impl Guest {
             .await
     }
 
-    /// The guest's socket at `route` with a proof from `key`, initialized, if it opens.
+    /// The guest's socket at `route` with a proof from `key`, if it opens. plxd starts it, so it
+    /// takes calls without `initialize`.
     async fn socket_at(&self, route: &str, key: &remote::DpopKey) -> Option<Socket> {
         let (tls, _) = remote::open(route, None).await.ok()?;
         let mut request = format!("wss://{route}/ws").into_client_request().unwrap();
         let proof = key.proof("GET", &format!("https://{route}/ws"), None);
         request.headers_mut().insert("dpop", proof.parse().unwrap());
         let (socket, _) = tokio_tungstenite::client_async(request, tls).await.ok()?;
-        let mut socket = Socket { socket, next_id: 1 };
-        let (answer, _) = socket
-            .call(
-                "initialize",
-                json!({
-                    "protocol": { "min": 1, "max": 1 },
-                    "client": { "name": "guest", "version": "0" },
-                    "capabilities": {}
-                }),
-            )
-            .await;
-        assert!(answer["result"]["logId"].is_string(), "{answer}");
-        Some(socket)
+        Some(Socket { socket, next_id: 1 })
     }
 
     async fn socket(&self) -> Option<Socket> {
@@ -274,7 +309,7 @@ impl Socket {
     }
 }
 
-/// The params of `orchestration/subscribeThread` for `thread`.
+/// The params of `guest/subscribe` for `thread`.
 fn subscribe(thread: RunId) -> Value {
     json!({ "threadId": thread })
 }
@@ -467,10 +502,11 @@ async fn a_guest_is_refused_every_method_outside_its_list_and_every_other_thread
     let mut socket = guest.join().await;
     let allowed = [
         "events/unsubscribe",
-        "orchestration/subscribeThread",
-        "orchestration/threadHistory",
         "guest/suggest",
+        "guest/subscribe",
+        "guest/history",
     ];
+    // `initialize` among them: plxd started the connection, and a guest gets no handshake.
     for method in RequestName::ALL.iter().map(|method| method.name()) {
         if allowed.contains(&method) {
             continue;
@@ -484,35 +520,17 @@ async fn a_guest_is_refused_every_method_outside_its_list_and_every_other_thread
     }
 
     // Each allowed method checks the thread id.
-    assert_eq!(
-        socket
-            .refusal("orchestration/subscribeThread", subscribe(other))
-            .await
-            .as_deref(),
-        REFUSED
-    );
     let history = |thread| json!({ "threadId": thread, "before": 1_000_000 });
-    assert_eq!(
-        socket
-            .refusal("orchestration/threadHistory", history(other))
-            .await
-            .as_deref(),
-        REFUSED
-    );
     let suggest = |thread| json!({ "threadId": thread, "text": "Try the other file" });
-    assert_eq!(
-        socket
-            .refusal("guest/suggest", suggest(other))
-            .await
-            .as_deref(),
-        REFUSED
-    );
-    assert_eq!(
-        socket
-            .refusal("orchestration/threadHistory", history(thread))
-            .await,
-        None
-    );
+    for (method, params) in [
+        ("guest/subscribe", subscribe(other)),
+        ("guest/history", history(other)),
+        ("guest/suggest", suggest(other)),
+    ] {
+        let refused = socket.refusal(method, params).await;
+        assert_eq!(refused.as_deref(), REFUSED, "{method}");
+    }
+    assert_eq!(socket.refusal("guest/history", history(thread)).await, None);
     // Writes to a terminal or device are dropped, and the socket still answers.
     let write = json!({ "jsonrpc": "2.0", "method": "terminal/write", "params": {
         "threadId": thread, "terminalId": "t", "data": "ls\n" } });
@@ -522,65 +540,56 @@ async fn a_guest_is_refused_every_method_outside_its_list_and_every_other_thread
         .await
         .unwrap();
     assert_eq!(
-        socket
-            .refusal("orchestration/subscribeThread", subscribe(thread))
-            .await,
+        socket.refusal("guest/subscribe", subscribe(thread)).await,
         None
     );
     host.server.stop().await;
 }
 
+/// The item kinds in `entries`, each checked to hold only [`KEYS`].
+fn kinds(entries: &Value) -> Vec<String> {
+    let entries = entries.as_array().expect("entries");
+    let mut kinds = Vec::new();
+    for entry in entries {
+        assert_eq!(other_keys(entry), Vec::<String>::new(), "{entry}");
+        for item in entry["items"].as_array().unwrap() {
+            let kind = item["kind"].as_str().unwrap();
+            assert!(SHOWN.contains(&kind), "{item}");
+            kinds.push(kind.to_owned());
+        }
+    }
+    kinds
+}
+
 #[tokio::test]
-async fn a_guest_sees_only_its_threads_events_of_the_listed_kinds() {
+async fn a_guest_gets_only_its_threads_transcript_built_for_it() {
     let mut host = Host::start(None).await;
     let (thread, other) = (host.thread().await, host.thread().await);
     let (_, guest) = host.share(thread, false).await;
     let mut socket = guest.join().await;
-    let (answer, _) = socket
-        .call("orchestration/subscribeThread", subscribe(thread))
-        .await;
-    let snapshot = &answer["result"]["snapshot"];
-    let events = snapshot["events"].as_array().unwrap();
-    assert!(!events.is_empty(), "{snapshot}");
-    for logged in events {
-        let event = &logged["event"];
-        assert!(SHOWN.contains(&event["kind"].as_str().unwrap()), "{event}");
-        assert_eq!(event["runId"], json!(thread));
+    let (answer, _) = socket.call("guest/subscribe", subscribe(thread)).await;
+    let result = &answer["result"];
+    assert_eq!(other_keys(result), Vec::<String>::new(), "{result}");
+    let snapshot = &result["snapshot"];
+    assert_eq!(snapshot["thread"]["id"], json!(thread));
+    let shown = kinds(&snapshot["entries"]);
+    for kind in ["turnStarted", "text", "turnFinished"] {
+        assert!(shown.iter().any(|k| k == kind), "{kind} in {shown:?}");
     }
-    for hidden in ["requests", "background", "watching"] {
-        assert!(
-            snapshot[hidden].as_array().is_none_or(Vec::is_empty),
-            "{hidden}"
-        );
-    }
-    // Older pages hold the same, though the thread's own log has more kinds.
+    let snapshot_text = answer.to_string();
+    assert!(snapshot_text.contains("Reading the code."), "the agent's reply");
+    assert!(!snapshot_text.contains(&other.to_string()));
+
+    // Older pages are built the same way.
     let (page, _) = socket
         .call(
-            "orchestration/threadHistory",
+            "guest/history",
             json!({ "threadId": thread, "before": 1_000_000 }),
         )
         .await;
-    let page = page["result"]["events"].as_array().unwrap().clone();
-    assert!(!page.is_empty());
-    for logged in &page {
-        assert!(
-            SHOWN.contains(&logged["event"]["kind"].as_str().unwrap()),
-            "{logged}"
-        );
-    }
-    let owner = host
-        .client
-        .call::<parallax_protocol::methods::OrchestrationThreadHistory>(
-            parallax_protocol::ThreadHistoryParams {
-                thread_id: thread,
-                before: 1_000_000,
-            },
-        )
-        .await
-        .unwrap();
-    assert!(owner.events.len() > page.len(), "the owner's page has more");
+    assert!(!kinds(&page["result"]["entries"]).is_empty());
 
-    // Another turn on the other thread, then on this one: only this one's listed events come.
+    // Another turn on the other thread, then on this one: only this one's entries come.
     for run in [other, thread] {
         let send = send_params(run, TurnId::generate(), "Once more");
         host.client.call::<AgentSend>(send).await.unwrap();
@@ -592,11 +601,13 @@ async fn a_guest_sees_only_its_threads_events_of_the_listed_kinds() {
     }
     assert!(!seen.is_empty(), "this thread's turn reaches the guest");
     for message in &seen {
-        assert_eq!(message["method"], "events/event", "{message}");
-        let event = &message["params"]["event"];
-        assert!(SHOWN.contains(&event["kind"].as_str().unwrap()), "{event}");
-        assert_eq!(event["runId"], json!(thread), "{event}");
+        assert_eq!(message["method"], "guest/event", "{message}");
+        let entry = &message["params"]["entry"];
+        assert!(!kinds(&json!([entry])).is_empty());
+        assert!(!message.to_string().contains(&other.to_string()));
     }
+    let live = seen.iter().map(Value::to_string).collect::<String>();
+    assert!(live.contains("Once more"), "this thread's new turn");
     host.server.stop().await;
 }
 
@@ -608,14 +619,12 @@ async fn a_guests_reads_stop_at_ten_a_minute() {
     let mut socket = guest.join().await;
     let history = json!({ "threadId": thread, "before": 1_000_000 });
     for read in 0..10 {
-        let refused = socket
-            .refusal("orchestration/threadHistory", history.clone())
-            .await;
+        let refused = socket.refusal("guest/history", history.clone()).await;
         assert_eq!(refused, None, "read {read}");
     }
     assert_eq!(
         socket
-            .refusal("orchestration/threadHistory", history.clone())
+            .refusal("guest/history", history.clone())
             .await
             .as_deref(),
         Some("guestRateLimited")
@@ -623,10 +632,7 @@ async fn a_guests_reads_stop_at_ten_a_minute() {
     // A second socket of the same link shares the limit.
     let mut again = guest.socket().await.unwrap();
     assert_eq!(
-        again
-            .refusal("orchestration/threadHistory", history)
-            .await
-            .as_deref(),
+        again.refusal("guest/history", history).await.as_deref(),
         Some("guestRateLimited")
     );
     host.server.stop().await;
@@ -850,14 +856,13 @@ async fn a_guests_suggestion_waits_until_the_owner_sends_or_dismisses_it() {
     host.wait(thread).await;
     let (history, _) = socket
         .call(
-            "orchestration/threadHistory",
+            "guest/history",
             json!({ "threadId": thread, "before": 1_000_000 }),
         )
         .await;
-    let events = history["result"]["events"].as_array().unwrap();
-    let sent = events
-        .iter()
-        .any(|logged| logged["event"].to_string().contains("Add a test"));
+    let sent = history["result"]["entries"]
+        .to_string()
+        .contains("Add a test");
     assert!(sent, "the sent message is in the thread");
     let again = host.client.call::<GuestSend>(answer(first)).await;
     assert_eq!(kind(&again.unwrap_err()), ErrorKind::GuestRefused);

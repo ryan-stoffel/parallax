@@ -127,12 +127,75 @@
   {
     "jsonrpc": "2.0",
     "id": 8,
-    "method": "orchestration/threadHistory",
-    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001", "before": 40 }
+    "method": "guest/subscribe",
+    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001" }
   },
   {
     "jsonrpc": "2.0",
     "id": 8,
+    "result": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "snapshot": {
+        "seq": 41,
+        "thread": {
+          "id": "01936b2e-6a00-7000-8000-000000000001",
+          "title": "Fix the empty case",
+          "status": "running",
+          "createdAt": "2026-11-22T15:00:00Z"
+        },
+        "entries": [
+          {
+            "seq": 40,
+            "time": "2026-11-22T15:00:01Z",
+            "items": [
+              { "kind": "turnStarted", "turnId": "01936b2f-1000-7000-8000-000000000009", "text": "Fix the empty case." },
+              { "kind": "text", "messageId": "msg_1", "text": "Reading the parser." },
+              { "kind": "toolCall", "callId": "toolu_1", "name": "Read", "input": { "file_path": "src/parse.rs" } },
+              { "kind": "toolResult", "callId": "toolu_1", "status": "ok", "output": "fn parse() {}" },
+              { "kind": "turnFinished", "turnId": "01936b2f-1000-7000-8000-000000000009", "result": "Fixed." }
+            ]
+          }
+        ],
+        "more": true
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "guest/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "entry": {
+        "seq": 42,
+        "time": "2026-11-22T15:00:02Z",
+        "items": [
+          { "kind": "textDelta", "messageId": "msg_2", "text": "Run" },
+          { "kind": "status", "status": "completed" },
+          { "kind": "reverted", "turns": ["01936b2f-1000-7000-8000-000000000009"] }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "guest/history",
+    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001", "before": 40 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": { "entries": [], "more": false }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "guest/history",
+    "params": { "threadId": "01936b2e-6a00-7000-8000-000000000001", "before": 40 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
     "error": {
       "code": -32000,
       "message": "A guest gets 10 reads a minute. Try again shortly.",

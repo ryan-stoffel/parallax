@@ -161,9 +161,10 @@ pub use git::{
     AgentCommitParams, AgentGitStatusParams, AgentPushParams, GitStatus, RepoGitStatusParams,
 };
 pub use guest::{
-    GuestCreateParams, GuestCreateResult, GuestLink, GuestListParams, GuestListResult,
-    GuestRevokeParams, GuestSuggestParams, GuestSuggestResult, GuestSuggestion,
-    GuestSuggestionParams,
+    GuestCreateParams, GuestCreateResult, GuestEntry, GuestEventParams, GuestHistoryParams,
+    GuestHistoryResult, GuestItem, GuestLink, GuestListParams, GuestListResult, GuestRevokeParams,
+    GuestSnapshot, GuestSubscribeParams, GuestSubscribeResult, GuestSuggestParams,
+    GuestSuggestResult, GuestSuggestion, GuestSuggestionParams, GuestThread,
 };
 pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
