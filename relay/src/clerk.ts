@@ -3,7 +3,7 @@ import { importKeys, KeysUnavailable, verifyClerkToken } from "@parallax/clerk-v
 import type { Env } from "./index";
 
 /** A comma-separated var as a list. Unset is empty, which accepts none. */
-const list = (value?: string) =>
+export const list = (value?: string) =>
   (value ?? "")
     .split(",")
     .map((item) => item.trim())
@@ -45,22 +45,38 @@ export const backToDevelopment = (from: string, to: string) =>
 
 /**
  * The relay account of a Parallax account token (0067), by [`accountOf`]: a session token from
- * Clerk's web or Expo SDK, or the desktop app's OAuth access token. Null when it isn't one.
- * `CLERK_ISSUER` lists the instances whose tokens count, so a move between instances can take
- * both (PLX-1049), and the token's own `iss` picks which one checks it. `CLERK_JWKS_URL` and
- * `CLERK_CLIENT_IDS` list each one's JWKS and OAuth applications in the same order, so a token
- * counts only with its own instance's applications. The JWKS is `CLERK_JWKS` inline (tests and
- * `wrangler dev`), else its `CLERK_JWKS_URL` entry, else its issuer's `/.well-known/jwks.json`.
- * Throws `KeysUnavailable` when those keys can't be read, so an outage isn't taken for a bad token
- * (PLX-1351). The JWKS is read through [`sharedJwks`], and `fetched` hears how long reading it
- * took when this check had to fetch it from Clerk: the keys are otherwise this isolate's or this
- * data center's cached ones.
+ * Clerk's web or Expo SDK, or the desktop app's OAuth access token. Null when it isn't one, and
+ * for the hosted browser client's token (0108), which only [`verifyAccount`] answers for, so a
+ * route takes that token only by asking for it. Throws `KeysUnavailable` as [`verifyAccount`] does.
  */
 export async function verifySession(
   env: Env,
   token: string,
   fetched?: (ms: number) => void,
 ): Promise<string | null> {
+  const account = await verifyAccount(env, token, fetched);
+  return account && !account.hosted ? account.user : null;
+}
+
+/**
+ * The relay account of a Parallax account token, as [`verifySession`] reads it, and whether it is
+ * the hosted browser client's (0108): an OAuth access token whose `client_id` is in
+ * `CLERK_HOSTED_CLIENT_IDS`. Only `GET /v1/hosts` and `POST /v1/hosts/<id>/tickets` take one.
+ * `CLERK_ISSUER` lists the instances whose tokens count, so a move between instances can take
+ * both (PLX-1049), and the token's own `iss` picks which one checks it. `CLERK_JWKS_URL`,
+ * `CLERK_CLIENT_IDS`, and `CLERK_HOSTED_CLIENT_IDS` list each one's JWKS and OAuth applications in
+ * the same order, so a token counts only with its own instance's applications. The JWKS is
+ * `CLERK_JWKS` inline (tests and `wrangler dev`), else its `CLERK_JWKS_URL` entry, else its
+ * issuer's `/.well-known/jwks.json`. Throws `KeysUnavailable` when those keys can't be read, so an
+ * outage isn't taken for a bad token (PLX-1351). The JWKS is read through [`sharedJwks`], and
+ * `fetched` hears how long reading it took when this check had to fetch it from Clerk: the keys are
+ * otherwise this isolate's or this data center's cached ones.
+ */
+export async function verifyAccount(
+  env: Env,
+  token: string,
+  fetched?: (ms: number) => void,
+): Promise<{ user: string; hosted: boolean } | null> {
   // An issuer that isn't listed is refused before any key is fetched, and with none configured a
   // deploy trusts no instance.
   const issuer = claimedIssuer(token);
@@ -76,15 +92,19 @@ export async function verifySession(
         return response;
       }
     : (input, init) => sharedJwks(url ?? String(input), init?.cache === "no-store", fetched);
+  // Several for one instance are separated by spaces.
+  const ids = (value?: string) => (list(value)[at] ?? "").split(/\s+/).filter(Boolean);
+  const hostedIds = ids(env.CLERK_HOSTED_CLIENT_IDS);
   try {
     const verified = await verifyClerkToken(token, {
       issuer,
-      // Several for one instance are separated by spaces.
-      clientIds: (list(env.CLERK_CLIENT_IDS)[at] ?? "").split(/\s+/).filter(Boolean),
+      clientIds: [...ids(env.CLERK_CLIENT_IDS), ...hostedIds],
       authorizedParties: list(env.CLERK_AUTHORIZED_PARTIES),
       fetch: jwks,
     });
-    return accountOf(issuer, verified.userId);
+    // An id listed as both counts as the hosted client's, the narrower.
+    const hosted = verified.clientId !== undefined && hostedIds.includes(verified.clientId);
+    return { user: accountOf(issuer, verified.userId), hosted };
   } catch (error) {
     if (error instanceof KeysUnavailable) throw error;
     return null;

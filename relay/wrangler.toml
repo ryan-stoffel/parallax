@@ -18,6 +18,10 @@ workers_dev = false
 CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
 CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
 CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
+# The hosted browser client's OAuth application (0108) goes in CLERK_HOSTED_CLIENT_IDS, in the same
+# form, once Ryan makes it on the production instance. Until then no hosted token counts.
+# The only origin the hosted client's `fetch` routes answer with CORS (0108).
+HOSTED_CLIENT_ORIGINS = "https://app.parallax.codes"
 # Make up to 3 stream objects for a spare, in all, until one runs in the data center plxd's control
 # socket entered (PLX-1540, on in production from PLX-1544).
 SPARE_PLACEMENT_TRIES = "3"
@@ -68,6 +72,7 @@ routes = []
 CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
 CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
 CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
+HOSTED_CLIENT_ORIGINS = "https://app.parallax.codes"
 
 [[env.dev.durable_objects.bindings]]
 name = "HOSTS"
@@ -107,6 +112,10 @@ SPARE_PLACEMENT_TRIES = "3"
 CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
 CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
 CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
+# The staging client's OAuth application on the development instance goes in
+# CLERK_HOSTED_CLIENT_IDS once Ryan makes it (0108), and never in production's. Staging alone also
+# answers CORS for the staging client's origin.
+HOSTED_CLIENT_ORIGINS = "https://app.parallax.codes,https://parallax-web-staging.stoffel-thomas-ryan.workers.dev"
 
 [[env.staging.durable_objects.bindings]]
 name = "HOSTS"

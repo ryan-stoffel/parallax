@@ -73,6 +73,8 @@ Production is Ryan's to deploy, by hand. No workflow deploys it, and agents don'
    - `CLERK_ISSUER`: `https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev`.
    - `CLERK_JWKS_URL`: each issuer's `/.well-known/jwks.json`, in the same order.
    - `CLERK_CLIENT_IDS`: the desktop OAuth application's client id on each, in the same order: `mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq`.
+   - `CLERK_HOSTED_CLIENT_IDS` isn't set yet: the hosted browser client's OAuth application (0108) on each instance, in the same order, once Ryan makes it. Its tokens count only on `GET /v1/hosts` and `POST /v1/hosts/<id>/tickets`, and their tickets open streams marked `hosted`. Staging's application goes only in staging's.
+   - `HOSTED_CLIENT_ORIGINS`: `https://app.parallax.codes`, the only origin those two routes and `POST /v1/hosts/<id>/guest-tickets` answer with CORS. Staging adds its own client's origin.
    - `CLERK_AUTHORIZED_PARTIES` isn't set: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
 
    A token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. The apps sign in to production, and the development instance stays for computers that haven't moved to it yet (PLX-1465). Remove it from `wrangler.toml` only once they have, the probe's account is on production (PLX-1457), and a stable release carries both.

@@ -138,6 +138,12 @@ The desktop app and the phone stay the clients that need no trust in a served pa
 - **Suggestions.** At most 5 wait on a link, in `guest/list`. `guest/send` sends one as the owner's `agent/send`, and `guest/dismiss` drops it. Nothing tells the owner's apps when one arrives yet, so they read `guest/list`.
 - **Ending.** Expiry, `guest/revoke`, a new link for the thread, a `thread.updated` that archives it or a `thread.deleted` for it in the event log, whichever path wrote it, and `hostedClient` off each end the link, close its connections, cut its relay streams, and resend the relay's list.
 
+#### How the relay does it (PLX-1616)
+
+- **Settings.** `CLERK_HOSTED_CLIENT_IDS` names the hosted client's OAuth applications, per Clerk instance in `CLERK_ISSUER`'s order, as `CLERK_CLIENT_IDS` does. It stays unset until Ryan's call 1 (and, on staging, call 2) makes them, so no hosted token counts before then. `HOSTED_CLIENT_ORIGINS` in `wrangler.toml` is `https://app.parallax.codes`, and on the staging Worker also `https://parallax-web-staging.stoffel-thomas-ryan.workers.dev`.
+- **CORS** covers `POST /v1/hosts/<id>/guest-tickets` too, since the guest's page calls it with `fetch`. A preflight allows that route's one method and the `authorization` header, and no credentials. Any other origin gets 403 to a preflight and no CORS header on an answer.
+- **The guest's header** is `Authorization: Guest <linkId>.<pass>`, with the pass as its 32 bytes in base64url (43 characters). The relay hashes those bytes and compares the hex SHA-256 with plxd's, in constant time. No pass, a malformed one, a wrong one, and an unknown, withdrawn, or expired link all get the same 401. Past a guest budget, a ticket gets 429 `rate_limited`, `too_many_streams`, or `daily_limit`, and a stream past its share closes with 4429.
+
 ### Ryan's calls
 
 All three are dashboard steps only Ryan can take.

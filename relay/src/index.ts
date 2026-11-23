@@ -23,13 +23,19 @@
  * - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, which frees its slot and lists it
  *   as `removed` in `GET /v1/hosts` until it registers under them again (PLX-1351).
  * - Mobile devices register for push at `/v1/devices`.
+ * - The hosted browser client (0108) lists hosts and gets tickets with `fetch`, answered with CORS
+ *   for its origin only, and its token counts on those two routes only. Its tickets open streams
+ *   marked `client: "hosted"`.
+ * - A guest link's holder (0108) gets a ticket with the link's relay pass
+ *   (`POST /v1/hosts/<id>/guest-tickets`), checked against the hash plxd sent over its WebSocket,
+ *   for a stream marked `guest: <linkId>`, within the guests' own budgets.
  *
- * Every route but the WebSockets plxd opens, the webhooks, and a plxd's proof above needs a Clerk
- * session token.
+ * Every route but the WebSockets plxd opens, the webhooks, a plxd's proof above, and a guest's
+ * ticket needs a Clerk session token.
  */
-import { allowedUser, verifySession } from "./clerk";
+import { allowedUser, list, verifyAccount, verifySession } from "./clerk";
 import { connectCode } from "./connect-code";
-import { sha256 } from "./crypto";
+import { decodeBase64url, sha256 } from "./crypto";
 import {
   CONTROL_MINTED,
   forwarded,
@@ -37,6 +43,7 @@ import {
   type HookReply,
   HostRelay,
   JOIN_MINTED,
+  LINK_ID,
   MINTED_HEADER,
   PEER_HEADER,
   readCapped,
@@ -69,6 +76,13 @@ export interface Env {
    *  One entry per issuer, comma-separated in `CLERK_ISSUER`'s order, so a token counts only with
    *  its own instance's applications. Several for one instance are separated by spaces. */
   CLERK_CLIENT_IDS?: string;
+  /** The hosted browser client's OAuth applications (0108), by client id, in the same form as
+   *  `CLERK_CLIENT_IDS`. Their tokens count only on `GET /v1/hosts` and
+   *  `POST /v1/hosts/<id>/tickets`, and their tickets open marked streams. Unset accepts none. */
+  CLERK_HOSTED_CLIENT_IDS?: string;
+  /** The hosted client's origins, comma-separated, the only ones its `fetch` routes answer with
+   *  CORS. Unset answers none. */
+  HOSTED_CLIENT_ORIGINS?: string;
   /** The origins a browser session token's `azp` may name, comma-separated. Unset accepts no
    *  browser. Native apps' tokens carry no `azp`. */
   CLERK_AUTHORIZED_PARTIES?: string;
@@ -201,7 +215,7 @@ async function relayed(
   // PLX-1493 reads the first 16 of.
   const beside: Record<string, string> = {};
   let hop: Promise<void> | undefined;
-  let opened: Awaited<ReturnType<HostRelay["open"]>>;
+  let opened: Awaited<ReturnType<HostRelay["open"] | HostRelay["redeem"]>>;
   if (ticket !== null) {
     opened = await host.redeem(ticket);
   } else if (request.headers.has(PEER_HEADER)) {
@@ -211,6 +225,8 @@ async function relayed(
   } else {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     // Clerk being down refuses this stream as a bad sign-in does. The account's list tells them apart.
+    // `verifySession` refuses the hosted client's token (0108), which opens a stream only through a
+    // ticket, so its stream is always marked and never the spare.
     const checked = token
       ? verifySession(env, token, (ms) => (beside.jwks = `dur=${ms.toFixed(3)}`)).catch(() => null)
       : Promise.resolve(null);
@@ -251,16 +267,17 @@ async function relayed(
   };
   const joinStart = performance.now();
   let response = await join(opened.stream);
-  if (response.status === 409) {
+  if (response.status === 409 && !("marked" in opened)) {
     // The stream already has a client: a spare whose claim the host's object lost in a reset after
     // its answer left (PLX-1506). The object stops offering it, and this client takes another, once.
+    // Never a marked stream's client (0108), since another take could hand it a spare.
     const again = await host.retake(timed);
     if ("error" in again) return json(again.status, { error: again.error });
     response = await join(again.stream);
   }
   if (!timed || response.status !== 101) return response;
   record("stream_join", joinStart);
-  if (opened.timing) {
+  if ("timing" in opened && opened.timing) {
     times.push(`admit;dur=${opened.timing.admitMs.toFixed(3)}`, `take;dur=${opened.timing.takeMs.toFixed(3)}`, `spare;dur=${opened.timing.spare ? 1 : 0}`);
   }
   const headers = new Headers(response.headers);
@@ -272,6 +289,72 @@ async function relayed(
   headers.set("server-timing", times.join(", "));
   return new Response(null, { status: 101, webSocket: response.webSocket, headers });
 }
+
+/** The method of the route at `parts` that the hosted client calls with `fetch` (0108), if it's
+ *  one of them. */
+function corsMethod(parts: string[]): string | undefined {
+  const [version, kind, , action] = parts;
+  if (version !== "v1" || kind !== "hosts") return undefined;
+  if (parts.length === 2) return "GET";
+  if (parts.length === 4 && (action === "tickets" || action === "guest-tickets")) return "POST";
+  return undefined;
+}
+
+/**
+ * CORS for the hosted client's `fetch` routes (0108), for the origins in `HOSTED_CLIENT_ORIGINS`
+ * only: a preflight from one is answered here, and every answer to one carries its origin. No other
+ * origin gets either. No cookie is involved, so nothing allows credentials. CORS doesn't protect
+ * these routes, since a token can be sent from a server. It only lets the client's page read them.
+ */
+async function cors(request: Request, env: Env, next: () => Promise<Response>): Promise<Response> {
+  const method = corsMethod(new URL(request.url).pathname.split("/").slice(1));
+  if (!method) return next();
+  const origin = request.headers.get("origin") ?? "";
+  const allowed = list(env.HOSTED_CLIENT_ORIGINS).includes(origin);
+  if (request.method === "OPTIONS") {
+    if (!allowed || request.headers.get("access-control-request-method") !== method)
+      return json(403, { error: "origin_not_allowed" });
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": origin,
+        "access-control-allow-methods": method,
+        "access-control-allow-headers": "authorization",
+        "access-control-max-age": "600",
+        vary: "origin",
+      },
+    });
+  }
+  const response = await next();
+  if (!allowed) return response;
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", origin);
+  // So the client's page can read when a 429 or 503 says to try again.
+  headers.set("access-control-expose-headers", "retry-after");
+  headers.append("vary", "origin");
+  return new Response(response.body, { status: response.status, headers });
+}
+
+/**
+ * The link id and the hex SHA-256 of the relay pass in a guest's `Authorization: Guest
+ * <linkId>.<pass>` (0108), the pass being its 32 bytes in base64url. Null for anything else.
+ */
+async function guestPass(header: string | null): Promise<{ link: string; hash: string } | null> {
+  const [, link = "", pass = ""] = header?.match(/^Guest ([^.\s]+)\.([A-Za-z0-9_-]{43})$/) ?? [];
+  if (!LINK_ID.test(link)) return null;
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = decodeBase64url(pass);
+  } catch {
+    return null;
+  }
+  if (bytes.byteLength !== 32) return null;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return { link, hash: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("") };
+}
+
+/** The signed-in routes a hosted client's token counts on (0108). Every other answers it 401. */
+const HOSTED_ROUTES = new Set(["GET /hosts", "POST /hosts/:id/tickets"]);
 
 const routes = {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -315,20 +398,36 @@ const routes = {
       return listHosts(env, user);
     }
 
+    // A guest link's holder, with no account (0108): the anonymous limit first, before any object
+    // runs, then the host's object checks the pass, its link, and the budgets.
+    if (request.method === "POST" && kind === "hosts" && action === "guest-tickets" && parts.length === 4) {
+      if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
+      const address = network(request.headers.get("cf-connecting-ip") ?? "");
+      if (!(await env.ANON.limit({ key: `${address}:${id}` })).success) return limited();
+      const pass = await guestPass(request.headers.get("authorization"));
+      if (!pass) return json(401, { error: "unauthorized" });
+      const result = await host(id).guestTicket(pass.link, pass.hash);
+      if ("error" in result) return json(result.status, { error: result.error });
+      return json(200, result);
+    }
+
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
-    let user: string | null;
+    let signedIn: Awaited<ReturnType<typeof verifyAccount>>;
     try {
-      user = token ? await verifySession(env, token) : null;
+      signedIn = token ? await verifyAccount(env, token) : null;
     } catch {
       return json(503, { error: "clerk_unreachable" }, { "retry-after": "60" });
     }
-    if (!token || !user) return json(401, { error: "unauthorized" });
+    const route = `${request.method} /${kind}${parts.length > 2 ? "/:id" : ""}${action ? `/${action}` : ""}`;
+    // The hosted client's token counts on its two routes only (0108).
+    if (!token || !signedIn || (signedIn.hosted && !HOSTED_ROUTES.has(route)))
+      return json(401, { error: "unauthorized" });
+    const { user, hosted } = signedIn;
     if (!allowedUser(env, user)) return json(403, { error: "user_not_allowed" });
     const account = env.USERS.get(env.USERS.idFromName(user));
     if (!(await account.allow()))
       return json(429, { error: "rate_limited" }, { "retry-after": "60" });
 
-    const route = `${request.method} /${kind}${parts.length > 2 ? "/:id" : ""}${action ? `/${action}` : ""}`;
     switch (route) {
       case "POST /hosts": {
         const body = (await request.json().catch(() => null)) as { hostId?: unknown } | null;
@@ -363,7 +462,8 @@ const routes = {
       }
       case "POST /hosts/:id/tickets": {
         if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
-        const result = await host(id).ticket(user);
+        // The hosted client's ticket opens a stream marked as its (0108).
+        const result = await host(id).ticket(user, hosted);
         if ("error" in result) return json(result.status, { error: result.error });
         return json(200, result);
       }
@@ -392,7 +492,7 @@ export default {
         const [, kind = "", id = ""] = new URL(request.url).pathname.split("/").slice(1);
         return { kind: scrub(kind), host: HOST_ID.test(id) ? short(id) : undefined };
       },
-      () => routes.fetch(request, env, ctx),
+      () => cors(request, env, () => routes.fetch(request, env, ctx)),
     );
   },
 } satisfies ExportedHandler<Env>;

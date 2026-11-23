@@ -30,8 +30,9 @@ export const EARLY_BYTES = 64 * 1024;
  */
 const UNCONFIRMED = { allowUnconfirmed: true } as const;
 
-/** What the host's object armed this stream with. */
-type Armed = { hostId: string; stream: string; tokenHash: string };
+/** What the host's object armed this stream with: a guest's stream also names its link (0108),
+ *  which its reports carry so the host's object counts the guest's budget. */
+type Armed = { hostId: string; stream: string; tokenHash: string; guest?: string };
 
 /** Any Cloudflare zone's trace, which names the data center a subrequest left from (PLX-1540). */
 export const TRACE_URL = "https://cloudflare.com/cdn-cgi/trace";
@@ -407,7 +408,7 @@ export class StreamRelay extends DurableObject<Env> {
     this.reportDue = false;
     await this.ctx.storage.deleteAlarm(UNCONFIRMED);
     const host = this.env.HOSTS.get(this.env.HOSTS.idFromName(armed.hostId));
-    const within = await host.report(armed.stream, bytes, closed);
+    const within = await host.report(armed.stream, bytes, closed, armed.guest);
     if (!within && !closed)
       for (const ws of this.ctx.getWebSockets()) this.shut(ws, 4429, "daily limit");
     return within;
