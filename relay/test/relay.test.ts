@@ -1624,6 +1624,19 @@ describe("stream ids minted at plxd's edge (PLX-1623)", () => {
     }
   });
 
+  it("queues nothing for a join the stream object refuses, which anyone who knows the host id can send", async () => {
+    const { host, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const before = (await queued(host))!;
+    const refused = await join(host, { ...spare, token: "not-the-token" });
+    expect(refused instanceof Response && refused.status).toBe(404);
+    // plxd's own join then adds its ids, and only those: the refused one added none before it.
+    opened(await join(host, spare));
+    await expect.poll(async () => (await queued(host))?.length).toBe(before.length + JOIN_MINTED);
+    expect((await queued(host))!.slice(0, before.length)).toEqual(before);
+  });
+
   it("keeps at most MAX_MINTED ids", async () => {
     const { host } = await online();
     for (let again = 0; again < 2; again++) await connectHost(host);
