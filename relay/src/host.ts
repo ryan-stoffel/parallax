@@ -44,6 +44,29 @@ export const HOST_WAIT = 7_000;
 const RECONNECT_WINDOW = 60_000;
 /** How many clients' streams a host may have open at once, its spare included. */
 export const MAX_STREAMS = 16;
+/** How many stream ids, minted by Workers at plxd's edge, a host's object keeps for its next
+ *  streams (PLX-1623). Enough for a burst of connects before plxd's joins refill it. */
+export const MAX_MINTED = 8;
+/** The header the Worker puts stream ids it minted in, comma-separated, on plxd's control socket
+ *  request. The Worker always sets it, so what plxd sent there never arrives (PLX-1623). */
+export const MINTED_HEADER = "x-parallax-minted";
+/** How many ids the Worker mints for a control socket: the first spare and its standby, and two
+ *  for clients that come before plxd's first join refills the queue. */
+export const CONTROL_MINTED = 4;
+/** How many ids the Worker mints each time plxd joins a stream. Each stream uses one, so two
+ *  fill the queue back up after a burst, or after streams plxd never joined. */
+export const JOIN_MINTED = 2;
+
+/** `id` when it's a stream object's unique id, which the Worker minted, else undefined. */
+function mintedId(env: Env, id: unknown) {
+  if (typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) return undefined;
+  try {
+    env.STREAMS.idFromString(id);
+    return id;
+  } catch {
+    return undefined;
+  }
+}
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -213,7 +236,8 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
-   * it, and counted as open. A spare waits for the next client.
+   * it, and counted as open. A spare waits for the next client. Its id, and a spare's next
+   * standby, come from `minted` (PLX-1623).
    */
   protected async newStream(user: string, spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
     const reserved = await this.ctx.blockConcurrencyWhile(async () => {
@@ -225,13 +249,15 @@ export class HostRelay extends DurableObject<Env> {
       const streams = await this.streams();
       if (Object.keys(streams).length >= MAX_STREAMS)
         return { status: 429, error: "too_many_streams" } as Refusal;
-      const standby = spare ? await this.nextSpare() : undefined;
-      const stream = standby?.id ?? this.env.STREAMS.newUniqueId().toString();
+      const minted = (await this.ctx.storage.get<string[]>("minted")) ?? [];
+      const fresh = (purpose: string) => minted.shift() ?? this.mintHere(purpose);
+      const standby = spare ? await this.nextSpare(fresh) : undefined;
+      const stream = standby?.id ?? fresh("stream");
       // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
       streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
-      // The next standby goes in the same write, so a spare still costs one confirmation.
-      if (standby) await this.ctx.storage.put({ streams, standby: standby.next });
-      else await this.ctx.storage.put<Streams>("streams", streams);
+      // The next standby and the queue go in the same write, so a stream still costs one
+      // confirmation.
+      await this.ctx.storage.put({ streams, minted, ...(standby ? { standby: standby.next } : {}) });
       return { stream, owner, host, proof };
     });
     if ("error" in reserved) return reserved;
@@ -278,18 +304,53 @@ export class HostRelay extends DurableObject<Env> {
    * The id for a spare and the next standby (PLX-1574). A stream object Cloudflare made a moment
    * ago is sometimes slow to reach for its first seconds, so each spare takes the standby the last
    * spare made, saved as `standby`, else a new object. The next standby is made now, with a call
-   * that stores nothing, so it has aged by the time a spare needs it. The caller saves `next`.
-   * A standby holds nothing, no socket and no alarm, so one that's never used costs nothing.
+   * that stores nothing, so it has aged by the time a spare needs it. `fresh` gives each new id.
+   * The caller saves `next`. A standby holds nothing, no socket and no alarm, so one that's never
+   * used costs nothing.
    */
-  private async nextSpare() {
+  private async nextSpare(fresh: (purpose: string) => string) {
     const saved = await this.ctx.storage.get<string>("standby");
-    const next = this.env.STREAMS.newUniqueId();
+    const id = saved ?? fresh("spare");
+    const next = fresh("standby");
     this.ctx.waitUntil(
-      this.env.STREAMS.get(next)
+      this.env.STREAMS.get(this.env.STREAMS.idFromString(next))
         .hostJoined()
         .catch((error) => logError("host.standby", this.context(), error)),
     );
-    return { id: saved ?? this.env.STREAMS.newUniqueId().toString(), next: next.toString() };
+    return { id, next };
+  }
+
+  /**
+   * A stream id minted here, only when `minted` is empty, logged as `host_minted` so a queue that
+   * runs dry shows up (PLX-1623). A stream whose id this object minted while running far from plxd
+   * stays slow on plxd's side wherever it runs.
+   */
+  private mintHere(purpose: string) {
+    logEvent("host_minted", { ...this.context(), for: purpose });
+    return this.env.STREAMS.newUniqueId().toString();
+  }
+
+  /** Adds `ids`, which a Worker at plxd's edge minted, to `minted`, keeping the newest
+   *  [`MAX_MINTED`]. Answers the queue for the caller to save in its own write. */
+  private async queueMinted(ids: (string | undefined)[]) {
+    const queued = (await this.ctx.storage.get<string[]>("minted")) ?? [];
+    for (const id of ids) {
+      const valid = mintedId(this.env, id);
+      if (valid && !queued.includes(valid)) queued.push(valid);
+    }
+    return queued.slice(-MAX_MINTED);
+  }
+
+  /**
+   * Ids the Worker minted at plxd's edge after plxd joined one of this host's streams, for later
+   * streams (PLX-1623): [`JOIN_MINTED`] each time, while a stream uses one, so the queue stays full
+   * up to [`MAX_MINTED`]. Only the Worker calls this.
+   */
+  async supply(ids: string[]) {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      if (!(await this.owner())) return;
+      await this.ctx.storage.put("minted", await this.queueMinted(ids));
+    });
   }
 
   /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
@@ -647,7 +708,11 @@ export class HostRelay extends DurableObject<Env> {
       "host.fetch",
       () => this.context(),
       () =>
-        this.hostSocket(request.headers.get(PROOF_HEADER) ?? "", request.headers.get(STREAMS_HEADER)),
+        this.hostSocket(
+          request.headers.get(PROOF_HEADER) ?? "",
+          request.headers.get(STREAMS_HEADER),
+          request.headers.get(MINTED_HEADER)?.split(",") ?? [],
+        ),
     );
   }
 
@@ -656,9 +721,10 @@ export class HostRelay extends DurableObject<Env> {
    * key. The relay takes it only within [`PROOF_PAST`] and [`PROOF_FUTURE`] of its own clock and
    * newer than the last one it took, so a proof works once. No socket opens without one, so
    * strangers who know the host id, which is in every webhook URL, have nothing to hold open or
-   * push out. `held` lists the streams plxd still holds, for [`settleStreams`].
+   * push out. `held` lists the streams plxd still holds, for [`settleStreams`]. `minted` are stream
+   * ids the Worker made for the first spare and its standby (PLX-1623).
    */
-  private async hostSocket(proof: string, held: string | null) {
+  private async hostSocket(proof: string, held: string | null, minted: string[]) {
     const owner = await this.owner();
     if (!owner) return json(404, { error: "not_registered" });
     const [at = "", signature = ""] = proof.split(".");
@@ -677,7 +743,15 @@ export class HostRelay extends DurableObject<Env> {
     }
     if (!this.limits.allow("hostConnect", LIMITS.hostConnect))
       return json(429, { error: "rate_limited" }, { "retry-after": "60" });
-    await this.ctx.storage.put("lastProof", time);
+    // A host object with no `minted` yet saved its standby before PLX-1623, with an id it minted
+    // itself, so that standby goes, in the same write.
+    const before = (await this.ctx.storage.get<string[]>("minted")) === undefined;
+    const queued = await this.queueMinted(minted);
+    // No await between them, so Cloudflare writes both at once.
+    await Promise.all([
+      this.ctx.storage.put({ lastProof: time, minted: queued }),
+      before ? this.ctx.storage.delete("standby") : undefined,
+    ]);
     // Whether the relay still thinks the last connection is alive: see `log.ts`.
     const openBefore = this.ctx
       .getWebSockets("host")

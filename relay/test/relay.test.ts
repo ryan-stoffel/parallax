@@ -7,13 +7,18 @@ import { KeysUnavailable } from "@parallax/clerk-verify";
 import { accountOf, DEVELOPMENT, sharedJwks, verifySession } from "../src/clerk";
 import { sha256 } from "../src/crypto";
 import {
+  CONTROL_MINTED,
   hookKey,
   HostRelay,
+  JOIN_MINTED,
   LIMITS,
   MAX_DAILY_BYTES,
   MAX_HOOK_BYTES,
   MAX_REMOVAL,
+  MAX_MINTED,
   MAX_STREAMS,
+  MINTED_HEADER,
+  PROOF_HEADER,
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
@@ -513,13 +518,14 @@ describe("streams", () => {
     side.ws.send(record.slice().reverse());
     expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(record.slice().reverse());
 
-    // The relay keeps nothing of a stream's bytes: the host's object only counts it as open.
+    // The relay keeps nothing of a stream's bytes: the host's object only counts it as open, and keeps
+    // ids the Worker minted for its next standbys (PLX-1623).
     const stub = hosts.get(hosts.idFromName(host.id));
     const stored = await runInDurableObject(stub, async (_: HostRelay, state) => ({
       keys: [...(await state.storage.list()).keys()],
       held: state.storage.sql.exec("SELECT count(*) AS n FROM held").one().n,
     }));
-    expect(stored).toEqual({ keys: ["lastProof", "owner", "streams"], held: 0 });
+    expect(stored).toEqual({ keys: ["lastProof", "minted", "owner", "streams"], held: 0 });
     expect(Object.keys(await openStreams(host))).toEqual([open.stream]);
 
     client.ws.close(1000);
@@ -1038,22 +1044,22 @@ describe("streams", () => {
     const spare = JSON.parse((await control.next()) as string) as Open;
     const side = opened(await join(host, spare));
     // Every write the host's object makes from the client's open on.
-    const puts: { value: unknown; options: unknown }[] = [];
+    const puts: unknown[][] = [];
     const original = HostRelay.prototype.open;
-    const spy = vi.spyOn(HostRelay.prototype, "open").mockImplementation(function (this: HostRelay, user, timed) {
+    const spy = vi.spyOn(HostRelay.prototype, "open").mockImplementation(function (this: HostRelay, ...args) {
       const { storage } = (this as unknown as { ctx: DurableObjectState }).ctx;
-      const put = storage.put.bind(storage) as (key: string, value: unknown, options?: unknown) => Promise<void>;
-      vi.spyOn(storage, "put").mockImplementation(((key: string, value: unknown, options?: unknown) => {
-        puts.push({ value, options });
-        return put(key, value, options);
+      const put = storage.put.bind(storage) as (...args: unknown[]) => Promise<void>;
+      vi.spyOn(storage, "put").mockImplementation(((...args: unknown[]) => {
+        puts.push(args);
+        return put(...args);
       }) as typeof storage.put);
-      return original.call(this, user, timed);
+      return original.apply(this, args);
     });
     try {
       const client = opened(await connect(host, token));
       expect(await client.next()).toBe("ready");
       expect(await side.next()).toBe("ready");
-      expect(puts).toEqual([{ value: { [spare.stream]: {} }, options: { allowUnconfirmed: true } }]);
+      expect(puts).toEqual([["streams", { [spare.stream]: {} }, { allowUnconfirmed: true }]]);
     } finally {
       spy.mockRestore();
     }
@@ -1528,6 +1534,143 @@ describe("standby spare object (PLX-1574)", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("stream ids minted at plxd's edge (PLX-1623)", () => {
+  /** What each `host_minted` line, which the host's object logs when its queue is empty, minted
+   *  for, still printing every line. */
+  function hostMints() {
+    const log = console.log.bind(console);
+    const seen: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].includes('"event":"host_minted"'))
+        seen.push((JSON.parse(args[0]) as { for: string }).for);
+      log(...args);
+    });
+    return { seen, restore: () => spy.mockRestore() };
+  }
+
+  const object = (host: Host) => hosts.get(hosts.idFromName(host.id));
+  const queued = (host: Host) =>
+    runInDurableObject(object(host), (_: HostRelay, state) => state.storage.get<string[]>("minted"));
+
+  it("makes spares and standbys from ids minted on plxd's requests, never a client's", async () => {
+    const mints = hostMints();
+    try {
+      const { host, token, control } = await online();
+      // The control socket's Worker minted the first spare, its standby, and some to spare.
+      const [first, second, ...rest] = (await queued(host))!;
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      expect(spare).toMatchObject({ spare: true, stream: first });
+      expect(await queued(host)).toEqual(rest);
+      // plxd joining it adds more, minted by the Worker plxd joined through.
+      opened(await join(host, spare));
+      await expect.poll(async () => (await queued(host))?.length).toBe(rest.length + JOIN_MINTED);
+      const after = await queued(host);
+      // A client taking it adds none.
+      opened(await connect(host, token));
+      expect(await queued(host)).toEqual(after);
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true, stream: second });
+      expect(mints.seen).toEqual([]);
+    } finally {
+      mints.restore();
+    }
+  });
+
+  it("gives a client with no spare the queue's next id, and logs the host object's own once it's empty", async () => {
+    const mints = hostMints();
+    try {
+      const user = `user_${crypto.randomUUID()}`;
+      const { host } = await online(user);
+      const ids = (await queued(host))!;
+      expect(ids).toHaveLength(CONTROL_MINTED);
+      for (const id of ids) expect(await object(host).open(account(user))).toEqual({ stream: id });
+      expect(mints.seen).toEqual([]);
+      expect((await object(host).open(account(user))) as { stream: string }).toHaveProperty("stream");
+      expect(mints.seen).toEqual(["stream"]);
+    } finally {
+      mints.restore();
+    }
+  });
+
+  it("keeps the queue full through spare refreshes plxd joins, and drains it through ones it doesn't", async () => {
+    const mints = hostMints();
+    try {
+      const { host, control } = await online();
+      // As plxd does when an unused spare ends, or after a wake: it asks again, with no client.
+      const refresh = async () => {
+        control.ws.send(JSON.stringify({ t: "spare" }));
+        const open = JSON.parse((await control.next()) as string) as Open;
+        expect(open).toMatchObject({ spare: true });
+        return open;
+      };
+      for (let refreshes = 0; refreshes < 5; refreshes++) {
+        const open = await refresh();
+        const left = (await queued(host))!.length;
+        opened(await join(host, open));
+        await expect.poll(async () => (await queued(host))?.length).toBe(Math.min(left + JOIN_MINTED, MAX_MINTED));
+      }
+      expect(mints.seen).toEqual([]);
+      // Unjoined, each refresh spends one and adds none, until the host object mints its own.
+      while ((await queued(host))!.length) await refresh();
+      expect(mints.seen).toEqual([]);
+      await refresh();
+      expect(mints.seen).toEqual(["standby"]);
+    } finally {
+      mints.restore();
+    }
+  });
+
+  it("queues nothing for a join the stream object refuses, which anyone who knows the host id can send", async () => {
+    const { host, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const before = (await queued(host))!;
+    const refused = await join(host, { ...spare, token: "not-the-token" });
+    expect(refused instanceof Response && refused.status).toBe(404);
+    // plxd's own join then adds its ids, and only those: the refused one added none before it.
+    opened(await join(host, spare));
+    await expect.poll(async () => (await queued(host))?.length).toBe(before.length + JOIN_MINTED);
+    expect((await queued(host))!.slice(0, before.length)).toEqual(before);
+  });
+
+  it("keeps at most MAX_MINTED ids", async () => {
+    const { host } = await online();
+    for (let again = 0; again < 2; again++) await connectHost(host);
+    expect(CONTROL_MINTED * 3).toBeGreaterThan(MAX_MINTED);
+    expect(await queued(host)).toHaveLength(MAX_MINTED);
+  });
+
+  it("drops a standby saved before PLX-1623 on the first control socket, and keeps later ones", async () => {
+    const host = await newHost();
+    expect((await register(host, await session(`user_${crypto.randomUUID()}`))).status).toBe(200);
+    const old = streams.newUniqueId().toString();
+    await runInDurableObject(object(host), (_: HostRelay, state) => state.storage.put("standby", old));
+    const { control } = await connectHost(host);
+    expect(JSON.parse((await control.next()) as string)).toMatchObject({ t: "ready" });
+    const standby = () => runInDurableObject(object(host), (_: HostRelay, state) => state.storage.get<string>("standby"));
+    expect(await standby()).toBeUndefined();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    expect(JSON.parse((await control.next()) as string)).toMatchObject({ spare: true });
+    const kept = await standby();
+    expect(kept).toMatch(/^[0-9a-f]{64}$/);
+    await connectHost(host);
+    expect(await standby()).toBe(kept);
+  });
+
+  it("takes minted ids on the control socket only from the Worker, never from plxd", async () => {
+    const host = await newHost();
+    expect((await register(host, await session(`user_${crypto.randomUUID()}`))).status).toBe(200);
+    // plxd names another host's stream object as its own minted id: the Worker replaces it.
+    const elsewhere = streams.newUniqueId().toString();
+    const control = opened(await socket(`/v1/hosts/${host.id}/host`, { [PROOF_HEADER]: await hostProof(host), [MINTED_HEADER]: elsewhere }));
+    expect(JSON.parse((await control.next()) as string)).toMatchObject({ t: "ready" });
+    const ids = (await queued(host))!;
+    expect(ids).toHaveLength(CONTROL_MINTED);
+    expect(ids).not.toContain(elsewhere);
   });
 });
 

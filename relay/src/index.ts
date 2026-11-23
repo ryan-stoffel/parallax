@@ -31,15 +31,18 @@ import { allowedUser, verifySession } from "./clerk";
 import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import {
+  CONTROL_MINTED,
   forwarded,
   HOOK_METHODS,
   type HookReply,
   HostRelay,
+  JOIN_MINTED,
+  MINTED_HEADER,
   PEER_HEADER,
   readCapped,
   TIME_HEADER,
 } from "./host";
-import { logged, scrub, short } from "./log";
+import { logError, logged, scrub, short } from "./log";
 import { moveHost } from "./move";
 import { streamObject, StreamRelay } from "./stream";
 import { UserAccount } from "./user";
@@ -155,15 +158,26 @@ async function relayed(
   action: string,
   stream: string,
   limit: Promise<RateLimitOutcome>,
+  ctx?: ExecutionContext,
 ) {
   const start = performance.now();
   const host = env.HOSTS.get(env.HOSTS.idFromName(hostId));
+  // Stream ids are minted here, on plxd's requests, at the edge plxd came in at: a stream whose id
+  // the host's object minted while running far from plxd stays slow on plxd's side, wherever the
+  // stream object runs (PLX-1623). Never on a client's, which may come in far from plxd. Minting is
+  // local and stores nothing.
+  const mint = () => env.STREAMS.newUniqueId().toString();
   const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
   const ticket = new URL(request.url).searchParams.get("ticket");
   const byToken = action === "connect" && upgrade && ticket === null && !request.headers.has(PEER_HEADER);
   if (!byToken) {
     if (!(await limit).success) return limited();
-    if (action === "host") return host.fetch(request);
+    if (action === "host") {
+      // Set here whatever plxd sent, so only ids this Worker minted reach the object.
+      const forwarded = new Request(request);
+      forwarded.headers.set(MINTED_HEADER, Array.from({ length: CONTROL_MINTED }, mint).join(","));
+      return host.fetch(forwarded);
+    }
     if (!upgrade) return json(426, { error: "upgrade_required" });
   }
   if (action === "streams") {
@@ -171,7 +185,12 @@ async function relayed(
     const object = streamObject(env, hostId, stream);
     if (!object) return json(404, { error: "not_found" });
     const url = `https://stream/host?host=${hostId}&token=${encodeURIComponent(token)}`;
-    return object.fetch(url, { headers: { upgrade: "websocket" } });
+    const joined = await object.fetch(url, { headers: { upgrade: "websocket" } });
+    // plxd joined one of its streams: ids for the host's next streams, after the 101 goes. A
+    // refused join, which anyone can try, adds none.
+    if (joined.status === 101)
+      ctx?.waitUntil(host.supply(Array.from({ length: JOIN_MINTED }, mint)).catch((error) => logError("worker.supply", { host: short(hostId) }, error)));
+    return joined;
   }
   // Only a successful authenticated client open exposes numeric durations, never logs or IDs.
   const timed = request.headers.get("x-parallax-timing") === "1";
@@ -255,7 +274,7 @@ async function relayed(
 }
 
 const routes = {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const parts = new URL(request.url).pathname.split("/").slice(1);
     const [version, kind, id = "", action] = parts;
     if (parts.length === 2 && version === "connect" && kind === "code") return connectCode(request);
@@ -268,7 +287,7 @@ const routes = {
       if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
       const address = network(request.headers.get("cf-connecting-ip") ?? "");
       const limit = env.ANON.limit({ key: `${address}:${id}` });
-      if (kind !== "hooks") return relayed(env, request, id, action!, parts[4] ?? "", limit);
+      if (kind !== "hooks") return relayed(env, request, id, action!, parts[4] ?? "", limit, ctx);
       if (!(await limit).success) return limited();
       // A webhook's body is read here, after the host's object admits it, and never streamed
       // to the object, which can't answer before reading a stream without breaking.
@@ -366,14 +385,14 @@ const routes = {
 export default {
   // A Durable Object's reset reaches its callers as an exception, so it's logged here too. Only
   // the route's kind and a host id: a webhook's path holds its token.
-  fetch(request, env) {
+  fetch(request, env, ctx?: ExecutionContext) {
     return logged(
       "worker.fetch",
       () => {
         const [, kind = "", id = ""] = new URL(request.url).pathname.split("/").slice(1);
         return { kind: scrub(kind), host: HOST_ID.test(id) ? short(id) : undefined };
       },
-      () => routes.fetch(request, env),
+      () => routes.fetch(request, env, ctx),
     );
   },
 } satisfies ExportedHandler<Env>;
