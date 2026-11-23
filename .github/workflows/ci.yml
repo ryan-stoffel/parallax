@@ -1,7 +1,8 @@
 name: CI
 
 # Pull requests only: develop and main take changes only through PRs that passed these checks, so a
-# push to develop runs just rust-cache.yml, which saves the Rust caches these jobs restore.
+# push to develop runs just rust-cache.yml, which saves the Rust caches and the Whistle voice model
+# these jobs restore.
 on:
   pull_request:
 
@@ -397,6 +398,23 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
 
+      # The voice model voice-assets.mjs downloads from Hugging Face on a miss (PLX-1640).
+      # rust-cache.yml saves it from develop on Linux, and enableCrossOsArchive lets every OS restore
+      # that archive.
+      - name: Find the Whistle model's hash
+        id: whistle
+        run: |
+          sha=$(sed -n 's/^export const modelSha256 = "\([0-9a-f]\{64\}\)".*/\1/p' apps/desktop/scripts/voice-assets.mjs)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Whistle model
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/src/renderer/voice-assets/whistle.cact
+          key: whistle-${{ steps.whistle.outputs.sha }}
+          enableCrossOsArchive: true
+
       - name: Install, check, test, and build
         run: scripts/ci/check-app
 
@@ -622,6 +640,21 @@ jobs:
         with:
           path: ${{ runner.temp }}/electron
           key: electron-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
+
+      # As in the app job.
+      - name: Find the Whistle model's hash
+        id: whistle
+        run: |
+          sha=$(sed -n 's/^export const modelSha256 = "\([0-9a-f]\{64\}\)".*/\1/p' apps/desktop/scripts/voice-assets.mjs)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Whistle model
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/src/renderer/voice-assets/whistle.cact
+          key: whistle-${{ steps.whistle.outputs.sha }}
+          enableCrossOsArchive: true
 
       # As in the app job.
       - name: Allow Chromium's sandbox

@@ -9,17 +9,33 @@ const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL("../", import.meta.url));
 const model = new URL("../src/renderer/voice-assets/whistle.cact", import.meta.url);
 export const modelSha256 = "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb";
+const modelUrl =
+  "https://huggingface.co/Cactus-Compute/whistle/resolve/741118687e1f008f06d1351a402a731274789790/whistle.cact";
+// Seconds to wait before each retry, so a Hugging Face outage of about a minute doesn't fail CI.
+const retryDelays = [5, 15, 40];
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+// Downloads the model and checks its size and SHA-256, retrying any failure.
+async function downloadModel() {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await fetch(modelUrl);
+      if (!response.ok) throw new Error(`Whistle download failed: HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length !== 16919407 || hash(bytes) !== modelSha256)
+        throw new Error("Whistle checksum mismatch");
+      return bytes;
+    } catch (error) {
+      if (attempt === retryDelays.length) throw error;
+      console.warn(`${error.message}. Retrying in ${retryDelays[attempt]}s.`);
+      await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt] * 1000));
+    }
+  }
+}
 
 export async function prepareVoice() {
   if (!existsSync(model) || hash(readFileSync(model)) !== modelSha256) {
-    const response = await fetch(
-      "https://huggingface.co/Cactus-Compute/whistle/resolve/741118687e1f008f06d1351a402a731274789790/whistle.cact",
-    );
-    if (!response.ok) throw new Error(`Whistle download failed: HTTP ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length !== 16919407 || hash(bytes) !== modelSha256)
-      throw new Error("Whistle checksum mismatch");
+    const bytes = await downloadModel();
     mkdirSync(new URL("../src/renderer/voice-assets/", import.meta.url), { recursive: true });
     writeFileSync(model, bytes);
   }

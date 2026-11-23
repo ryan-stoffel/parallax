@@ -3,7 +3,7 @@ name: Rust cache
 # Saves the Rust caches ci.yml's rust and plxd jobs restore (PLX-961). A PR can read its base
 # branch's caches but not another PR's, so they're saved here, on develop, and ci.yml saves none.
 # rust-cache keeps dependencies only and keys on Cargo.lock, so a push that hits the saved key
-# builds nothing.
+# builds nothing. It also saves the Whistle voice model ci.yml and release.yml restore (PLX-1640).
 on:
   push:
     branches: [develop]
@@ -104,3 +104,39 @@ jobs:
       - name: Build plxd with the fake backend
         if: steps.cache.outputs.cache-hit != 'true'
         run: cargo build -p plxd --locked --features fake-backend
+
+  # The Whistle model ci.yml's app and e2e jobs and release.yml's build job restore. Saved from
+  # Linux with enableCrossOsArchive, so macOS and Windows restore the same archive. A push that hits
+  # the saved key downloads nothing.
+  whistle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Find the Whistle model's hash
+        id: whistle
+        run: |
+          sha=$(sed -n 's/^export const modelSha256 = "\([0-9a-f]\{64\}\)".*/\1/p' apps/desktop/scripts/voice-assets.mjs)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        with:
+          path: apps/desktop/src/renderer/voice-assets/whistle.cact
+          key: whistle-${{ steps.whistle.outputs.sha }}
+          enableCrossOsArchive: true
+          lookup-only: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      # Off macOS the script only downloads and verifies the model, so it needs no node_modules.
+      - name: Download and verify the model
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: node apps/desktop/scripts/voice-assets.mjs

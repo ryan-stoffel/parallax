@@ -197,6 +197,22 @@ jobs:
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
 
+      # As in ci.yml's app job: the voice model rust-cache.yml saves from develop (PLX-1640). On a
+      # miss voice-assets.mjs downloads it, retrying for about a minute.
+      - name: Find the Whistle model's hash
+        id: whistle
+        run: |
+          sha=$(sed -n 's/^export const modelSha256 = "\([0-9a-f]\{64\}\)".*/\1/p' apps/desktop/scripts/voice-assets.mjs)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Whistle model
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/src/renderer/voice-assets/whistle.cact
+          key: whistle-${{ steps.whistle.outputs.sha }}
+          enableCrossOsArchive: true
+
       - name: Package the app
         if: runner.os != 'macOS'
         run: scripts/ci/package-app
