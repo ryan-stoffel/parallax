@@ -220,11 +220,17 @@ export class HostRelay extends DurableObject<Env> {
   private hostLeft = 0;
   /** Connects waiting for plxd's next control socket, each woken by it or by its own timer. */
   private arrivals = new Set<() => void>();
+  /** The proof time of plxd's current control socket, as saved in `lastProof`, which [`host`]
+   *  matches against each socket's tag (PLX-1641). */
+  private proof?: number;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // plxd's keepalive, answered without waking the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    ctx.blockConcurrencyWhile(async () => {
+      this.proof = await ctx.storage.get<number>("lastProof");
+    });
   }
 
   /** The held webhooks' table, made on first use, so a host id nobody registered stores nothing. */
@@ -502,9 +508,20 @@ export class HostRelay extends DurableObject<Env> {
     return this.ctx.storage.get<Owner>("owner");
   }
 
-  /** plxd's control socket. */
+  /**
+   * plxd's current control socket: the open one tagged with the proof it was opened with, when
+   * that's the last proof this object took (PLX-1641). Being open isn't enough: a socket this
+   * object closed, whose other end never answered, can read open again after two hibernations
+   * (workerd #7595), and a replaced socket must never be picked.
+   */
   private host() {
-    return this.ctx.getWebSockets("host").find((ws) => ws.readyState === WebSocket.OPEN);
+    if (this.proof === undefined) return undefined;
+    return this.ctx.getWebSockets(proofTag(this.proof)).find((ws) => ws.readyState === WebSocket.OPEN);
+  }
+
+  /** Whether `ws` is plxd's current control socket, as [`host`] picks it. */
+  private current(ws: WebSocket) {
+    return this.proof !== undefined && this.ctx.getTags(ws).includes(proofTag(this.proof)) && ws.readyState === WebSocket.OPEN;
   }
 
   /** What a log line says about this object and, when there is one, the socket `ws`. */
@@ -585,6 +602,7 @@ export class HostRelay extends DurableObject<Env> {
     await this.closeStreams(owner.hostId, 4410, "removed");
     this.tickets.clear();
     this.traffic = undefined;
+    this.proof = undefined;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     return true;
@@ -870,6 +888,8 @@ export class HostRelay extends DurableObject<Env> {
       before ? this.ctx.storage.delete("standby") : undefined,
       guests ? this.ctx.storage.delete("guests") : undefined,
     ]);
+    // From here no older socket is plxd's, even one that still reads open (PLX-1641).
+    this.proof = time;
     // Whether the relay still thinks the last connection is alive: see `log.ts`.
     const openBefore = this.ctx
       .getWebSockets("host")
@@ -880,8 +900,9 @@ export class HostRelay extends DurableObject<Env> {
     this.closeHost(4409, "replaced");
     const { kept, again } = await this.settleStreams(owner.hostId, held);
     const [client, server] = Object.values(new WebSocketPair());
-    // The second tag names the host in this socket's log lines, with no storage read to fail.
-    this.ctx.acceptWebSocket(server!, ["host", short(owner.hostId)]);
+    // The second tag names the host in this socket's log lines, with no storage read to fail. The
+    // third is its proof, which marks it as plxd's current socket while it's the last (PLX-1641).
+    this.ctx.acceptWebSocket(server!, ["host", short(owner.hostId), proofTag(time)]);
     logEvent("host_connected", {
       ...this.context(server!),
       open_before: openBefore,
@@ -930,8 +951,11 @@ export class HostRelay extends DurableObject<Env> {
 
   /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, a request
    *  for a spare stream, word that plxd's end of a stream is gone, a device's removal for its user's
-   *  other hosts, or its connection check. `ws` is the socket it came on. */
+   *  other hosts, or its connection check. Only from plxd's current control socket (PLX-1641):
+   *  one it replaced may still have frames in flight, such as a guest list the new one withdrew,
+   *  and may even read open. A webhook answer lost that way is held and retried, as a slow one is. */
   private async fromHost(message: string | ArrayBuffer, ws: WebSocket) {
+    if (!this.current(ws)) return;
     const parsed = typeof message === "string" ? parse(message) : undefined;
     if (parsed?.t === "hook" && typeof parsed.id === "string") {
       const status = typeof parsed.status === "number" ? parsed.status : 502;
@@ -946,11 +970,9 @@ export class HostRelay extends DurableObject<Env> {
       if (keys.join() !== before.join()) await this.ctx.storage.put("hooks", keys);
     } else if (parsed?.t === "guests" && Array.isArray(parsed.links)) {
       // plxd's live guest links (0108), which replace the last list: a link missing from it is
-      // withdrawn. At most GUEST_LIMITS.links, each kept until its expiry, given in seconds. Only
-      // from the current control socket, so a list still in flight on a replaced one can't bring
-      // back a link the new one withdrew. The relay closes every other before it takes a new one,
-      // so the current one is the only one still open.
-      if (ws.readyState !== WebSocket.OPEN) return;
+      // withdrawn. At most GUEST_LIMITS.links, each kept until its expiry, given in seconds. Like
+      // every frame here, only from the current control socket, so a list still in flight on a
+      // replaced one can't bring back a link the new one withdrew.
       const now = Date.now();
       const guests: Guests = {};
       for (const entry of parsed.links as unknown[]) {
@@ -1256,6 +1278,9 @@ export class HostRelay extends DurableObject<Env> {
     );
   }
 }
+
+/** The tag of a control socket opened with the proof at `at` (PLX-1641). */
+const proofTag = (at: number) => `proof:${at}`;
 
 /** Whether `streams` has room for one more of guest link `link`'s: within the guests' streams and
  *  the link's own. Pending ones count. */
