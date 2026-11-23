@@ -258,7 +258,7 @@ pub(crate) fn port_of(route: &str) -> u16 {
 /// A host behind a fake relay, trusting the hosted client's application, with `hostedClient` as
 /// `on` says, and the web client on with its files: the relay, the server, a client on its socket,
 /// its loopback route, and its host id. The web folder must outlive the server.
-async fn hosted_host(
+pub(crate) async fn hosted_host(
     dir: &Path,
     web: &Path,
     issuer: &str,
@@ -419,9 +419,20 @@ async fn a_hosted_stream_cant_finish_lan_pairing() {
     refused_on_a_hosted_stream("POST", "/api/pair/finish").await;
 }
 
+/// No relay stream pairs a browser, marked or not (PLX-1629, `pairing.rs`), so the same request
+/// is served only on a direct route.
 #[tokio::test]
 async fn a_hosted_stream_cant_pair_a_browser_with_the_code() {
-    refused_on_a_hosted_stream("POST", "/api/pair/browser").await;
+    let issuer = clerk().await;
+    let (dir, web) = (temp_dir(), temp_dir());
+    let (relay, server, _client, direct, _) =
+        hosted_host(dir.path(), web.path(), &issuer, true).await;
+    let hosted = relay.route(json!({ "client": "hosted" })).await;
+    let not_found = (404, Some("not_found".to_owned()));
+    let path = "/api/pair/browser";
+    assert_eq!(answer(&hosted, "POST", path).await, not_found);
+    assert_ne!(answer(&direct, "POST", path).await, not_found);
+    server.stop().await;
 }
 
 #[tokio::test]

@@ -26,10 +26,10 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::agents::{Conn, create, end_turn, fake, init, orchestrator_params, start_params, text};
 use crate::connect::free_port;
-use crate::remote::{App, LOOPBACK, new_code, open, set_remote, wait_listening};
+use crate::remote::{App, LOOPBACK, open_account, set_remote, wait_listening};
 use crate::support::{Client, InProcess, PATIENCE, socket_path, temp_dir};
 
-use super::{relay_status, set_relay};
+use super::{pair_through, relay_status, set_relay};
 
 /// What the thread says each way, which nothing outside its pinned TLS may read.
 const PROMPT: &str = "the-prompt-only-the-host-reads";
@@ -388,16 +388,14 @@ async fn connected(host: &mut Host, token: &str) -> String {
     format!("relay:{}", id.rsplit('/').next().unwrap())
 }
 
-/// Pairs a client through the relay at `url`, directly, runs a thread on `host`, and reads its
-/// reply. It reaches the client through the proxy host's connection.
+/// Pairs a client through the relay at `url`, directly, with a setup code, runs a thread on
+/// `host`, and reads its reply. It reaches the client through the proxy host's connection.
 async fn run_a_thread(host: &mut Host, route: &str, url: &str, token: &str) {
     relay::sign_in(url.to_owned(), token.to_owned());
-    let code = new_code(&mut host.client).await;
+    let host_id = route.strip_prefix("relay:").unwrap();
     let phone = temp_dir();
-    let paired = remote::pair(&[route.to_owned()], &code, "phone", phone.path())
-        .await
-        .unwrap();
-    let mut app: App = open(&[route.to_owned()], &paired.fingerprint, phone.path())
+    pair_through(&mut host.client, route, host_id, phone.path()).await;
+    let mut app: App = open_account(&[route.to_owned()], host_id, phone.path())
         .await
         .unwrap();
     assert!(app.initialize().await["result"].is_object());

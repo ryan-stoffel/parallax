@@ -16,18 +16,18 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
-    AccessGet, AccessMerge, AccessRemove, AgentEvents, AgentList, HostAnnounceUpdate,
-    HostSettingsGet, HostSettingsSet, OrchestratorCreate, PeerComputers, RelayCheck, RelayHosts,
-    RelayId, RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
-    ScheduleSave, ThreadStart,
+    AccessGet, AccessMerge, AccessRemove, AccessSetupCode, AgentEvents, AgentList,
+    HostAnnounceUpdate, HostSettingsGet, HostSettingsSet, OrchestratorCreate, PeerComputers,
+    RelayCheck, RelayHosts, RelayId, RelayRegister, RelayRemove, RelaySign, RemoteRevoke,
+    RemoteSessions, ScheduleList, ScheduleSave, ThreadStart,
 };
 use parallax_protocol::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, AgentEventsParams,
-    AgentListParams, AgentOutputItem, ErrorKind, HostAnnounceUpdateParams, HostSettingsGetParams,
-    HostSettingsSetParams, ParallaxEvent, PeerComputersParams, RelayCheckParams, RelayCheckPart,
-    RelayHostsParams, RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
-    RelayStatus, RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
-    ScheduleSaveParams, SignatureEncoding, WebhookSignature,
+    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessSetupCodeParams, AccountChoice,
+    AgentEventsParams, AgentListParams, AgentOutputItem, ErrorKind, HostAnnounceUpdateParams,
+    HostSettingsGetParams, HostSettingsSetParams, ParallaxEvent, PeerComputersParams,
+    RelayCheckParams, RelayCheckPart, RelayHostsParams, RelayIdParams, RelayRegisterParams,
+    RelayRemoveParams, RelaySignParams, RelayStatus, RemoteRevokeParams, RemoteSessionsParams,
+    RunId, Schedule, ScheduleListParams, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
 use plxd::backend::fake::Step;
 use plxd::{relay, remote};
@@ -42,7 +42,7 @@ use crate::agents::{end_turn, fake, git, init, real_repo};
 use crate::connect::free_port;
 use crate::mcp::{Mcp, mcp_command};
 use crate::remote::{
-    App, INITIALIZE, LOOPBACK, new_code, open, open_account, set_remote, wait_listening,
+    App, INITIALIZE, LOOPBACK, new_code, open_account, set_remote, wait_listening,
 };
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 use crate::thread_tools::Keys;
@@ -62,6 +62,25 @@ async fn set_relay(client: &mut Client, on: bool) {
         })
         .await
         .unwrap();
+}
+
+/// Pairs the device whose data folder is `phone` with the host `host_id` at `route`, with a new
+/// computer's setup code from `client`, as the phone and `plxd dial` do through the relay, where
+/// plxd takes no other code (PLX-1629). [`remote::dial_account`] then reaches the host.
+pub(crate) async fn pair_through(
+    client: &mut Client,
+    route: &str,
+    host_id: &str,
+    phone: &std::path::Path,
+) -> remote::Paired {
+    let setup = client
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
+        .await
+        .unwrap();
+    let routes = [route.to_owned()];
+    remote::pair_account(&routes, host_id, &setup.code, "phone", phone)
+        .await
+        .unwrap()
 }
 
 async fn relay_on(client: &mut Client) -> bool {
@@ -258,23 +277,23 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
     assert!(registered.is_ok(), "{registered:?}");
     let status = relay_status(&mut client, |s| s.connected).await;
     let hook_url = status.hook_url.unwrap();
-    let route = format!("relay:{}", hook_url.rsplit('/').next().unwrap());
+    let host_id = hook_url.rsplit('/').next().unwrap().to_owned();
+    let route = format!("relay:{host_id}");
 
     // Pairing and the session run inside the relay's stream, with TLS to plxd's own certificate.
+    // Through the relay, Settings' code doesn't pair, and a setup code does (PLX-1629).
     relay::sign_in(url.clone(), token.clone());
     let code = new_code(&mut client).await;
     let phone = temp_dir();
-    let paired = remote::pair(std::slice::from_ref(&route), &code, "phone", phone.path())
-        .await
-        .unwrap();
+    let routes = std::slice::from_ref(&route);
+    let refused = remote::pair(routes, &code, "phone", phone.path()).await;
+    assert!(
+        matches!(refused, Err(remote::Error::Refused)),
+        "{refused:?}"
+    );
+    let paired = pair_through(&mut client, &route, &host_id, phone.path()).await;
     assert!(paired.routes.contains(&route), "{:?}", paired.routes);
-    let mut app = open(
-        std::slice::from_ref(&route),
-        &paired.fingerprint,
-        phone.path(),
-    )
-    .await
-    .unwrap();
+    let mut app = open_account(routes, &host_id, phone.path()).await.unwrap();
     let initialized = app.initialize().await;
     assert!(initialized["result"].is_object(), "{initialized}");
     // The relay can't stand in for the host: the client pins the host's certificate.
@@ -1287,17 +1306,18 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
     });
     registered.await.unwrap();
     let status = relay_status(&mut client, |s| s.connected).await;
-    let route = format!(
-        "relay:{}",
-        status.hook_url.unwrap().rsplit('/').next().unwrap()
-    );
+    let host_id = status
+        .hook_url
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let route = format!("relay:{host_id}");
     relay::sign_in(url.clone(), token.clone());
-    let code = new_code(&mut client).await;
     let phone = temp_dir();
     let routes = std::slice::from_ref(&route);
-    let paired = remote::pair(routes, &code, "phone", phone.path())
-        .await
-        .unwrap();
+    pair_through(&mut client, &route, &host_id, phone.path()).await;
     // A host-level event for the subscription to replay.
     let orchestrator = crate::agents::orchestrator_params(dir.path());
     client
@@ -1311,7 +1331,7 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
         // The app connects long after plxd opened its spare stream.
         sleep(Duration::from_millis(500)).await;
         let started = Instant::now();
-        let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+        let dialed = remote::dial_account(routes, false, &host_id, phone.path())
             .await
             .unwrap();
         assert_eq!(dialed.route, route);
@@ -1699,16 +1719,13 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
     relay::sign_in(url.clone(), token.clone());
     let route = format!("relay:{host_id}");
-    let code = new_code(&mut client).await;
     let phone = temp_dir();
     let routes = std::slice::from_ref(&route);
-    let paired = remote::pair(routes, &code, "phone", phone.path())
-        .await
-        .unwrap();
+    pair_through(&mut client, &route, &host_id, phone.path()).await;
     // The app's `initialize` waits on `plxd dial`'s input, so it goes behind the upgrade
     // (PLX-1483), and through the relay it's answered as one sent after the 101 is.
     let first = format!("{INITIALIZE}\n");
-    let (mut app, over) = App::dialed_with(routes, &paired.fingerprint, phone.path(), &first)
+    let (mut app, over) = App::dialed_with(routes, &host_id, phone.path(), &first)
         .await
         .unwrap();
     assert_eq!(over, route);
@@ -1726,7 +1743,7 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
         .silent_controls
         .store(connections, Ordering::SeqCst);
     let silent = Instant::now();
-    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+    let dialed = remote::dial_account(routes, false, &host_id, phone.path())
         .await
         .unwrap();
     let mut spared = App::bridged(dialed.socket);
@@ -1735,7 +1752,7 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     // It waits for plxd to notice and reconnect, and gets in (PLX-1547).
     tokio::time::sleep_until(silent + Duration::from_secs(1)).await;
     let started = Instant::now();
-    let dialed = remote::dial(routes, &paired.fingerprint, phone.path()).await;
+    let dialed = remote::dial_account(routes, false, &host_id, phone.path()).await;
     let waited = started.elapsed();
     eprintln!(
         "a client that connected 1 s into a silent control link waited {waited:?}: {}",
@@ -1768,7 +1785,7 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     assert!(answers(&mut app).await, "the relay closed a stream it kept");
 
     // A new client still gets in, with the kept spare or a new one.
-    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+    let dialed = remote::dial_account(routes, false, &host_id, phone.path())
         .await
         .unwrap();
     let mut second = App::bridged(dialed.socket);
@@ -1813,14 +1830,11 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
     let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
     relay::sign_in(url.clone(), token.clone());
     let route = format!("relay:{host_id}");
-    let code = new_code(&mut client).await;
     let phone = temp_dir();
     let routes = std::slice::from_ref(&route);
     // Each pairing request has a stream of its own, which plxd's end closes once it answered. With
     // `gone` faster than the stream, the relay must still pass on the answer first (PLX-1456).
-    let paired = remote::pair(routes, &code, "phone", phone.path())
-        .await
-        .unwrap();
+    pair_through(&mut client, &route, &host_id, phone.path()).await;
     lag.store(0, Ordering::SeqCst);
     // The relay answers each of those closes with its own, in well under the 10 s plxd waits for
     // one, so those streams get no `gone` and don't hold a place for long.
@@ -1834,7 +1848,7 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
         assert!(waited < Duration::from_secs(1), "{waited:?}");
         assert!(!proxy.told_gone(&stream), "a `gone` for {stream}");
     }
-    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+    let dialed = remote::dial_account(routes, false, &host_id, phone.path())
         .await
         .unwrap();
     let mut app = App::bridged(dialed.socket);
@@ -1858,7 +1872,7 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
 
     // A redial right now gets a working stream, not the dead spare it would wait 10 s on.
     let redial = Instant::now();
-    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+    let dialed = remote::dial_account(routes, false, &host_id, phone.path())
         .await
         .unwrap();
     let mut second = App::bridged(dialed.socket);
@@ -1889,13 +1903,13 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
 /// open. Each finishes TLS, since plxd's listener closes a connection that waits too long for it.
 async fn open_until_refused(
     route: &str,
-    paired: &remote::Paired,
+    host_id: &str,
     phone: &std::path::Path,
     open: &mut Vec<remote::Dialed>,
 ) -> usize {
     let before = open.len();
     let routes = [route.to_owned()];
-    while let Ok(dialed) = remote::dial(&routes, &paired.fingerprint, phone).await {
+    while let Ok(dialed) = remote::dial_account(&routes, false, host_id, phone).await {
         open.push(dialed);
     }
     open.len() - before
@@ -1914,15 +1928,11 @@ async fn the_stream_cap_counts_right_across_a_control_drop() {
     let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
     relay::sign_in(url.clone(), token.clone());
     let route = format!("relay:{host_id}");
-    let code = new_code(&mut client).await;
     let phone = temp_dir();
-    let routes = std::slice::from_ref(&route);
-    let paired = remote::pair(routes, &code, "phone", phone.path())
-        .await
-        .unwrap();
+    pair_through(&mut client, &route, &host_id, phone.path()).await;
     let mut open = Vec::new();
     let more = async |open: &mut Vec<remote::Dialed>| {
-        open_until_refused(&route, &paired, phone.path(), open).await
+        open_until_refused(&route, &host_id, phone.path(), open).await
     };
     // Pairing's own stream frees its place soon after it ends.
     let deadline = Instant::now() + PATIENCE;
