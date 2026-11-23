@@ -104,6 +104,17 @@ The desktop app and the phone stay the clients that need no trust in a served pa
 - **What the owner sees.** Whether the link has been opened, and when it was bound. plxd sees a relay stream with no address, so it doesn't claim more. An owner who didn't expect the time shown can Stop sharing and send a new link.
 - **Limits.** A link leaked before its guest opens it gives the thread to whoever clicks Open first. A link leaked after that can still spend that link's share of the guest budget until it's revoked. The hosted client's publisher can read what a guest sees, as above.
 
+#### How plxd does it (PLX-1618)
+
+- **Keys.** HKDF-SHA256 over the 32-byte secret with no salt, 32 bytes each, `info` `parallax guest relay pass v1` for the relay pass and `parallax guest host key v1` for the host key. plxd keeps only the SHA-256 of each and the bound key's thumbprint. `guest/create` answers with the fragment `<hostId>.<linkId>.<secret>` once, and nothing reads the secret back.
+- **Links live in plxd's memory.** A restart ends every link, which fails closed. At most 20 are live, one per thread.
+- **The relay's copy (PLX-1616).** plxd sends `{"t":"guests","links":[{"link","pass","expires"}]}` on its control socket whenever a link starts or ends, and on connecting when it has any: `pass` is the hex SHA-256 of the 32 pass bytes, `expires` is seconds since the epoch, and a link missing from the list is withdrawn. The relay forgets them when that socket closes. plxd also refuses unjoined a stream marked with a link that isn't live.
+- **Sign-in and socket.** `POST /api/auth/guest` takes `{"hostKey": <base64url>}` and a `DPoP` proof with no access token, for the link the stream's mark names, and answers `{threadId, expiresAt, canSuggest}`. A wrong host key and an ended link get the same 401. The guest's `/ws` takes no ticket and no session, only a proof from the key that bound the link. Only that request binds, so opening a stream or a socket first binds nothing.
+- **The guest level.** A guest calls `orchestration/subscribeThread`, `orchestration/threadHistory`, and `events/unsubscribe`, and `guest/suggest` when its link allows it, each naming the link's thread. Its snapshot leaves out the thread's permission requests, background tasks, and watched pull requests, and its snapshot, pages, and live events hold only `agent.started`, `agent.updated`, `agent.output`, `agent.finished`, and `thread.reverted` of that thread. It gets no other notification, `host/updating` among them. `agent/image` isn't on the list, so a guest sees no image a message carries.
+- **Reads.** Every request on the list counts against the link's 10 a minute, across its connections. A request off the list is refused before it counts.
+- **Suggestions.** At most 5 wait on a link, in `guest/list`. `guest/send` sends one as the owner's `agent/send`, and `guest/dismiss` drops it. Nothing tells the owner's apps when one arrives yet, so they read `guest/list`.
+- **Ending.** Expiry, `guest/revoke`, a new link for the thread, a `thread.updated` that archives it or a `thread.deleted` for it in the event log, whichever path wrote it, and `hostedClient` off each end the link, close its connections, cut its relay streams, and resend the relay's list.
+
 ### Ryan's calls
 
 1. **Hosting.** GitHub Pages on an organization of its own, which keeps 0068's promise (recommended), or `app.parallax.codes` on Cloudflare, with the cost above. Pages needs Ryan to create the organization.

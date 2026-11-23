@@ -90,6 +90,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ),
             ("githubSetup".to_owned(), serde_json::Map::new()),
             ("githubStatus".to_owned(), serde_json::Map::new()),
+            ("guestLinks".to_owned(), serde_json::Map::new()),
             ("hostFolders".to_owned(), serde_json::Map::new()),
             ("hostUpdate".to_owned(), serde_json::Map::new()),
             ("hostedClient".to_owned(), serde_json::Map::new()),
