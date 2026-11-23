@@ -238,8 +238,10 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
     wait_carrier(&host).await;
     let phone = temp_dir();
     let code = new_code(&mut client).await;
+    // Settings' code pairs only directly (PLX-1629). The session then dials through the relay.
+    let direct = format!("127.0.0.1:{port}");
     let paired = remote::pair(
-        std::slice::from_ref(&route),
+        std::slice::from_ref(&direct),
         &code,
         "proof-client",
         phone.path(),

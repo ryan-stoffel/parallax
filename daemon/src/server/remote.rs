@@ -38,6 +38,11 @@
 //!   as a wrong confirmation does. While `remoteWeb` is off, a browser's session gets no ticket,
 //!   and turning it off closes their sockets; turning it on again lets them back in.
 //!
+//! On any relay stream, marked or not, pairing takes only a new computer's setup code (PLX-1629):
+//! a waiting 0065 code answers `/api/pair/start` and `/api/pair/finish` as no code, and its wrong
+//! tries aren't counted. `/api/pair/browser` gets 404 there whatever `remoteWeb` says, since plxd's
+//! own web client loads on a direct route. Direct routes serve all three as above.
+//!
 //! A relay stream the relay marked as the hosted browser client's or a guest's (0108) is served
 //! only while the `hostedClient` setting is on. A hosted client's serves `POST /api/auth/account`,
 //! `POST /api/auth/approval`, and `GET /ws` alone. Its `/ws` takes a hosted client's session with
@@ -280,15 +285,17 @@ impl Remote {
     }
 
     /// The host's side of a started SPAKE2 exchange: its answer and the exchange's id, while a
-    /// code waits.
+    /// code waits. With `setup_only`, as on a relay stream, a waiting 0065 code counts as none.
     fn start_pake(
         &self,
         fingerprint: &str,
         client: &[u8],
+        setup_only: bool,
     ) -> Result<(String, Vec<u8>), &'static str> {
         let mut pairing = self.lock_pairing();
         let now = Instant::now();
-        let Some(waiting) = pairing.as_mut().filter(|p| now < p.expires) else {
+        let usable = |p: &&mut Pairing| now < p.expires && (p.setup || !setup_only);
+        let Some(waiting) = pairing.as_mut().filter(usable) else {
             return Err("no pairing code is waiting");
         };
         let (answer, key) = remote::pake_host(&waiting.code, fingerprint, client)
@@ -316,17 +323,20 @@ impl Remote {
 
     /// Checks the client's confirmation for exchange `id`: the shared key when it's right, which
     /// uses up the code, and whether it was a setup code. A wrong one counts against the code, and
-    /// the last allowed one locks it.
+    /// the last allowed one locks it. With `setup_only`, a waiting 0065 code counts as none, and
+    /// neither its exchanges nor its wrong tries are touched.
     fn finish_pake(
         &self,
         id: &str,
         fingerprint: &str,
         thumbprint: &str,
         mac: &[u8],
+        setup_only: bool,
     ) -> Result<(Vec<u8>, bool), &'static str> {
         let mut pairing = self.lock_pairing();
         let now = Instant::now();
-        let Some(waiting) = pairing.as_mut().filter(|p| now < p.expires) else {
+        let usable = |p: &&mut Pairing| now < p.expires && (p.setup || !setup_only);
+        let Some(waiting) = pairing.as_mut().filter(usable) else {
             return Err("no pairing code is waiting");
         };
         let Some((key, expires)) = waiting.pending.remove(id) else {
@@ -928,6 +938,16 @@ impl Serving {
         (check, checks): (Check, Checks),
         id: u64,
     ) {
+        // Relay stream or direct, and who the relay says opened it (0108), decided once from the
+        // accepted connection, before TLS: plxd lists a stream before it dials the listener and
+        // unlists it when the stream ends, so a later look could take a stream that ended for a
+        // direct one (PLX-1629).
+        let relayed = match self.daemon.relay.joined(&stream) {
+            Ok(relayed) => relayed,
+            Err(error) => {
+                return debug!(%peer, %error, "closed a remote connection with no address");
+            }
+        };
         let daemon = Arc::clone(&self.daemon);
         let stop_reading = self.stop_reading.clone();
         let key = Arc::clone(&bound.key);
@@ -959,8 +979,8 @@ impl Serving {
                     Ok(Err(error)) => return debug!(%peer, %error, "a remote connection failed"),
                     Err(_) => return debug!(%peer, "closed a remote connection that sent no request in time"),
                 };
-                // Who the relay says opened this stream, if it is one (0108).
-                let mark = daemon.relay.joined(peer).map(|stream| stream.mark.clone()).unwrap_or_default();
+                let over_relay = relayed.is_some();
+                let mark = relayed.as_ref().map(|stream| stream.mark.clone()).unwrap_or_default();
                 let hosted_stream = mark == Mark::Hosted;
                 loop {
                     let route = request.path.split('?').next().unwrap_or_default();
@@ -971,11 +991,15 @@ impl Serving {
                     let (status, body) = match (request.method.as_str(), route) {
                         _ if marked_off => access::removed(HOSTED_OFF),
                         (method, _) if !serves(&mark, method, route) => (404, json!({ "error": "not_found" })),
+                        // plxd's own web client loads on a direct route, so no relay stream pairs
+                        // a browser with the code, whatever `remoteWeb` says (PLX-1629).
+                        (_, "/api/pair/browser") if over_relay => (404, json!({ "error": "not_found" })),
                         _ if guarded && !same_origin(&request) => {
                             (403, json!({ "error": "forbidden", "error_description": "another origin" }))
                         }
                         ("GET", "/ws") => {
-                            return serve_socket(stream, &request, daemon, stop_reading, &closing, peer).await;
+                            let socket = serve_socket(stream, &request, daemon, stop_reading, &closing, peer, relayed);
+                            return socket.await;
                         }
                         ("GET", path) if web_file(path).is_some() && web_on(&daemon).await => {
                             let Some(slot) = files.start(peer.ip()) else {
@@ -988,8 +1012,10 @@ impl Serving {
                             return drop(slot);
                         }
                         ("GET", "/.well-known/parallax") => (200, descriptor(&daemon, &key).await),
-                        ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request),
-                        ("POST", "/api/pair/finish") => finish_pairing(&daemon, &key, &request).await,
+                        ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request, over_relay),
+                        ("POST", "/api/pair/finish") => {
+                            finish_pairing(&daemon, &key, &request, over_relay).await
+                        }
                         ("POST", "/api/pair/browser") if web_on(&daemon).await => {
                             pair_browser(&daemon, &request).await
                         }
@@ -1058,7 +1084,13 @@ async fn descriptor(daemon: &Daemon, key: &HostKey) -> serde_json::Value {
 }
 
 /// `POST /api/pair/start`: the host's SPAKE2 answer to the client's message, while a code waits.
-fn start_pairing(daemon: &Daemon, key: &HostKey, request: &Request) -> (u16, serde_json::Value) {
+/// Through the relay, only a setup code waits (PLX-1629).
+fn start_pairing(
+    daemon: &Daemon,
+    key: &HostKey,
+    request: &Request,
+    over_relay: bool,
+) -> (u16, serde_json::Value) {
     let client = serde_json::from_slice::<serde_json::Value>(&request.body)
         .ok()
         .and_then(|body| body["pake"].as_str().map(str::to_owned))
@@ -1066,7 +1098,10 @@ fn start_pairing(daemon: &Daemon, key: &HostKey, request: &Request) -> (u16, ser
     let Some(client) = client else {
         return (400, json!({ "error": "invalid_request" }));
     };
-    match daemon.remote.start_pake(&key.fingerprint, &client) {
+    match daemon
+        .remote
+        .start_pake(&key.fingerprint, &client, over_relay)
+    {
         Ok((id, answer)) => (
             200,
             json!({ "pairing": id, "pake": remote::base64url(&answer) }),
@@ -1076,11 +1111,13 @@ fn start_pairing(daemon: &Daemon, key: &HostKey, request: &Request) -> (u16, ser
 }
 
 /// `POST /api/pair/finish`: the client's key confirmation, with a `DPoP` proof. A right one gets
-/// a session bound to the proof's key, and the host's own confirmation.
+/// a session bound to the proof's key, and the host's own confirmation. Through the relay, only a
+/// setup code waits (PLX-1629).
 async fn finish_pairing(
     daemon: &Daemon,
     key: &HostKey,
     request: &Request,
+    over_relay: bool,
 ) -> (u16, serde_json::Value) {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -1107,7 +1144,7 @@ async fn finish_pairing(
     let (shared, setup) =
         match daemon
             .remote
-            .finish_pake(&finish.pairing, fp, &proven.thumbprint, &mac)
+            .finish_pake(&finish.pairing, fp, &proven.thumbprint, &mac, over_relay)
         {
             Ok(shared) => shared,
             Err(why) => return refused(why),
@@ -1422,6 +1459,7 @@ async fn authorize(
 /// as a socket connection. What the client sent behind the request ([`Request::early`]) goes to
 /// the WebSocket only after every check passed and the 101 went out, so it's handled as frames
 /// sent later are, read-only level included. Every refusal returns first, which drops it unread.
+/// `relayed` is the relay stream the connection came over, as [`Serving::admit_remote`] found it.
 async fn serve_socket(
     mut stream: tls::Stream<TcpStream>,
     request: &Request,
@@ -1429,10 +1467,10 @@ async fn serve_socket(
     stop_reading: CancellationToken,
     closing: &CancellationToken,
     peer: SocketAddr,
+    relayed: Option<Arc<RelayStream>>,
 ) {
-    let mark = daemon
-        .relay
-        .joined(peer)
+    let mark = relayed
+        .as_ref()
         .map(|stream| stream.mark.clone())
         .unwrap_or_default();
     let key = request.header("sec-websocket-key");
@@ -1464,6 +1502,7 @@ async fn serve_socket(
             stop_reading,
             closing,
             peer,
+            relayed,
             level,
         )
         .await;
@@ -1517,6 +1556,7 @@ async fn serve_socket(
         stop_reading,
         closing,
         peer,
+        relayed,
         level,
     )
     .await;
@@ -1531,7 +1571,7 @@ struct Level {
 }
 
 /// Answers a checked `/ws` upgrade whose `Sec-WebSocket-Key` is `key`, and serves the socket at
-/// `level` until `closing` or its end.
+/// `level` until `closing` or its end. `relay_stream` is the relay stream it came over, if any.
 #[expect(
     clippy::too_many_arguments,
     reason = "the checked request and how its connection came"
@@ -1544,6 +1584,7 @@ async fn open_socket(
     stop_reading: CancellationToken,
     closing: CancellationToken,
     peer: SocketAddr,
+    relay_stream: Option<Arc<RelayStream>>,
     level: Level,
 ) {
     let Level {
@@ -1564,7 +1605,6 @@ async fn open_socket(
     let handshake = (!handshake.done()).then_some(handshake);
     let (early, config) = (request.early.clone(), Some(remote::websocket_config()));
     let socket = WebSocketStream::from_partially_read(stream, early, Role::Server, config).await;
-    let relay_stream = daemon.relay.joined(peer);
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
     let over_relay = relay_stream.is_some();

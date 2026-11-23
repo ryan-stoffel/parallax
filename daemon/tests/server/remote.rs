@@ -120,10 +120,11 @@ impl App {
     }
 
     /// An app that wrote `first` as it started `plxd dial`, so those lines wait on its input and
-    /// go behind the upgrade to a host that keeps them (PLX-1483): the app, and the route.
+    /// go behind the upgrade to a host that keeps them (PLX-1483): the app, and the route. It
+    /// dials the `account:` host `host_id`.
     pub(crate) async fn dialed_with(
         routes: &[String],
-        fingerprint: &str,
+        host_id: &str,
         data_dir: &Path,
         first: &str,
     ) -> Result<(Self, String), remote::Error> {
@@ -132,7 +133,8 @@ impl App {
         let (reader, mut writer) = tokio::io::split(app);
         writer.write_all(first.as_bytes()).await.unwrap();
         let mut input = remote::Input::new(input);
-        let dialed = remote::dial_with_input(routes, fingerprint, data_dir, &mut input).await?;
+        let dialed =
+            remote::dial_account_with_input(routes, false, host_id, data_dir, &mut input).await?;
         tokio::spawn(remote::bridge(dialed.socket, input, output));
         let lines = BufReader::new(reader).lines();
         Ok((App { lines, writer }, dialed.route))
