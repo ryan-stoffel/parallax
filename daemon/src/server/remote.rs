@@ -938,6 +938,16 @@ impl Serving {
         (check, checks): (Check, Checks),
         id: u64,
     ) {
+        // Relay stream or direct, and who the relay says opened it (0108), decided once from the
+        // accepted connection, before TLS: plxd lists a stream before it dials the listener and
+        // unlists it when the stream ends, so a later look could take a stream that ended for a
+        // direct one (PLX-1629).
+        let relayed = match self.daemon.relay.joined(&stream) {
+            Ok(relayed) => relayed,
+            Err(error) => {
+                return debug!(%peer, %error, "closed a remote connection with no address");
+            }
+        };
         let daemon = Arc::clone(&self.daemon);
         let stop_reading = self.stop_reading.clone();
         let key = Arc::clone(&bound.key);
@@ -969,10 +979,8 @@ impl Serving {
                     Ok(Err(error)) => return debug!(%peer, %error, "a remote connection failed"),
                     Err(_) => return debug!(%peer, "closed a remote connection that sent no request in time"),
                 };
-                // Who the relay says opened this stream, if it is one (0108).
-                let relayed = daemon.relay.joined(peer);
                 let over_relay = relayed.is_some();
-                let mark = relayed.map(|stream| stream.mark.clone()).unwrap_or_default();
+                let mark = relayed.as_ref().map(|stream| stream.mark.clone()).unwrap_or_default();
                 let hosted_stream = mark == Mark::Hosted;
                 loop {
                     let route = request.path.split('?').next().unwrap_or_default();
@@ -990,7 +998,8 @@ impl Serving {
                             (403, json!({ "error": "forbidden", "error_description": "another origin" }))
                         }
                         ("GET", "/ws") => {
-                            return serve_socket(stream, &request, daemon, stop_reading, &closing, peer).await;
+                            let socket = serve_socket(stream, &request, daemon, stop_reading, &closing, peer, relayed);
+                            return socket.await;
                         }
                         ("GET", path) if web_file(path).is_some() && web_on(&daemon).await => {
                             let Some(slot) = files.start(peer.ip()) else {
@@ -1450,6 +1459,7 @@ async fn authorize(
 /// as a socket connection. What the client sent behind the request ([`Request::early`]) goes to
 /// the WebSocket only after every check passed and the 101 went out, so it's handled as frames
 /// sent later are, read-only level included. Every refusal returns first, which drops it unread.
+/// `relayed` is the relay stream the connection came over, as [`Serving::admit_remote`] found it.
 async fn serve_socket(
     mut stream: tls::Stream<TcpStream>,
     request: &Request,
@@ -1457,10 +1467,10 @@ async fn serve_socket(
     stop_reading: CancellationToken,
     closing: &CancellationToken,
     peer: SocketAddr,
+    relayed: Option<Arc<RelayStream>>,
 ) {
-    let mark = daemon
-        .relay
-        .joined(peer)
+    let mark = relayed
+        .as_ref()
         .map(|stream| stream.mark.clone())
         .unwrap_or_default();
     let key = request.header("sec-websocket-key");
@@ -1492,6 +1502,7 @@ async fn serve_socket(
             stop_reading,
             closing,
             peer,
+            relayed,
             level,
         )
         .await;
@@ -1545,6 +1556,7 @@ async fn serve_socket(
         stop_reading,
         closing,
         peer,
+        relayed,
         level,
     )
     .await;
@@ -1559,7 +1571,7 @@ struct Level {
 }
 
 /// Answers a checked `/ws` upgrade whose `Sec-WebSocket-Key` is `key`, and serves the socket at
-/// `level` until `closing` or its end.
+/// `level` until `closing` or its end. `relay_stream` is the relay stream it came over, if any.
 #[expect(
     clippy::too_many_arguments,
     reason = "the checked request and how its connection came"
@@ -1572,6 +1584,7 @@ async fn open_socket(
     stop_reading: CancellationToken,
     closing: CancellationToken,
     peer: SocketAddr,
+    relay_stream: Option<Arc<RelayStream>>,
     level: Level,
 ) {
     let Level {
@@ -1592,7 +1605,6 @@ async fn open_socket(
     let handshake = (!handshake.done()).then_some(handshake);
     let (early, config) = (request.early.clone(), Some(remote::websocket_config()));
     let socket = WebSocketStream::from_partially_read(stream, early, Role::Server, config).await;
-    let relay_stream = daemon.relay.joined(peer);
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
     let over_relay = relay_stream.is_some();

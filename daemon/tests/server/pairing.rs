@@ -2,7 +2,10 @@
 //! a new computer's setup code (0091). Settings' 0065 code answers as no code there, and its wrong
 //! tries and exchanges are left alone. No relay stream pairs a browser. Direct routes take
 //! Settings' code on SPAKE2 and `/api/pair/browser` as before. The relay is `hosted.rs`'s fake,
-//! with `hostedClient` off and `remoteWeb` on, and its streams here are unmarked.
+//! with `remoteWeb` on. Its streams are unmarked and `hostedClient` is off, except where a test
+//! says otherwise.
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use parallax_protocol::AccessSetupCodeParams;
 use parallax_protocol::methods::AccessSetupCode;
@@ -11,7 +14,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::account::clerk;
-use crate::hosted::{FakeRelay, hosted_host, port_of};
+use crate::hosted::{FakeRelay, hosted_host, hosted_host_with, port_of};
 use crate::remote::{https, new_code};
 use crate::support::{Client, InProcess, temp_dir};
 
@@ -184,4 +187,39 @@ async fn no_browser_pairs_through_the_relay_and_one_pairs_directly() {
     assert_eq!(status, 200, "{paired}");
     assert!(paired["accessToken"].is_string(), "{paired}");
     host.server.stop().await;
+}
+
+/// A host that binds every address still dials itself on loopback, where its listener sees each
+/// relay stream come from, so it still tells a relay stream and its mark from a direct connection.
+#[tokio::test]
+async fn a_host_on_every_address_still_knows_its_relay_streams_and_their_marks() {
+    for every in [
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+    ] {
+        let issuer = clerk().await;
+        let (dir, web) = (temp_dir(), temp_dir());
+        let bind_every = |config: &mut plxd::server::Config| config.remote_address = Some(every);
+        let (relay, server, mut client, direct, _) =
+            hosted_host_with(dir.path(), web.path(), &issuer, true, bind_every).await;
+        let hosted = relay.route(json!({ "client": "hosted" })).await;
+        let through = relay.route(json!({})).await;
+
+        // The hosted client's stream gets no descriptor, which the direct route serves.
+        let descriptor = async |route: &str| {
+            let (status, ..) = https(port_of(route), "GET", "/.well-known/parallax", &[], "").await;
+            status
+        };
+        assert_eq!(descriptor(&hosted).await, 404, "{every}");
+        assert_eq!(descriptor(&direct).await, 200, "{every}");
+
+        // An unmarked stream takes no Settings code.
+        let code = new_code(&mut client).await;
+        let fp = fingerprint(&direct).await;
+        let (_, first) = remote::pake_client(&code, &fp);
+        let start = json!({ "pake": remote::base64url(&first) });
+        let refused = post(&through, "/api/pair/start", &[], &start).await;
+        assert!(no_code(&refused), "{every}: {refused:?}");
+        server.stop().await;
+    }
 }

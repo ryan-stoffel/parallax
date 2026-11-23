@@ -40,7 +40,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
@@ -1517,9 +1517,17 @@ impl Relay {
         self.streams.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The relay stream connecting to the remote listener from `peer`, if it is one.
-    pub(crate) fn joined(&self, peer: SocketAddr) -> Option<Arc<RelayStream>> {
-        self.listed().get(&peer).cloned()
+    /// The relay stream the remote listener accepted as `accepted`, if it is one. It takes the
+    /// connection as accepted, before TLS owns it, so the listener can only ask at accept, while
+    /// the stream is still listed (PLX-1629).
+    ///
+    /// # Errors
+    ///
+    /// When the connection's peer address can't be read, so nothing can say it's direct.
+    pub(crate) fn joined(&self, accepted: &TcpStream) -> io::Result<Option<Arc<RelayStream>>> {
+        let peer = accepted.peer_addr()?;
+        let peer = SocketAddr::new(peer.ip().to_canonical(), peer.port());
+        Ok(self.listed().get(&peer).cloned())
     }
 
     /// Ends every joined stream the relay marked as the hosted client's or a guest's, as
@@ -2534,10 +2542,18 @@ async fn serve(
 /// Where this computer reaches its own remote listener.
 fn local_listener(daemon: &Daemon) -> SocketAddr {
     let remote = &daemon.remote;
-    SocketAddr::new(
-        remote.address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        remote.port,
-    )
+    SocketAddr::new(dialed(remote.address), remote.port)
+}
+
+/// The address plxd dials its own listener on, when it binds `bound`: loopback for every address
+/// or none named, which is also where a relay stream's connection comes from as the listener sees
+/// it, so [`Relay::joined`] finds the stream (PLX-1629).
+fn dialed(bound: Option<IpAddr>) -> IpAddr {
+    match bound {
+        Some(IpAddr::V6(ip)) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        Some(ip) if !ip.is_unspecified() => ip,
+        _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
+    }
 }
 
 /// Joins a client's stream, which the relay announced with `message`, to the remote listener at
@@ -2960,6 +2976,16 @@ mod tests {
     use parallax_protocol::{AgentBackgroundKind, AgentBackgroundTask, AgentFailureKind};
 
     use super::*;
+
+    #[test]
+    fn plxd_dials_its_listener_on_loopback_when_it_binds_every_address() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert_eq!(dialed(None), ip("127.0.0.1"));
+        assert_eq!(dialed(Some(ip("0.0.0.0"))), ip("127.0.0.1"));
+        assert_eq!(dialed(Some(ip("::"))), ip("::1"));
+        assert_eq!(dialed(Some(ip("127.0.0.1"))), ip("127.0.0.1"));
+        assert_eq!(dialed(Some(ip("192.168.1.5"))), ip("192.168.1.5"));
+    }
 
     /// A log, the pushes reading it, one run's events, and a clock moved by hand.
     struct Fixture {
