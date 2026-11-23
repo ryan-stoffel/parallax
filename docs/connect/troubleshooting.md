@@ -139,10 +139,8 @@ plx prints each failure on a line starting `✗`, and exits 1.
 | `The sign-in was denied. Run it again to try once more.` | Run it again, and allow the computer. |
 | `Clerk didn't finish the sign-in: <reason>` | Run it again. |
 | `Sign-in timed out. Run it again.` | Finish in the browser within 10 minutes. With no browser here, use `--no-browser`. |
-| `Clerk didn't accept the code: <reason>. Try again.` | Paste the code again, exactly as the page shows it. You get 3 tries. After that, run it again. |
-| `No code was entered before input ended. Run it again in a terminal, or send the code on stdin.` | This appears with no terminal, as with `curl ... \| sh`. Run it in a terminal, or download the script and run `sh connect.sh < codes`. |
-
-Being asked to paste a code isn't an error. plx uses that flow by itself when sign-in with a short code isn't available.
+| `Clerk didn't accept the code: <reason>.` | Run it again. |
+| `Clerk refused the device grant, which plx signs in with when it can't open a browser here: <reason>. ...` | Do what the message says for the command you ran. For `plx connect`, run it where a browser can open, or run `plx connect add <this computer>` from a computer that can. For `add`, run it from a computer with a browser. For `remove`, run it in this computer's own desktop session. If it keeps happening, [open an issue](https://github.com/ryan-stoffel/parallax/issues/new) with the message. |
 
 ## In the desktop app
 

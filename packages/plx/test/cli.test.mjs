@@ -158,14 +158,12 @@ function connectScript(clerk) {
     main(["connect"], deps).then((code) => { process.exitCode = code; });`;
 }
 
-test("plx connect with no terminal and no device grant prints the link, skips the browser, and exits 1 at end of input, saying why on stderr", { timeout: 30_000 }, async () => {
+test("plx connect with no terminal and no device grant exits 1, saying on stderr that Clerk refused it, and asks for nothing", { timeout: 30_000 }, async () => {
   const script = connectScript(`() => ({ token_endpoint: "unused" })`);
   const { code, stdout, stderr } = /** @type {{ code: number, stdout: string, stderr: string }} */ (await noTerminal(script, "ignore"));
   assert.equal(code, 1, stdout);
-  assert.match(stdout, /^ {2}https:\/\/127\.0\.0\.1:1\/oauth\/authorize\S+$/m);
-  assert.match(stdout, /^Paste the code it shows: $/m);
-  assert.match(stderr, /^✗ No code was entered before input ended\./m);
-  assert.doesNotMatch(stdout, /Opened your browser|got past sign-in|No code was entered/);
+  assert.match(stderr, /^✗ Clerk refused the device grant, which plx signs in with when it can't open a browser here\. Run it where a browser can open, without --no-browser, or run `plx connect add <this computer>`/m);
+  assert.doesNotMatch(stdout, /oauth\/authorize|Paste the code|Opened your browser|got past sign-in/);
 });
 
 /** A Clerk with the device grant, whose token endpoint answers `token`, a JSON object. @param {string} token */

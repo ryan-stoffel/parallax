@@ -10,7 +10,7 @@ import * as connect from "./connect.mjs";
 import { doctor } from "./doctor.mjs";
 import { readDetails } from "./install.mjs";
 import { attach, VERSION } from "./plxd.mjs";
-import { canOpenBrowser, clerkOf, codePage, openBrowser, signIn } from "./signin.mjs";
+import { canOpenBrowser, clerkOf, openBrowser, signIn } from "./signin.mjs";
 import { add, setup } from "./tailscale-setup.mjs";
 import { listDevices, TAGGED } from "./tailscale.mjs";
 
@@ -119,21 +119,20 @@ let stdinReader;
 const prompt = (question, signal) => (stdinReader ??= lineReader(process.stdin, process.stdout))(question, signal);
 
 /**
- * What `plx connect` reaches: Clerk through the browser, the device grant, or a pasted code, plxd
- * over `plxd attach`, and stdin. With no terminal the browser stays closed: a script's sign-in is a
- * link it passes on, which works from any device.
+ * What `plx connect` reaches: Clerk through the browser or the device grant, plxd over `plxd
+ * attach`, and stdin. With no terminal the browser stays closed: a script's sign-in is a link it
+ * passes on, which works from any device.
  * @param {boolean} noBrowser
  * @returns {import("./connect.mjs").Deps}
  */
 export const realDeps = (noBrowser) => ({
   terminal: process.stdin.isTTY === true,
-  signIn: () =>
+  signIn: (command) =>
     signIn({
+      command,
       clerk: clerkOf(process.env),
       browser: canOpenBrowser(process.env, process.platform, noBrowser || process.stdin.isTTY !== true),
-      codePage: codePage(process.env),
       open: openBrowser,
-      prompt,
     }),
   release: (channel) => connect.findRelease(channel),
   details: readDetails,

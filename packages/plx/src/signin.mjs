@@ -2,11 +2,12 @@
 // Signing in to the Parallax account (0067, 0091) with the desktop app's Clerk OAuth application.
 // With a browser here: authorization code with PKCE, redirected to a loopback listener (RFC 8252).
 // Without one: Clerk's device authorization grant (RFC 8628), where the user approves a short code
-// on any device and this process polls for the token. While the grant isn't enabled on the OAuth
-// application: PKCE again, with the code shown by the relay's /connect/code page and pasted here.
-// In every flow only this process holds what redeems the code (the PKCE verifier or the device
-// code), so a code seen elsewhere is useless. The access token is handed to plxd once and never
-// saved.
+// on any device and this process polls for the token. When Clerk refuses the grant, sign-in stops
+// with that reason: the pasted code that once filled in for it is gone (PLX-1630), along with the
+// desktop application's `relay.parallax.codes/connect/code` redirect. Its loopback redirects and
+// the phone's `parallax://oauth/callback` stay. In both flows only this process holds what
+// redeems the code (the PKCE verifier or the device code), so a code seen elsewhere is useless.
+// The access token is handed to plxd once and never saved.
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -22,8 +23,8 @@ const SCOPES = "profile email";
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
 /**
- * The page the browser lands on after a loopback sign-in, styled as the relay's /connect/code page
- * and the app's onboarding. A failure shows a fixed message: plx connect prints the reason.
+ * The page the browser lands on after a loopback sign-in, styled as the app's onboarding. A
+ * failure shows a fixed message: plx connect prints the reason.
  * @param {boolean} [failed]
  */
 export function signedInPage(failed) {
@@ -91,9 +92,6 @@ ${body}
 </html>`;
 }
 
-/** Parallax Relay, whose /connect/code page is the pasted sign-in's redirect URI. */
-const RELAY_URL = "https://relay.parallax.codes";
-
 /**
  * @typedef {object} Clerk
  * @property {string} api The Frontend API, such as `https://clerk.parallax.codes`.
@@ -111,9 +109,6 @@ export const clerkOf = (env) => ({
   api: frontendApi(env["PLX_CLERK_PUBLISHABLE_KEY"] || PUBLISHABLE_KEY),
   clientId: env["PLX_CLERK_CLIENT_ID"] || CLIENT_ID,
 });
-
-/** Where the pasted sign-in's redirect lands: the relay's page that shows the code. @param {NodeJS.ProcessEnv} env */
-export const codePage = (env) => `${(env["PLX_RELAY_URL"] || RELAY_URL).replace(/\/+$/, "")}/connect/code`;
 
 /**
  * Whether sign-in can open a browser here: not with `--no-browser`, not over SSH, and on Linux
@@ -177,13 +172,25 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  * @typedef {object} SignInOptions
  * @property {Clerk} clerk
  * @property {boolean} browser Whether to open a browser here, from `canOpenBrowser`.
- * @property {string} codePage The pasted sign-in's redirect URI.
  * @property {(url: string) => Promise<boolean>} open Opens `url` in a browser here.
- * @property {(question: string) => Promise<string>} prompt Asks the user for a line, and rejects
- *   when input ends first.
  * @property {number} [timeoutMs] How long the loopback sign-in waits.
  * @property {(ms: number) => Promise<unknown>} [sleep] Waits between device grant polls. Unlike connect's unref'd sleep, this one keeps plx running.
+ * @property {SignInCommand} command The `plx connect` command signing in, for what a refused device
+ *   grant tells the user to do instead.
  */
+
+/** @typedef {"connect" | "add" | "remove"} SignInCommand */
+
+/**
+ * What to do instead when Clerk refuses the device grant, by command. `connect` and `remove` act on
+ * this computer's plxd, and `add` signs in here for another computer.
+ * @type {Record<SignInCommand, string>}
+ */
+const INSTEAD = {
+  connect: "Run it where a browser can open, without --no-browser, or run `plx connect add <this computer>` from a computer that can open one",
+  add: "Run it again from a computer that can open a browser, without --no-browser",
+  remove: "Run it again in this computer's own desktop session, not over SSH and without --no-browser, so a browser can open",
+};
 
 /**
  * Signs in and resolves to the access token, or rejects with why not, for people.
@@ -192,8 +199,7 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  */
 export async function signIn(options) {
   if (options.browser) return signInHere(options);
-  const device = await startDeviceGrant(options.clerk);
-  return device ? finishDeviceGrant(device, options) : signInElsewhere(options);
+  return finishDeviceGrant(await startDeviceGrant(options.clerk, options.command), options);
 }
 
 /**
@@ -209,15 +215,26 @@ export async function signIn(options) {
  */
 
 /**
- * Asks Clerk for a device code, or resolves to undefined when the grant isn't available, so this
- * sign-in has to use the paste flow: discovery doesn't list it, or the device endpoint answers 400
- * `invalid_grant`, as Clerk does for an OAuth application without it, or `unauthorized_client`,
- * RFC 6749's code for that. Discovery only says the instance offers the grant, so it can't settle
- * this alone. Any other failure rejects, since it would most likely stop the paste flow too.
- * @param {Clerk} clerk
- * @returns {Promise<DeviceGrant | undefined>}
+ * Clerk's refusal of the device grant: discovery doesn't list it, or the device endpoint answers
+ * 400 `invalid_grant`, as Clerk does for an OAuth application without it, or `unauthorized_client`,
+ * RFC 6749's code for that. With no browser here, plx has no other way to sign in.
+ * @param {SignInCommand} command
+ * @param {unknown} [why] Clerk's own description, when it sent one.
  */
-async function startDeviceGrant(clerk) {
+const refused = (command, why) =>
+  new Error(
+    `Clerk refused the device grant, which plx signs in with when it can't open a browser here${typeof why === "string" && why ? `: ${why.replace(/\.$/, "")}` : ""}. ${INSTEAD[command]}, or open an issue with this message.`,
+  );
+
+/**
+ * Asks Clerk for a device code. Rejects with `refused` when Clerk refuses the grant, and with the
+ * reason for any other failure. Discovery only says the instance offers the grant, so it can't
+ * settle a refusal alone: the device endpoint has the last word.
+ * @param {Clerk} clerk
+ * @param {SignInCommand} command
+ * @returns {Promise<DeviceGrant>}
+ */
+async function startDeviceGrant(clerk, command) {
   /** @param {string} url @param {RequestInit} [init] */
   const request = (url, init) =>
     fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }).catch(() => {
@@ -231,10 +248,10 @@ async function startDeviceGrant(clerk) {
   if (typeof tokenEndpoint !== "string" || (endpoint !== undefined && typeof endpoint !== "string") || (grants !== undefined && !Array.isArray(grants))) {
     throw new Error("Clerk didn't start the sign-in: its discovery document is malformed.");
   }
-  if (typeof endpoint !== "string" || !Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
+  if (typeof endpoint !== "string" || !Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) throw refused(command);
   const res = await request(endpoint, { method: "POST", body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }) });
   const body = /** @type {Record<string, unknown>} */ (await res.json().catch(() => ({})));
-  if (res.status === 400 && (body["error"] === "invalid_grant" || body["error"] === "unauthorized_client")) return undefined;
+  if (res.status === 400 && (body["error"] === "invalid_grant" || body["error"] === "unauthorized_client")) throw refused(command, body["error_description"] ?? body["error"]);
   const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, verification_uri_complete: complete, expires_in: expiresIn, interval } = body;
   if (!res.ok || typeof deviceCode !== "string" || typeof userCode !== "string" || typeof verificationUri !== "string" || typeof expiresIn !== "number") {
     const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
@@ -256,8 +273,7 @@ async function startDeviceGrant(clerk) {
 /**
  * Prints the link and the short code, then polls Clerk's token endpoint until the user approves,
  * as RFC 8628 3.5 sets out: the first poll waits one interval, `slow_down` adds 5 seconds for good,
- * and a connection failure or a server error doubles the interval. Once the code is on screen a
- * failure is an error for the user, not a fallback, since they may already be approving it.
+ * and a connection failure or a server error doubles the interval.
  * @param {DeviceGrant} device
  * @param {SignInOptions} options
  * @returns {Promise<string>}
@@ -305,34 +321,6 @@ async function finishDeviceGrant(device, { sleep = wait }) {
     }
     const why = [body["error_description"], error].find((v) => typeof v === "string");
     throw new Error(`Clerk didn't finish the sign-in: ${why ?? `it answered ${res.status}`}.`);
-  }
-}
-
-/**
- * The paste flow, for when the device grant isn't enabled: prints the link, reads the code the
- * relay's page shows, and redeems it. A code Clerk refuses can be pasted again, up to 3 times, since
- * a mistyped one doesn't use up the real one.
- * @param {SignInOptions} options
- */
-async function signInElsewhere({ clerk, codePage, prompt }) {
-  const verifier = randomBytes(32).toString("base64url");
-  const url = authorizeUrl(clerk, { redirectUri: codePage, state: randomBytes(16).toString("base64url"), verifier });
-  console.log(`Open this link in a browser on any device, sign in, and allow this computer:\n\n  ${url}\n`);
-  for (let tries = 1; ; ) {
-    // It rejects once input ends: nothing more can arrive, so this fails rather than waiting on.
-    const answer = await prompt("Paste the code it shows: ").catch(() => {
-      throw new Error("No code was entered before input ended. Run it again in a terminal, or send the code on stdin.");
-    });
-    const code = answer.trim();
-    // An empty line isn't an answer: a stray Enter, such as one copied with the command, waits on.
-    if (!code) continue;
-    tries++;
-    try {
-      return await redeem(clerk, { code, verifier, redirectUri: codePage });
-    } catch (error) {
-      if (tries > 3) throw error;
-      console.log(`✗ ${error instanceof Error ? error.message : String(error)} Try again.`);
-    }
   }
 }
 

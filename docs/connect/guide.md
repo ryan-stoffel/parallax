@@ -39,7 +39,7 @@ With a browser on the computer, plx opens it and you sign in there.
 
 Over SSH, without a display, or with `--no-browser`, plx prints a link and a short code. Open the link on any device, sign in, and allow the computer. plx continues by itself.
 
-If that flow isn't available, plx prints a link alone. Sign in there, then paste the code the page shows when plx asks.
+If Clerk refuses that flow, plx stops and says so. Run `plx connect add` from a computer that can open a browser instead.
 
 plx gives its sign-in to `plxd` once to register the computer, and nothing keeps it.
 

@@ -39,7 +39,7 @@ Options:
 
 ## Sign-in
 
-`plx connect` uses the Parallax app's Clerk OAuth application. With a browser on this computer, sign-in uses PKCE and returns to a listener on 127.0.0.1. Otherwise plx uses Clerk's device authorization grant: it prints a link and a short code, you approve on any device, and plx carries on by itself. The code is useless without the device code plx holds. If the grant isn't available to the OAuth application, plx prints a link instead, and you paste the code `relay.parallax.codes/connect/code` shows, which works only with the verifier plx holds. The token goes to plxd once, to register, and nothing keeps it.
+`plx connect` uses the Parallax app's Clerk OAuth application. With a browser on this computer, sign-in uses PKCE and returns to a listener on 127.0.0.1. Otherwise plx uses Clerk's device authorization grant: it prints a link and a short code, you approve on any device, and plx carries on by itself. The code is useless without the device code plx holds. If Clerk refuses the grant, plx stops and says so, with Clerk's reason. The pasted code that used to fill in for it, and the relay's `/connect/code` page, are gone. From a computer with a browser, `plx connect add` still works. The token goes to plxd once, to register, and nothing keeps it.
 
 ## Scripts
 
@@ -48,7 +48,7 @@ Options:
 On Windows, don't start `powershell.exe` with `DETACHED_PROCESS` (Node's `detached`). It exits 0 without running anything, so nothing of `connect.ps1` runs and the exit code means nothing. Use a hidden console (`CREATE_NO_WINDOW`, Node's `windowsHide`). Going through `cmd` also runs it and passes on the exit code, but PowerShell gets a new console as its stdin there, so the script takes that for a terminal.
 
 - No browser opens. plx prints the sign-in link and a short code, each on its own indented line. Approve on any device and plx carries on, with nothing needed on stdin. When the code expires first, it exits 1.
-- If the grant isn't available to the OAuth application, plx prints the link alone and reads the code from stdin, one line per try, up to 3 tries. When input ends first, it says no code was entered and exits 1. `curl ... | sh` leaves nothing on stdin, so to pipe a code in, download `connect.sh` and run it with `sh connect.sh < codes`.
+- If Clerk refuses the grant, plx prints no link and exits 1, with the reason on stderr.
 - Once the computer is online, plx prints one setup code and exits 0, rather than waiting for a device. plxd keeps the code for 10 minutes, and `plx connect approve` shows a new one. With `--device=<key>`, that device's Allow is also enough while the code lasts. Without it, Allow gets no session, since nobody is here to confirm it, so the code has to be typed.
 - `plx connect approve` with a device waiting reads its answer from stdin too. When input ends first, it exits 1 and neither approves nor denies.
 
@@ -58,7 +58,6 @@ Read these from stdout, along with the exit code: 0 when it worked, 1 when it fa
 | --- | --- |
 | `  https://...` | The sign-in link. |
 | `  Code: ABCD-EFGH` | The short code to approve at that link. |
-| `Paste the code it shows: ` | plx is waiting for a line on stdin. |
 | `Setup code: 482911 (works until 2026-11-04T12:00:00Z). ...` | The code to type in Parallax on a signed-in device, and when it stops working. |
 
 Lines starting with `→`, `✓`, or `✗` are progress for people. Their wording can change, and the symbols may not survive a Windows console's encoding, so don't test for them. When sign-in fails, its `✗` line, with the reason, goes to stderr.

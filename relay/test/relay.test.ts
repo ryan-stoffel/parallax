@@ -244,24 +244,14 @@ describe("sign-in", () => {
   });
 });
 
-describe("the sign-in code page", () => {
-  it("shows the code escaped, with a copy script only the response's nonce lets run", async () => {
-    const response = await call(`/connect/code?code=${encodeURIComponent('<b>"x"')}`);
-    const page = await response.text();
-    const nonce = response.headers.get("content-security-policy")!.match(/script-src 'nonce-([^']+)'/)![1];
-    expect(page).toContain("<output>&lt;b&gt;&quot;x&quot;</output>");
-    expect(page).toContain(`<script nonce="${nonce}">`);
-    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
-  });
-
-  it("hides what Clerk sent when sign-in fails, and shows the command to try again", async () => {
-    const page = await (await call("/connect/code?error=access_denied&error_description=Secret%20detail")).text();
-    expect(page).not.toContain("access_denied");
-    expect(page).not.toContain("Secret detail");
-    expect(page).toContain("<output>plx connect</output>");
-    expect(await (await call("/connect/code?code=")).text()).toContain("<output>plx connect</output>");
+describe("the old sign-in code page", () => {
+  // Gone with plx's pasted code (PLX-1630), so no page on the relay can show a desktop sign-in's code.
+  it("is not found, with or without a code", async () => {
+    for (const path of ["/connect/code", `/connect/code?code=c&state=s`, "/connect/code?error=access_denied"]) {
+      const response = await call(path);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "not_found" });
+    }
   });
 });
 

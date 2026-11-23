@@ -71,7 +71,7 @@ export NPM_CONFIG_UPDATE_NOTIFIER
 if (: </dev/tty) 2>/dev/null; then
   exec npx -y plx-cli@latest connect "$@" </dev/tty
 fi
-# With none, plx keeps this stdin: a code piped in, or the end of a `curl | sh` script, which it
-# reports as a failure. plx-cli before 0.7.0 would exit 0 there with nothing signed in, so npx
+# With none, plx keeps this stdin, which its sign-in no longer reads (PLX-1630). plx-cli before
+# 0.7.0 could read a pasted code from it and exit 0 at its end with nothing signed in, so npx
 # fails rather than run one.
 exec npx -y 'plx-cli@>=0.7.0' connect "$@"

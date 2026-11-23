@@ -24,7 +24,8 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
  *   default one without `channel`.
  * @property {boolean} terminal Whether stdin is a terminal. Without one, nobody is there to answer
  *   or to wait, so setup ends at a printed code, and approves no device from input.
- * @property {() => Promise<string>} signIn Signs in and resolves to a Clerk access token.
+ * @property {(command: import("./signin.mjs").SignInCommand) => Promise<string>} signIn Signs in for
+ *   `command` and resolves to a Clerk access token.
  * @property {(runner: Runner, os: Os) => Promise<Target>} details Finds the OS details of the
  *   computer `runner` reaches.
  * @property {(runner: Runner, target: Target, name: string, release: Release, channel: Channel) => Promise<void>} install
@@ -68,9 +69,10 @@ async function exitCode(body) {
  * stderr sees why it stopped.
  * @param {Deps} deps
  * @param {string} done The ✓ line's text.
+ * @param {import("./signin.mjs").SignInCommand} command
  * @returns {Promise<string>}
  */
-const signInStep = (deps, done) => step("Signing in to Parallax", async () => [done, await deps.signIn()], console.error);
+const signInStep = (deps, done, command) => step("Signing in to Parallax", async () => [done, await deps.signIn(command)], console.error);
 
 /**
  * Runs `body` with plxd open through `runner` on an `os` computer, this one by default, closing
@@ -102,7 +104,7 @@ export function connect(options, deps) {
     const os = localOs();
     if (!os) throw new Error(`Parallax doesn't run on ${process.platform}.`);
     const release = await deps.release(options.channel);
-    const token = await signInStep(deps, "Signed in to Parallax Connect");
+    const token = await signInStep(deps, "Signed in to Parallax Connect", "connect");
     const target = await step("Finding this computer's OS", async () => {
       const target = await deps.details(runner, os);
       return [`${target.label}: ${target.version} (${target.arch})`, target];
@@ -133,7 +135,7 @@ export function add(destination, options, deps) {
   const runner = sshRunner(target, { port: options.port });
   return exitCode(async () => {
     const release = await deps.release(options.channel);
-    const token = await signInStep(deps, "Signed in to Parallax Connect");
+    const token = await signInStep(deps, "Signed in to Parallax Connect", "add");
     const channel = channelOf(release);
     const details = await sshTarget(runner, destination, target, `npx plx-cli connect --channel ${channel}`);
     await deps.install(runner, details, destination, release, channel);
@@ -378,7 +380,7 @@ export function unlink(deps) {
 export function remove(deps) {
   return exitCode(() =>
     withPlxd(deps, async (plxd) => {
-      const token = await signInStep(deps, "Signed in");
+      const token = await signInStep(deps, "Signed in", "remove");
       await step("Removing this computer from your account", async () => {
         const { hostId } = await plxd.call("relay/id");
         await plxd.call("relay/remove", { token, hostId });
