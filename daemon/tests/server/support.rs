@@ -31,6 +31,26 @@ use tokio_util::codec::Framed;
 mod temp;
 pub use temp::temp_dir;
 
+/// Sends in-process servers' logs to the test harness, which prints a test's share only when it
+/// fails: info from plxd, and debug from the relay and the remote listener, so a stream a test
+/// lost says why (PLX-1643). Each [`InProcess::start`] calls it, and only the first sets it up.
+fn log_to_test_output() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        use tracing_subscriber::filter::{LevelFilter, Targets};
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let targets = Targets::new()
+            .with_target("plxd", LevelFilter::INFO)
+            .with_target("plxd::relay", LevelFilter::DEBUG)
+            .with_target("plxd::server::remote", LevelFilter::DEBUG);
+        let output = tracing_subscriber::fmt()
+            .with_max_level(LevelFilter::DEBUG)
+            .with_test_writer()
+            .with_ansi(false);
+        let _ = tracing::subscriber::set_global_default(output.finish().with(targets));
+    });
+}
+
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -200,6 +220,7 @@ impl InProcess {
     }
 
     pub fn start(config: Config) -> Self {
+        log_to_test_output();
         let server = Server::start(config).expect("start the server");
         let socket = server.socket_path().to_owned();
         let shutdown = Shutdown::new();

@@ -948,6 +948,7 @@ impl Serving {
                 return debug!(%peer, %error, "closed a remote connection with no address");
             }
         };
+        debug!(%peer, relay = relayed.is_some(), "accepted a remote connection");
         let daemon = Arc::clone(&self.daemon);
         let stop_reading = self.stop_reading.clone();
         let key = Arc::clone(&bound.key);
@@ -970,7 +971,7 @@ impl Serving {
                 };
                 let read = tokio::select! {
                     read = time::timeout(remote::REQUEST_TIMEOUT, read) => read,
-                    () = closing.cancelled() => return,
+                    () = closing.cancelled() => return debug!(%peer, "closed a remote connection as the listener closed"),
                 };
                 drop(check);
                 let (mut stream, mut request) = match read {
@@ -2018,7 +2019,10 @@ pub(crate) async fn hosted_on(daemon: &Daemon) -> bool {
             db.hosted_client().map_err(|e| store_error(&e))
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_else(|error| {
+            warn!(error = %error.message, "could not read hostedClient, so it counts as off");
+            false
+        })
 }
 
 /// Ends every hosted and guest stream, every guest link, and every hosted client's connections, as

@@ -1602,10 +1602,13 @@ async fn serving(daemon: &Daemon) -> bool {
     daemon
         .reader
         .run(&CancellationToken::new(), |db| {
-            Ok(db.remote().unwrap_or(false))
+            db.remote().map_err(|e| store_error(&e))
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_else(|error| {
+            warn!(error = %error.message, "could not read the remote setting, so it counts as off");
+            false
+        })
 }
 
 /// Turns `relay` on for a host whose user never set it, so signing in is enough for phone
@@ -2475,9 +2478,12 @@ async fn serve(
                             }
                             continue;
                         }
+                        let open = message["t"] == "open";
                         if message["t"] == "check" {
                             daemon.relay.check_answered(message);
-                        } else if message["t"] == "open" && serving(daemon).await {
+                        } else if open && !serving(daemon).await {
+                            debug!(stream = %message["stream"], "ignored a stream while remote is off");
+                        } else if open {
                             // A hosted client's or guest's stream, while `hostedClient` is off, is
                             // never joined, nor a guest's for a link that isn't live, and the relay
                             // hears at once that it's gone (0108).
@@ -2487,7 +2493,7 @@ async fn serve(
                                 || (mark.marked() && !crate::server::remote::hosted_on(daemon).await)
                             {
                                 if let Some((id, _)) = stream_identity(&message) {
-                                    info!(dead_link, "refused a hosted client's or guest's stream");
+                                    info!(stream = id, dead_link, "refused a hosted client's or guest's stream");
                                     let gone = json!({ "t": "gone", "stream": id }).to_string();
                                     sink.send(Message::text(gone)).await.map_err(failed)?;
                                 }
@@ -2664,9 +2670,9 @@ async fn stream(
     };
     tokio::select! {
         () = stop.cancelled() => {}
-        () = cut.cancelled() => debug!("ended a hosted client's relay stream"),
+        () = cut.cancelled() => debug!(stream = id, "ended a marked relay stream"),
         joined = joined => if let Err(error) = joined {
-            debug!(%error, "a relay stream ended");
+            debug!(stream = id, %error, "a relay stream ended");
         }
     }
     drop(holding);
