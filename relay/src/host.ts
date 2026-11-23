@@ -914,7 +914,7 @@ export class HostRelay extends DurableObject<Env> {
     return logged(
       "host.webSocketMessage",
       () => this.context(ws),
-      () => this.fromHost(message),
+      () => this.fromHost(message, ws),
     );
   }
 
@@ -930,8 +930,8 @@ export class HostRelay extends DurableObject<Env> {
 
   /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, a request
    *  for a spare stream, word that plxd's end of a stream is gone, a device's removal for its user's
-   *  other hosts, or its connection check. */
-  private async fromHost(message: string | ArrayBuffer) {
+   *  other hosts, or its connection check. `ws` is the socket it came on. */
+  private async fromHost(message: string | ArrayBuffer, ws: WebSocket) {
     const parsed = typeof message === "string" ? parse(message) : undefined;
     if (parsed?.t === "hook" && typeof parsed.id === "string") {
       const status = typeof parsed.status === "number" ? parsed.status : 502;
@@ -946,7 +946,11 @@ export class HostRelay extends DurableObject<Env> {
       if (keys.join() !== before.join()) await this.ctx.storage.put("hooks", keys);
     } else if (parsed?.t === "guests" && Array.isArray(parsed.links)) {
       // plxd's live guest links (0108), which replace the last list: a link missing from it is
-      // withdrawn. At most GUEST_LIMITS.links, each kept until its expiry, given in seconds.
+      // withdrawn. At most GUEST_LIMITS.links, each kept until its expiry, given in seconds. Only
+      // from the current control socket, so a list still in flight on a replaced one can't bring
+      // back a link the new one withdrew. The relay closes every other before it takes a new one,
+      // so the current one is the only one still open.
+      if (ws.readyState !== WebSocket.OPEN) return;
       const now = Date.now();
       const guests: Guests = {};
       for (const entry of parsed.links as unknown[]) {

@@ -329,6 +329,8 @@ async function cors(request: Request, env: Env, next: () => Promise<Response>): 
   if (!allowed) return response;
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", origin);
+  // So the client's page can read when a 429 or 503 says to try again.
+  headers.set("access-control-expose-headers", "retry-after");
   headers.append("vary", "origin");
   return new Response(response.body, { status: response.status, headers });
 }

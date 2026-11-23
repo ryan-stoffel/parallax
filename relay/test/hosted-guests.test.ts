@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { base64url, sha256 } from "../src/crypto";
 import { GUEST_LIMITS, HostRelay, LIMITS, MAX_DAILY_BYTES, registerMessage } from "../src/host";
 import worker, { type Env } from "../src/index";
-import { MIN_FRAME_BYTES, REPORT_BYTES, type StreamRelay } from "../src/stream";
+import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
 import {
   BASE,
   call,
@@ -222,6 +222,7 @@ describe("CORS", () => {
     expect(list.status).toBe(200);
     expect(list.headers.get("access-control-allow-origin")).toBe(APP);
     expect(list.headers.get("vary")).toContain("origin");
+    expect(list.headers.get("access-control-expose-headers")).toBe("retry-after");
     const unsigned = await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", headers: { origin: APP } });
     expect(unsigned.status).toBe(401);
     expect(unsigned.headers.get("access-control-allow-origin")).toBe(APP);
@@ -305,6 +306,25 @@ describe("guest links", () => {
     // The replaced socket's close, which arrives after, leaves the new one's links.
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(await stored(host)).toEqual([link.id]);
+  });
+
+  it("takes a list only from the current control socket, so a replaced one's can't bring a link back", async () => {
+    const { host, control, stub } = await online();
+    const [kept, revoked] = [await newLink(), await newLink()];
+    await share(host, control, [kept, revoked]);
+    // The relay's end of the first control socket, which a list may still be in flight on.
+    let first: WebSocket | undefined;
+    await runInDurableObject(stub, (_: HostRelay, state) => void (first = state.getWebSockets("host")[0]));
+    const { control: replaced } = await connectHost(host);
+    await replaced.next();
+    await share(host, replaced, [kept]);
+    const stale = JSON.stringify({
+      t: "guests",
+      links: [kept, revoked].map((link) => ({ link: link.id, pass: link.hash, expires: Date.now() / 1000 + 3600 })),
+    });
+    await runInDurableObject(stub, (relay: HostRelay) => relay.webSocketMessage(first!, stale));
+    expect(await stored(host)).toEqual([kept.id]);
+    expect(await refusal(host, revoked)).toEqual({ status: 401, error: "unauthorized" });
   });
 
   it("keeps at most 20 links, and only well-formed ones", async () => {
@@ -488,5 +508,59 @@ describe("marks", () => {
     for (const open of announced) opened(await join(host, open));
     expect(await guest.next()).toBe("ready");
     expect(await browser.next()).toBe("ready");
+  });
+
+  it("stay on a stream's record while it waits to be announced again", async () => {
+    const { host, control, stub } = await online();
+    const link = await newLink();
+    await share(host, control, [link]);
+    opened(await socket(`/v1/hosts/${host.id}/connect?ticket=${await granted(host, link)}`));
+    const { stream } = await next(control);
+    // The new `open` waits on its arm, so the record stays pending until the test lets it go.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const arm = StreamRelay.prototype.arm;
+    const spy = vi.spyOn(StreamRelay.prototype, "arm").mockImplementation(async function (this: StreamRelay, armed) {
+      await held;
+      return arm.call(this, armed);
+    });
+    try {
+      const { control: again } = await connectHost(host, []);
+      await again.next();
+      const record = () => runInDurableObject(stub, async (_: HostRelay, state) =>
+        (await state.storage.get<Record<string, object>>("streams"))?.[stream]);
+      await expect.poll(() => spy.mock.calls.length).toBe(1);
+      expect(await record()).toEqual({ pending: true, mark: { guest: link.id } });
+      release();
+      expect((await next(again)).guest).toBe(link.id);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["hosted", "guest"])("never retake after a %s stream's join answers 409", async (kind) => {
+    const { host, user, control } = await online();
+    await spare(host, control);
+    const link = await newLink();
+    await share(host, control, [link]);
+    const ticket = kind === "guest"
+      ? await granted(host, link)
+      : ((await (await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token: await hostedToken(user) })).json()) as { ticket: string }).ticket;
+    // The client's join finds the stream taken, as a spare whose claim was lost would be (PLX-1506).
+    const fetch = StreamRelay.prototype.fetch;
+    const joining = vi.spyOn(StreamRelay.prototype, "fetch").mockImplementation(async function (this: StreamRelay, request) {
+      if (new URL(request.url).pathname === "/client") return Response.json({ error: "taken" }, { status: 409 });
+      return fetch.call(this, request);
+    });
+    const retake = vi.spyOn(HostRelay.prototype, "retake");
+    try {
+      const response = await socket(`/v1/hosts/${host.id}/connect?ticket=${ticket}`);
+      expect(response instanceof Response && response.status).toBe(409);
+      expect(retake).not.toHaveBeenCalled();
+    } finally {
+      joining.mockRestore();
+      retake.mockRestore();
+    }
   });
 });
