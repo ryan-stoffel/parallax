@@ -10,11 +10,11 @@
     "deploy:staging": "node scripts/deploy-staging.mjs"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.9",
-    "@cloudflare/workers-types": "~5.20261027.1",
+    "@cloudflare/vitest-plugin": "^1.9.0",
+    "@cloudflare/workers-types": "~5.20261122.2",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.5",
-    "wrangler": "^4.154.0"
+    "vitest": "^5.1.1",
+    "wrangler": "^4.166.0"
   },
   "packageManager": "pnpm@11.10.0",
   "dependencies": {
