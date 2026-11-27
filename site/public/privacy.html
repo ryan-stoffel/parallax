@@ -42,7 +42,7 @@
             tokens, and byte counts. It carries your threads encrypted end to end and can't read them.
           </li>
           <li>Notifications carry a thread's title and text sealed with a key only your devices hold.</li>
-          <li>The phone app has no analytics and no advertising code. The desktop app sends anonymous usage counts, which you can turn off.</li>
+          <li>The phone app has no analytics and no advertising code. The desktop app sends usage counts under a hash of your account's id, which you can turn off.</li>
           <li>We don't sell your data, and we don't use it for advertising.</li>
           <li>You can delete your account in the app or on the web.</li>
         </ul>
@@ -77,7 +77,7 @@
         <li>Your email address.</li>
         <li>Your first and last name.</li>
         <li>How you sign in: GitHub, Google, Apple, or an email address with a password, and any passkeys you add.</li>
-        <li>Your profile picture, when the sign-in provider gives one or you set one.</li>
+        <li>Your profile picture, when the sign-in provider gives one or you set one. The apps load it from Clerk's or that provider's image server.</li>
         <li>
           A record of your sign-in sessions, which Clerk keeps with each session's device, browser, IP address, and
           approximate location, so your account page can list them.
@@ -125,7 +125,7 @@
           <tr>
             <td>Each computer</td>
             <td>
-              Its id, which is a fingerprint of its public key. The public key. The name you gave the computer, up to
+              Its id, which is a fingerprint of its public key. The public key. The computer's name, which is its hostname unless you change it, up to
               64 characters. Which account it belongs to. When it last connected. The number of bytes it relayed today, counted to cap cost,
               and replaced each day.
             </td>
@@ -195,22 +195,34 @@
       </p>
 
       <h2 id="phone">The phone app</h2>
-      <p>The phone app contains no analytics, crash reporting, or advertising code. It asks for these permissions only when you use the feature:</p>
+      <p>The phone app contains no analytics, crash reporting, or advertising code. It asks for these permissions:</p>
       <ul>
-        <li><strong>Camera and photos</strong>, to attach a photo to a message. The photo goes to your computer over the encrypted connection.</li>
+        <li>
+          <strong>Camera and photos</strong>, to attach a picture to a message. With photo access, the attach sheet
+          shows your recent photos to pick from. You can also attach files. Each attachment goes to your computer
+          over the encrypted connection.
+        </li>
         <li>
           <strong>Microphone and speech recognition</strong>, to dictate a message. Speech is turned into text on the
-          phone when the phone supports it. Otherwise the phone's own speech service from Apple or Google does it.
-          Parallax receives no audio.
+          phone when the phone supports it for your language. Otherwise the phone's own speech service from Apple or
+          Google does it. Parallax receives no audio.
         </li>
         <li><strong>Local network</strong>, to find your computers on the same network.</li>
-        <li><strong>Notifications</strong>, described above.</li>
+        <li><strong>Notifications</strong>, asked for during first run when you choose to turn them on, and described above.</li>
       </ul>
       <p>
+        <strong>Clean up dictation</strong> is on by default. The dictated text, with the names of files you mention,
+        goes to your computer over the encrypted connection, and your computer sends it to a small AI model from a
+        provider you signed in to there, which fixes punctuation and removes filler words. Turn it off in the phone's
+        Settings &gt; General and dictation goes in as transcribed.
+      </p>
+      <p>
         The app keeps on the phone: your sign-in, the list of your computers and the keys that prove the phone to
-        them, the notification keys, the names and states of up to 8 recent threads for the widget and Live Activity,
-        your preferences, and a connection log you can read in the app. Signing out removes the sign-in, the recent
-        threads, and the notification keys. Deleting the app removes the rest.
+        them, the notification keys, the names and states of up to 8 recent threads for the widget, your preferences,
+        and a connection log you can read in the app. The Live Activity shows only counts of threads, with no names.
+        Signing out removes the sign-in, the recent threads, and the notification keys. Deleting the app removes the
+        rest on Android. On iOS, what the app saved in the keychain, such as the keys that prove the phone to your
+        computers, can stay after the app is deleted, as iOS keeps keychain items.
       </p>
 
       <h2 id="desktop">The desktop app</h2>
@@ -222,20 +234,41 @@
       </ul>
       <p>
         Each event carries the app's version and release channel, the operating system, the processor type, and an id.
-        Signed in, the id is a one-way hash of your account's id. Signed out, it is a random id made for the install.
-        No event carries your name, your email address, a file path, a prompt, or code. PostHog is told to keep no
-        profile for the id and to add no location from the request. PostHog keeps events for
-        <span class="todo">TODO (Ryan): event retention on the PostHog project</span>.
+        Signed in, the id is a SHA-256 hash of your account's id, the same on all your devices. It is a pseudonym and
+        not anonymous: someone who knows an account's id can compute its hash, and the events under one hash show
+        that account's activity over time. Signed out, the id is a random one made for the install. No event carries
+        your name, your email address, a file path, a prompt, or code.
+      </p>
+      <p>
+        PostHog receives each event over the internet and so receives your IP address. The events tell PostHog to
+        keep no profile for the id and to add no location from the address.
+        <span class="todo">TODO (Ryan): whether the PostHog project discards the IP address, and its event retention</span>
       </p>
       <p>
         To turn this off, set <code>DO_NOT_TRACK=1</code> in the app's environment. The project's
         <a href="https://github.com/ryan-stoffel/parallax#usage-data">README</a> has the steps.
       </p>
 
-      <h2 id="other">Other requests the apps make</h2>
+      <h2 id="other">Other services the apps contact</h2>
+      <p>Each of these sees your device's IP address when the app contacts it:</p>
+      <ul>
+        <li><strong>GitHub</strong>, when the apps check for new releases and download updates.</li>
+        <li>
+          <strong>GitHub's image servers</strong>, when the apps show a pull request: its authors' avatars and the
+          images in its description and comments.
+        </li>
+        <li><strong>Clerk's and your sign-in provider's image servers</strong>, for your profile picture.</li>
+        <li>
+          <strong>Google's Firebase</strong>, on Android. The app registers an installation id with Firebase to get
+          its push token.
+        </li>
+        <li>
+          <strong>Sites you open in the desktop app's built-in browser</strong>, as in any browser. Extensions you
+          add to it come from Google's Chrome Web Store, and signing in to Google there is between you and Google.
+        </li>
+      </ul>
       <p>
-        The apps check GitHub for new releases and download updates from it, so GitHub sees your IP address when they
-        do. This website sets no cookies and runs no scripts or analytics. Cloudflare serves it and processes each
+        This website sets no cookies and runs no scripts or analytics. Cloudflare serves it and processes each
         request's IP address to do so.
       </p>
 
@@ -277,15 +310,15 @@
           </tr>
           <tr>
             <td><a href="https://policies.google.com/privacy">Google</a></td>
-            <td>Delivers notifications to Android phones.</td>
+            <td>Delivers notifications to Android phones, through Firebase.</td>
           </tr>
           <tr>
             <td><a href="https://posthog.com/privacy">PostHog</a></td>
-            <td>The desktop app's usage events.</td>
+            <td>The desktop app's usage events, and the IP address they arrive from.</td>
           </tr>
           <tr>
             <td><a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a></td>
-            <td>Release downloads and update checks.</td>
+            <td>Release downloads, update checks, and pull request images.</td>
           </tr>
         </tbody>
       </table>
@@ -298,8 +331,10 @@
       <ul>
         <li><strong>Your account</strong> stays until you delete it.</li>
         <li>
-          <strong>A computer on the relay</strong> stays until you remove it in the desktop app's Settings &gt; Connections. Removing it
-          deletes everything the relay keeps for that computer.
+          <strong>A computer on the relay</strong> stays until you remove it: in the desktop app, Settings &gt;
+          Connections &gt; Computers, then Remove on that computer. The app won't remove the computer you're on, so
+          run <code>plx connect remove</code> there. Removing a computer deletes everything the relay keeps for it,
+          except that its id stays on your account's list of removed computers.
         </li>
         <li>
           <strong>A push token</strong> stays until Apple or Google reports that it no longer works, or until newer
@@ -319,14 +354,30 @@
         Deleting removes your account from Clerk: your email address, name, picture, sign-in methods, and sessions.
         Every device is signed out. Your threads and files are untouched, because they are on your computers.
       </p>
-      <!-- True until the relay removes an account's data on deletion (PLX-1612). Rewrite this paragraph when that ships. -->
+      <!-- True until the relay removes an account's data and closes its computers' connections on deletion (PLX-1612). Rewrite these two paragraphs when that ships. -->
       <p>
         The relay doesn't yet learn that an account was deleted. Until that is fixed, it keeps the deleted account's
-        list of computers, its list of removed computers, its push tokens, and each computer's registration. Nobody
-        can sign in to that account again, so nothing can reach that data through the relay. A sign-in token issued
-        before the deletion keeps working at the relay until it expires, which is at most one day. Removing
-        each computer in the desktop app's Settings &gt; Connections before you delete the account clears the computers' records. To
-        have the rest removed, <a href="/support">contact us</a>.
+        list of computers, its list of removed computers, its push tokens, and each computer's registration. A
+        sign-in token issued before the deletion keeps working at the relay until it expires, which is at most one
+        day. After that nobody can sign in to the account, so no app can list or open its computers through the
+        relay.
+      </p>
+      <p>
+        <strong>The account's computers stay connected to the relay.</strong> A computer connects with its own key,
+        not with your sign-in, so deleting the account doesn't disconnect it. Until you act, each one keeps sending
+        notifications to the phones registered on the account, receiving its webhooks, serving the guest links you
+        made, and reaching the account's other computers. To stop this, remove each computer before you delete the
+        account, as described above, or turn off Reach from anywhere in that computer's Settings &gt; Connections,
+        or run <code>plx connect unlink</code> on it.
+      </p>
+      <p>
+        To have what the relay still keeps removed, <a href="/support">contact us</a>.
+        <span class="todo">TODO (Ryan): confirm you will remove a deleted account's relay data when asked</span>
+      </p>
+      <p>
+        An account made before November 2026 on Parallax's earlier sign-in service is a separate account. Deleting
+        your account at <code>accounts.parallax.codes</code> doesn't delete it. Contact us to have it deleted.
+        <span class="todo">TODO (Ryan): confirm how a user deletes an account on the development Clerk instance, and the date accounts moved</span>
       </p>
 
       <h2 id="security">Security</h2>
@@ -346,11 +397,11 @@
       <h2 id="rights">Your choices and rights</h2>
       <ul>
         <li>See and change your name, email address, picture, and sign-in methods on your <a href="https://accounts.parallax.codes/user">account page</a>.</li>
-        <li>Remove a computer or a device in the desktop app's Settings &gt; Connections.</li>
+        <li>Remove a computer or a device in the desktop app's Settings &gt; Connections &gt; Computers.</li>
         <li>Turn notifications off in your phone's settings.</li>
         <li>Turn desktop usage events off with <code>DO_NOT_TRACK=1</code>.</li>
         <li>Delete your account at any time.</li>
-        <li>Ask us for a copy of the data listed on this page, or to correct or delete it, through <a href="/support">Support</a>.</li>
+        <li>Ask us for a copy of the data listed on this page, or to correct or delete it, through <a href="/support">Support</a>. <span class="todo">TODO (Ryan): confirm you will answer requests for a copy, a correction, or deletion</span></li>
       </ul>
       <p><span class="todo">TODO (Ryan): rights wording for the regions you serve, such as GDPR and CCPA, and the legal basis for processing</span></p>
 

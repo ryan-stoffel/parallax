@@ -33,10 +33,18 @@
 
       <h2 id="before">Before you delete</h2>
       <p>
-        To clear what Parallax Connect keeps about your computers, remove each one first. In the desktop app, open
-        Settings &gt; Connections, open a computer's menu, and choose Remove. For the computer you're on, run
-        <code>plx connect remove</code> there. <a href="#kept">What is kept</a> explains why.
+        <strong>Remove your computers first.</strong> A computer stays connected to Parallax Connect with its own key
+        after the account is gone. Until you remove it, it keeps sending notifications to the account's phones,
+        receiving its webhooks, serving guest links, and reaching the account's other computers.
       </p>
+      <ul>
+        <li>In the desktop app, open Settings &gt; Connections &gt; Computers and choose Remove on each computer.</li>
+        <li>The app won't remove the computer you're on. Run <code>plx connect remove</code> there.</li>
+        <li>
+          To keep a computer registered but disconnected, turn off Reach from anywhere in its Settings &gt;
+          Connections, or run <code>plx connect unlink</code> on it.
+        </li>
+      </ul>
 
       <h2 id="phone">From the phone app</h2>
       <ol>
@@ -62,6 +70,13 @@
         If you can't sign in, write to
         <span class="todo">TODO (Ryan): support email address</span>
         from the account's email address and we'll delete it for you.
+        <span class="todo">TODO (Ryan): confirm you will delete an account for someone who can't sign in</span>
+      </p>
+
+      <p>
+        An account made before November 2026 on Parallax's earlier sign-in service is a separate account, and the
+        steps above don't delete it. Contact us to have it deleted.
+        <span class="todo">TODO (Ryan): confirm how a user deletes an account on the development Clerk instance, and the date accounts moved</span>
       </p>
 
       <h2 id="deleted">What is deleted</h2>
@@ -76,19 +91,29 @@
           <strong>Everything on your computers.</strong> Your threads, code, and files never left them, and deleting
           your account doesn't touch them. Uninstall Parallax from a computer to remove its data there.
         </li>
-        <!-- True until the relay removes an account's data on deletion (PLX-1612). Rewrite this item when that ships. -->
+        <!-- True until the relay removes an account's data and closes its computers' connections on deletion (PLX-1612). Rewrite these items when that ships. -->
         <li>
-          <strong>The relay's record of computers you didn't remove.</strong> Parallax Connect doesn't yet learn that
-          an account was deleted, so it keeps the account's list of computer ids, each computer's name and public key,
-          and your phones' push tokens. Nobody can sign in to the account again, so nothing can reach them through the
-          relay. Removing your computers before you delete clears their records. The push tokens stay until Apple or
-          Google retires them. <a href="/support">Contact us</a> to have any of it removed.
+          <strong>The relay's record of computers you didn't remove, and their connections.</strong> Parallax
+          Connect doesn't yet learn that an account was deleted. It keeps the account's list of computer ids, each
+          computer's name and public key, and your phones' push tokens, and each computer stays connected and keeps
+          working as "Before you delete" describes. A sign-in issued before the deletion keeps working at the relay
+          for up to a day. After that no app can list or open those computers through the relay.
         </li>
         <li>
-          <strong>Anonymous usage counts from the desktop app</strong>, which carry a one-way hash of the account's id
-          and no name or email address.
+          <strong>The ids of computers you removed</strong>, on the account's list of removed computers.
+        </li>
+        <li>
+          <strong>Push tokens</strong>, until Apple or Google retires them.
+        </li>
+        <li>
+          <strong>Usage counts from the desktop app</strong>, which carry a hash of the account's id and no name or
+          email address. The hash is a pseudonym, not anonymous.
         </li>
       </ul>
+      <p>
+        <a href="/support">Contact us</a> to have what the relay keeps removed.
+        <span class="todo">TODO (Ryan): confirm you will remove a deleted account's relay data when asked</span>
+      </p>
       <p>The <a href="/privacy">privacy policy</a> lists everything Parallax stores and for how long.</p>
     </main>
 
