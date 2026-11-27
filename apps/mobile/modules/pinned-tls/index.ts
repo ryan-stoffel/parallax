@@ -30,7 +30,7 @@ const native = requireNativeModule<{
   relayClose(id: string): void;
   relayWarm(url: string): void;
   authorize(url: string): Promise<string>;
-  appVersion(): { version: string; build: string };
+  appVersion(): { name: string; version: string; build: string };
   preview(url: string): Promise<void>;
   send(id: string, text: string): void;
   close(id: string): void;
@@ -56,7 +56,7 @@ export const authorize = (url: string) => native.authorize(url);
  */
 export const preview = (url: string) => native.preview(url);
 
-/** This build's version and build number. */
+/** This build's name as the home screen shows it, its version, and its build number. */
 export const appVersion = () => native.appVersion();
 
 /** The computers showing a pairing code on this network, by name, found over mDNS in `seconds`. */

@@ -57,7 +57,7 @@ The app contains no analytics or advertising SDK and does no tracking.
 
 PUSH NOTIFICATIONS (4.5.4)
 
-The app works with notifications off. A notification's visible text is a fixed line. The thread's title is delivered encrypted and opened on the device by a notification service extension.
+The app works with notifications off. Each push carries a fixed line, such as "A thread finished.", that Apple and our relay can read, and the thread's title and the start of the agent's reply encrypted with a key only the user's devices hold. A notification service extension decrypts those on the phone and shows them as the notification's title and text in place of the fixed line. If it can't, the fixed line is shown.
 
 PERMISSIONS
 

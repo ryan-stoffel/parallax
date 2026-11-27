@@ -69,3 +69,11 @@ export function newInstance(
 /** An account choice as a picker's value: `subscription:claude`, `key:<id>`. */
 export const choiceKey = (choice?: AccountChoice) =>
   !choice ? "" : choice.kind === "subscription" ? `subscription:${choice.backend}` : `key:${choice.id}`;
+
+/**
+ * "Parallax 1.2.3 (45)": a build's name, version, and build number, as Settings shows them. The
+ * name is the installed app's own, so a nightly (app.config.js) reads "Parallax (Nightly)" here as
+ * it does on the home screen. A native module from before it gave a name gives none.
+ */
+export const versionLine = ({ name, version, build }: { name?: string; version: string; build: string }) =>
+  `${name || "Parallax"} ${version}${build ? ` (${build})` : ""}`;

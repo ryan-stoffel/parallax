@@ -37,7 +37,6 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react-native";
-import Constants from "expo-constants";
 import { getLocales } from "expo-localization";
 import { t } from "i18next";
 import { useEffect, useState } from "react";
@@ -63,7 +62,7 @@ import { allAccess } from "./offers";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
 import { askForNotifications, notificationsOn, notify, registerWithRelay } from "./push";
 import { isRelay, ordered } from "./routes";
-import { pages, type SettingsPage } from "./settingsLogic";
+import { pages, versionLine, type SettingsPage } from "./settingsLogic";
 import { Action, can, Page, Section, SelectRow, SwitchRow } from "./SettingsParts";
 import { DeviceIcon, Dot, GitHubLogo, Icon, Mark, Row, T, useColors } from "./ui";
 
@@ -94,11 +93,7 @@ function StatusDot({ m }: { m: Computer }) {
   return <Dot color={m.shownConnected ? c.added : m.state.status === "connecting" && !m.gate ? c.warning : c.faintForeground} />;
 }
 
-/** "Parallax 1.2.3 (45)": this build's name, "Parallax (Nightly)" for a nightly (app.config.js), and version. */
-function versionName() {
-  const { version, build } = appVersion();
-  return `${Constants.expoConfig?.name ?? "Parallax"} ${version}${build ? ` (${build})` : ""}`;
-}
+const versionName = () => versionLine(appVersion());
 
 /** A small pill of a color, such as a computer's Default. */
 function Pill({ label, color }: { label: string; color: string }) {

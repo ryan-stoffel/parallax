@@ -12,10 +12,11 @@ These are legal statements, and Ryan submits them. Check each against the policy
 | Account id | Clerk, and the relay, which keys an account's computers by it | The account, and listing the account's computers |
 | Push token | The relay, then Apple or Google | Sending notifications |
 | Profile picture, if the sign-in provider gives one | Clerk | Shown in the app |
+| IP address and the approximate location Clerk derives from it, per sign-in session | Clerk | The account page's list of signed-in devices |
 
 What the app handles but nobody else can read: prompts, agent replies, code, diffs, attached photos and files, and dictated text. They go from the phone to the user's own computer over a connection encrypted end to end. A notification's title and text are sealed the same way. Dictation audio is turned into text by the phone's own speech recognition.
 
-What the app doesn't do: analytics, crash reporting, advertising, tracking, location, contacts, or purchases.
+What the app doesn't do: analytics, crash reporting, advertising, tracking, reading the phone's location or contacts, or purchases.
 
 ## App Store Connect: App Privacy
 
@@ -27,8 +28,11 @@ What the app doesn't do: analytics, crash reporting, advertising, tracking, loca
 | Contact Info > Email Address | Yes | Yes | No | App Functionality |
 | Identifiers > User ID | Yes | Yes | No | App Functionality |
 | Identifiers > Device ID | Yes | Yes | No | App Functionality |
+| Location > Coarse Location | Yes | Yes | No | App Functionality |
 
-These four match `ios.privacyManifests.NSPrivacyCollectedDataTypes` in `app.json`. Keep the two in step.
+Coarse Location is declared because Clerk keeps each sign-in session's IP address and the approximate location it derives from it, and shows them on the account page's device list. The app never asks for the phone's location and has no location permission.
+
+These five match `ios.privacyManifests.NSPrivacyCollectedDataTypes` in `app.json`. Keep the two in step.
 
 Every other type: not collected. The ones a reviewer may ask about:
 
@@ -36,7 +40,7 @@ Every other type: not collected. The ones a reviewer may ask about:
 | --- | --- | --- |
 | User Content > Photos or Videos, Audio Data, Other User Content | Not collected | Attachments and messages go only to the user's own computer, encrypted end to end. Apple counts data as collected when it leaves the device in a form the developer or a partner can read |
 | Usage Data, Diagnostics | Not collected | The phone app has no analytics or crash reporting |
-| Location, Contacts, Health, Financial Info, Browsing History, Search History, Purchases, Sensitive Info | Not collected | The app doesn't read them |
+| Precise Location, Contacts, Health, Financial Info, Browsing History, Search History, Purchases, Sensitive Info | Not collected | The app doesn't read them |
 
 TODO (Ryan): the profile picture. Clerk stores the picture the sign-in provider gives, and the app shows it. If you count that as the user's photo, add User Content > Photos or Videos (linked, App Functionality) here and to the privacy manifest in `app.json`. The draft leaves it out, as PLX-1608's manifest did.
 
@@ -61,6 +65,9 @@ Data types:
 | Personal info > Email address | Yes | No | No | Required | Account management |
 | Personal info > User IDs | Yes | No | No | Required | Account management, App functionality |
 | Device or other IDs | Yes | No | No | Optional: only with notifications on | App functionality |
+| Location > Approximate location | Yes | No | No | Required | Account management, Fraud prevention, security, and compliance |
+
+Approximate location is declared for the same reason as Apple's Coarse Location: Clerk keeps each sign-in session's IP address and the approximate location it derives from it. The app holds no location permission.
 
 "Shared" is No because Clerk, Cloudflare, and Google handle the data as service providers for Parallax, which Play doesn't count as sharing.
 
@@ -70,7 +77,7 @@ Not declared, and why:
 | --- | --- |
 | Photos and videos, Audio files, Files and docs, Messages | They go only to the user's own computer, encrypted end to end. Play's form exempts data that end-to-end encryption makes unreadable to everyone but sender and recipient |
 | App activity, App info and performance | The phone app has no analytics or crash reporting |
-| Location, Contacts, Financial info, Health and fitness, Calendar, Web browsing | The app doesn't read them |
+| Precise location, Contacts, Financial info, Health and fitness, Calendar, Web browsing | The app doesn't read them |
 
 ## Open before submitting
 
