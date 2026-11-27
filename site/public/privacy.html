@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy policy · Parallax</title>
+    <meta name="description" content="What Parallax collects, what it can't see, how long it keeps data, and how to delete your account.">
+    <link rel="icon" href="/mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/site.css">
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">
+        <picture>
+          <source srcset="/mark-dark.svg" media="(prefers-color-scheme: dark)">
+          <img src="/mark.svg" alt="" width="22" height="22">
+        </picture>
+        Parallax
+      </a>
+      <nav>
+        <a href="/privacy" aria-current="page">Privacy</a>
+        <a href="/support">Support</a>
+        <a href="/delete-account">Delete account</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Privacy policy</h1>
+      <p class="meta">Effective <span class="todo">TODO (Ryan): effective date</span></p>
+      <p class="lead">
+        Parallax runs coding agents on your own computers and lets you reach them from the desktop app and from your
+        phone. Your threads, prompts, code, and files stay on your computers. This page says what the Parallax
+        services do hold, and what they can't see.
+      </p>
+
+      <div class="card">
+        <h3>In short</h3>
+        <ul>
+          <li>A Parallax account holds your email address, your name, and how you sign in.</li>
+          <li>
+            Parallax Connect, the relay that links your devices, keeps a list of your computers, your phones' push
+            tokens, and byte counts. It carries your threads encrypted end to end and can't read them.
+          </li>
+          <li>Notifications carry a thread's title and text sealed with a key only your devices hold.</li>
+          <li>The phone app has no analytics and no advertising code. The desktop app sends anonymous usage counts, which you can turn off.</li>
+          <li>We don't sell your data, and we don't use it for advertising.</li>
+          <li>You can delete your account in the app or on the web.</li>
+        </ul>
+      </div>
+
+      <h2 id="who">Who runs Parallax</h2>
+      <p>
+        Parallax is open source, and its code is public at
+        <a href="https://github.com/ryan-stoffel/parallax">github.com/ryan-stoffel/parallax</a>. The Parallax account
+        service and Parallax Connect are run by
+        <span class="todo">TODO (Ryan): the operator's legal name and country</span>, called "we" on this page.
+      </p>
+
+      <h2 id="yours">What stays on your computers</h2>
+      <p>
+        The Parallax program on each of your computers keeps your threads, prompts, agent replies, code, files,
+        settings, and the list of devices you approved. None of it is sent to us. The desktop app and the phone app
+        read it over a connection that is encrypted from your device to your computer.
+      </p>
+      <p>
+        Your computers talk to the AI providers you signed in to, such as Anthropic, OpenAI, or Cursor, with your own
+        accounts there. Those requests go from your computer to the provider and not through us. Each provider's own
+        terms and privacy policy cover them.
+      </p>
+
+      <h2 id="account">Your account</h2>
+      <p>
+        Accounts are held by <a href="https://clerk.com">Clerk</a>, our sign-in provider. We keep no account database
+        of our own. Your account holds:
+      </p>
+      <ul>
+        <li>Your email address.</li>
+        <li>Your first and last name.</li>
+        <li>How you sign in: GitHub, Google, Apple, or an email address with a password, and any passkeys you add.</li>
+        <li>Your profile picture, when the sign-in provider gives one or you set one.</li>
+        <li>
+          A record of your sign-in sessions, which Clerk keeps with each session's device, browser, IP address, and
+          approximate location, so your account page can list them.
+        </li>
+      </ul>
+      <p>
+        When you sign in with GitHub, Google, or Apple, that provider tells Clerk who you are and learns that you
+        signed in to Parallax. If you set a password, Clerk stores it hashed. The apps never see it.
+      </p>
+      <p>
+        Each app keeps its sign-in on the device, in the system keychain or the operating system's encrypted storage:
+        a token that renews the session, and the last copy of your name, email address, and picture to show in the
+        app.
+      </p>
+
+      <h2 id="relay">Parallax Connect</h2>
+      <p>
+        Parallax Connect is a relay at <code>relay.parallax.codes</code>, running on Cloudflare. It lets your phone
+        and your other computers find and reach a computer that isn't on the same network.
+      </p>
+
+      <h3>What the relay stores</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>For</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Your account</td>
+            <td>
+              Your account's id from Clerk. The ids of the computers you added, up to 10. The ids of computers you
+              removed, up to 100, so your other devices stop using them.
+            </td>
+          </tr>
+          <tr>
+            <td>Each phone</td>
+            <td>
+              The push token Apple or Google gave the app, up to 20 per account. It is what lets the relay send that
+              phone a notification.
+            </td>
+          </tr>
+          <tr>
+            <td>Each computer</td>
+            <td>
+              Its id, which is a fingerprint of its public key. The public key. The name you gave the computer, up to
+              64 characters. Which account it belongs to. When it last connected. The number of bytes it relayed today, counted to cap cost,
+              and replaced each day.
+            </td>
+          </tr>
+          <tr>
+            <td>Open connections</td>
+            <td>Random ids for the connections open right now, removed when each one closes.</td>
+          </tr>
+          <tr>
+            <td>Webhooks</td>
+            <td>
+              If you make a scheduled task with a webhook, a hash of its address. A request sent to it while your
+              computer is offline is held, with its headers and body, for up to 24 hours and deleted once your
+              computer takes it.
+            </td>
+          </tr>
+          <tr>
+            <td>Guest links</td>
+            <td>
+              If you share a thread with a guest link, the link's id, a hash of its pass, when it expires, and the
+              bytes it used today. The link's secret stays in the link and is never sent to the relay.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>What the relay can't see</h3>
+      <p>
+        The relay never stores or reads thread content. Your device opens an encrypted connection to your computer
+        through the relay and accepts only that computer's own key, so the relay passes along bytes it can't read or
+        change. That covers your prompts, agent replies, code, files, terminal output, and attachments.
+      </p>
+      <p>
+        The relay can see which of your computers are online, when a connection opens and closes, and how many bytes
+        it carries. A webhook is different: the service that sends one sends it to the relay over HTTPS, so the relay
+        handles its contents to pass them on.
+      </p>
+
+      <h3>Logs</h3>
+      <p>
+        The relay writes operational logs to Cloudflare. A log line holds an event's name, a time, and the first 8
+        characters of a computer's id. It holds no account id, email address, token, or content. Per-request logs
+        are turned off. Cloudflare keeps these logs for
+        <span class="todo">TODO (Ryan): Workers Logs retention on the account's plan</span>.
+      </p>
+      <p>
+        Cloudflare handles every request to the relay and so processes your device's IP address. The relay uses it to
+        limit how many requests one address can send each minute, and doesn't store it.
+      </p>
+
+      <h2 id="push">Notifications</h2>
+      <p>
+        When a thread needs your approval, finishes, or fails, your computer tells the relay, and the relay sends a
+        notification to your phones through Apple's push service or Google's Firebase Cloud Messaging. Apple or
+        Google and the relay see:
+      </p>
+      <ul>
+        <li>The phone's push token.</li>
+        <li>A fixed line of text for the event, such as "A thread finished".</li>
+        <li>The ids of the computer and the run, so a tap opens the right thread.</li>
+      </ul>
+      <p>
+        The thread's title and the start of the agent's reply travel sealed. Your computer encrypts them with a key
+        it makes itself, and your phone gets that key directly from your computer over the encrypted connection. The
+        relay, Apple, and Google can't open them. Your phone opens them on the device and shows the fixed line if it
+        can't.
+      </p>
+
+      <h2 id="phone">The phone app</h2>
+      <p>The phone app contains no analytics, crash reporting, or advertising code. It asks for these permissions only when you use the feature:</p>
+      <ul>
+        <li><strong>Camera and photos</strong>, to attach a photo to a message. The photo goes to your computer over the encrypted connection.</li>
+        <li>
+          <strong>Microphone and speech recognition</strong>, to dictate a message. Speech is turned into text on the
+          phone when the phone supports it. Otherwise the phone's own speech service from Apple or Google does it.
+          Parallax receives no audio.
+        </li>
+        <li><strong>Local network</strong>, to find your computers on the same network.</li>
+        <li><strong>Notifications</strong>, described above.</li>
+      </ul>
+      <p>
+        The app keeps on the phone: your sign-in, the list of your computers and the keys that prove the phone to
+        them, the notification keys, the names and states of up to 8 recent threads for the widget and Live Activity,
+        your preferences, and a connection log you can read in the app. Signing out removes the sign-in, the recent
+        threads, and the notification keys. Deleting the app removes the rest.
+      </p>
+
+      <h2 id="desktop">The desktop app</h2>
+      <p>The installed desktop app sends three kinds of usage events to <a href="https://posthog.com">PostHog</a>, so we can count how many installs are in use and how much they do:</p>
+      <ul>
+        <li>That the app is in use, at launch and once a day.</li>
+        <li>That a prompt was sent, and whether it started a thread or followed one up. Never its text.</li>
+        <li>When you're signed in, the number of tokens each model used per hour on your computers, and the cost when the provider reports one.</li>
+      </ul>
+      <p>
+        Each event carries the app's version and release channel, the operating system, the processor type, and an id.
+        Signed in, the id is a one-way hash of your account's id. Signed out, it is a random id made for the install.
+        No event carries your name, your email address, a file path, a prompt, or code. PostHog is told to keep no
+        profile for the id and to add no location from the request. PostHog keeps events for
+        <span class="todo">TODO (Ryan): event retention on the PostHog project</span>.
+      </p>
+      <p>
+        To turn this off, set <code>DO_NOT_TRACK=1</code> in the app's environment. The project's
+        <a href="https://github.com/ryan-stoffel/parallax#usage-data">README</a> has the steps.
+      </p>
+
+      <h2 id="other">Other requests the apps make</h2>
+      <p>
+        The apps check GitHub for new releases and download updates from it, so GitHub sees your IP address when they
+        do. This website sets no cookies and runs no scripts or analytics. Cloudflare serves it and processes each
+        request's IP address to do so.
+      </p>
+
+      <h2 id="use">How we use data</h2>
+      <p>We use what's listed above to:</p>
+      <ul>
+        <li>Sign you in and keep your devices signed in.</li>
+        <li>Show each of your devices the computers on your account, and connect them.</li>
+        <li>Send the notifications you turned on.</li>
+        <li>Keep the relay's cost and abuse within limits.</li>
+        <li>Count how much the desktop app is used.</li>
+      </ul>
+      <p>
+        We don't sell personal data. We don't use it for advertising or share it with advertisers or data brokers. We
+        don't track you across other companies' apps or websites. We can't use your threads to train AI models,
+        because we never receive them.
+      </p>
+
+      <h2 id="processors">Who else handles data</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>What it handles</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="https://clerk.com/legal/privacy">Clerk</a></td>
+            <td>Your account and sign-in.</td>
+          </tr>
+          <tr>
+            <td><a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a></td>
+            <td>Runs the relay and this website, and stores what the relay stores.</td>
+          </tr>
+          <tr>
+            <td><a href="https://www.apple.com/legal/privacy/">Apple</a></td>
+            <td>Delivers notifications to iPhones.</td>
+          </tr>
+          <tr>
+            <td><a href="https://policies.google.com/privacy">Google</a></td>
+            <td>Delivers notifications to Android phones.</td>
+          </tr>
+          <tr>
+            <td><a href="https://posthog.com/privacy">PostHog</a></td>
+            <td>The desktop app's usage events.</td>
+          </tr>
+          <tr>
+            <td><a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a></td>
+            <td>Release downloads and update checks.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        We share data with no one else, unless the law requires it.
+        <span class="todo">TODO (Ryan): confirm the legal-request wording and where data is processed (Clerk, Cloudflare, and PostHog US Cloud)</span>
+      </p>
+
+      <h2 id="retention">How long we keep data</h2>
+      <ul>
+        <li><strong>Your account</strong> stays until you delete it.</li>
+        <li>
+          <strong>A computer on the relay</strong> stays until you remove it in the desktop app's Settings &gt; Connections. Removing it
+          deletes everything the relay keeps for that computer.
+        </li>
+        <li>
+          <strong>A push token</strong> stays until Apple or Google reports that it no longer works, or until newer
+          tokens on your account push it past the limit of 20.
+        </li>
+        <li><strong>Held webhooks</strong> are deleted when delivered, or after 24 hours.</li>
+        <li><strong>Byte counts</strong> are kept for the current day only.</li>
+        <li><strong>Logs and usage events</strong> are kept as the Logs and desktop app sections say.</li>
+      </ul>
+
+      <h2 id="delete">Deleting your account</h2>
+      <p>
+        You can delete your account from the phone app, the desktop app, or the web. The steps are on
+        <a href="/delete-account">Delete your account</a>.
+      </p>
+      <p>
+        Deleting removes your account from Clerk: your email address, name, picture, sign-in methods, and sessions.
+        Every device is signed out. Your threads and files are untouched, because they are on your computers.
+      </p>
+      <!-- True until the relay removes an account's data on deletion (PLX-1612). Rewrite this paragraph when that ships. -->
+      <p>
+        The relay doesn't yet learn that an account was deleted. Until that is fixed, it keeps the deleted account's
+        list of computers, its list of removed computers, its push tokens, and each computer's registration. Nobody
+        can sign in to that account again, so nothing can reach that data through the relay. A sign-in token issued
+        before the deletion keeps working at the relay until it expires, which is at most one day. Removing
+        each computer in the desktop app's Settings &gt; Connections before you delete the account clears the computers' records. To
+        have the rest removed, <a href="/support">contact us</a>.
+      </p>
+
+      <h2 id="security">Security</h2>
+      <p>
+        Connections to your computers use TLS 1.3 to a key your device pins, whether they go over your network or
+        through the relay. Sign-ins and keys on your devices are kept in the system keychain. Report a vulnerability
+        privately through
+        <a href="https://github.com/ryan-stoffel/parallax/security/advisories/new">GitHub's private reporting</a>.
+      </p>
+
+      <h2 id="children">Children</h2>
+      <p>
+        Parallax is a tool for software developers and isn't directed at children.
+        <span class="todo">TODO (Ryan): the minimum age, and what happens to a child's account</span>
+      </p>
+
+      <h2 id="rights">Your choices and rights</h2>
+      <ul>
+        <li>See and change your name, email address, picture, and sign-in methods on your <a href="https://accounts.parallax.codes/user">account page</a>.</li>
+        <li>Remove a computer or a device in the desktop app's Settings &gt; Connections.</li>
+        <li>Turn notifications off in your phone's settings.</li>
+        <li>Turn desktop usage events off with <code>DO_NOT_TRACK=1</code>.</li>
+        <li>Delete your account at any time.</li>
+        <li>Ask us for a copy of the data listed on this page, or to correct or delete it, through <a href="/support">Support</a>.</li>
+      </ul>
+      <p><span class="todo">TODO (Ryan): rights wording for the regions you serve, such as GDPR and CCPA, and the legal basis for processing</span></p>
+
+      <h2 id="changes">Changes to this policy</h2>
+      <p>
+        When this policy changes, this page changes and its effective date moves. Its full history is public in the
+        project's repository.
+      </p>
+
+      <h2 id="contact">Contact</h2>
+      <p>
+        Questions about this policy or your data:
+        <span class="todo">TODO (Ryan): contact email address</span>
+      </p>
+    </main>
+
+    <footer>
+      <span>Parallax</span>
+      <a href="/privacy">Privacy</a>
+      <a href="/support">Support</a>
+      <a href="/delete-account">Delete account</a>
+      <a href="https://github.com/ryan-stoffel/parallax">GitHub</a>
+    </footer>
+  </body>
+</html>

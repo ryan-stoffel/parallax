@@ -1,0 +1,15 @@
+{
+  "name": "parallax-site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --env staging",
+    "test": "node --test test/pages.test.mjs",
+    "deploy:staging": "node scripts/deploy-staging.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.154.0"
+  },
+  "packageManager": "pnpm@11.10.0"
+}

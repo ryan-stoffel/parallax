@@ -1,0 +1,29 @@
+# parallax.codes (PLX-1648): the privacy policy, support, and account deletion pages. README.md has
+# the deploy steps.
+#
+# A Worker of its own with static assets and no script, apart from the relay's Worker (`relay/`)
+# and the hosted client's (`app.parallax.codes`, 0108). The top level is production, which only
+# Ryan deploys, by hand.
+name = "parallax-site"
+compatibility_date = "2026-10-01"
+
+# The apex, on the account's parallax.codes zone, and no workers.dev or preview URL.
+routes = [{ pattern = "parallax.codes", custom_domain = true }]
+workers_dev = false
+preview_urls = false
+
+# `/privacy` serves `public/privacy.html`, and an unknown path serves `public/404.html`. The
+# response headers, with the CSP, are in `public/_headers`.
+[assets]
+directory = "./public"
+html_handling = "auto-trailing-slash"
+not_found_handling = "404-page"
+
+# Staging: a second Worker, `parallax-site-staging`, on its `workers.dev` URL with no route on
+# `parallax.codes`, for agents to deploy to and look at. Deploy it only with `pnpm deploy:staging`.
+# `pnpm dev` runs it locally.
+[env.staging]
+name = "parallax-site-staging"
+workers_dev = true
+preview_urls = false
+routes = []

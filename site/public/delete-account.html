@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Delete your account · Parallax</title>
+    <meta name="description" content="How to delete a Parallax account from the app or the web, and what is deleted.">
+    <link rel="icon" href="/mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/site.css">
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">
+        <picture>
+          <source srcset="/mark-dark.svg" media="(prefers-color-scheme: dark)">
+          <img src="/mark.svg" alt="" width="22" height="22">
+        </picture>
+        Parallax
+      </a>
+      <nav>
+        <a href="/privacy">Privacy</a>
+        <a href="/support">Support</a>
+        <a href="/delete-account" aria-current="page">Delete account</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Delete your account</h1>
+      <p class="lead">
+        You can delete your Parallax account yourself, at any time, from the phone app, the desktop app, or the web.
+        It takes effect at once and can't be undone.
+      </p>
+
+      <h2 id="before">Before you delete</h2>
+      <p>
+        To clear what Parallax Connect keeps about your computers, remove each one first. In the desktop app, open
+        Settings &gt; Connections, open a computer's menu, and choose Remove. For the computer you're on, run
+        <code>plx connect remove</code> there. <a href="#kept">What is kept</a> explains why.
+      </p>
+
+      <h2 id="phone">From the phone app</h2>
+      <ol>
+        <li>Open Settings and tap your name at the top.</li>
+        <li>Under Security, tap Delete next to Delete account, then Continue.</li>
+        <li>On the account page that opens, choose Delete account and confirm by typing <code>Delete account</code>.</li>
+      </ol>
+      <p>The app signs out and says your account was deleted.</p>
+
+      <h2 id="desktop">From the desktop app</h2>
+      <ol>
+        <li>Open the profile menu at the bottom of the sidebar and choose Manage account.</li>
+        <li>Under Security, choose Delete account. Your account page opens in the browser.</li>
+        <li>Choose Delete account and confirm by typing <code>Delete account</code>.</li>
+      </ol>
+
+      <h2 id="web">From the web, without the app</h2>
+      <ol>
+        <li>Open <a href="https://accounts.parallax.codes/user/security">accounts.parallax.codes/user/security</a> and sign in.</li>
+        <li>Choose Delete account and confirm by typing <code>Delete account</code>.</li>
+      </ol>
+      <p>
+        If you can't sign in, write to
+        <span class="todo">TODO (Ryan): support email address</span>
+        from the account's email address and we'll delete it for you.
+      </p>
+
+      <h2 id="deleted">What is deleted</h2>
+      <ul>
+        <li>Your account: your email address, name, picture, sign-in methods, password, passkeys, and sessions.</li>
+        <li>Your sign-in on every device. Each app signs out the next time it checks, within a day.</li>
+      </ul>
+
+      <h2 id="kept">What is kept</h2>
+      <ul>
+        <li>
+          <strong>Everything on your computers.</strong> Your threads, code, and files never left them, and deleting
+          your account doesn't touch them. Uninstall Parallax from a computer to remove its data there.
+        </li>
+        <!-- True until the relay removes an account's data on deletion (PLX-1612). Rewrite this item when that ships. -->
+        <li>
+          <strong>The relay's record of computers you didn't remove.</strong> Parallax Connect doesn't yet learn that
+          an account was deleted, so it keeps the account's list of computer ids, each computer's name and public key,
+          and your phones' push tokens. Nobody can sign in to the account again, so nothing can reach them through the
+          relay. Removing your computers before you delete clears their records. The push tokens stay until Apple or
+          Google retires them. <a href="/support">Contact us</a> to have any of it removed.
+        </li>
+        <li>
+          <strong>Anonymous usage counts from the desktop app</strong>, which carry a one-way hash of the account's id
+          and no name or email address.
+        </li>
+      </ul>
+      <p>The <a href="/privacy">privacy policy</a> lists everything Parallax stores and for how long.</p>
+    </main>
+
+    <footer>
+      <span>Parallax</span>
+      <a href="/privacy">Privacy</a>
+      <a href="/support">Support</a>
+      <a href="/delete-account">Delete account</a>
+      <a href="https://github.com/ryan-stoffel/parallax">GitHub</a>
+    </footer>
+  </body>
+</html>
