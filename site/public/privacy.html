@@ -254,8 +254,12 @@
       <ul>
         <li><strong>GitHub</strong>, when the apps check for new releases and download updates.</li>
         <li>
-          <strong>GitHub's image servers</strong>, when the apps show a pull request: its authors' avatars and the
-          images in its description and comments.
+          <strong>GitHub's image servers</strong>, when the apps show a pull request, for its authors' avatars.
+        </li>
+        <li>
+          <strong>Whichever server hosts an image in a pull request</strong>. The apps load any image a pull
+          request's description or comments point to. The person who wrote that text chose where the image is
+          hosted, and that host sees your IP address when you open the pull request.
         </li>
         <li><strong>Clerk's and your sign-in provider's image servers</strong>, for your profile picture.</li>
         <li>
@@ -266,6 +270,11 @@
           <strong>Sites you open in the desktop app's built-in browser</strong>, as in any browser. Extensions you
           add to it come from Google's Chrome Web Store, and signing in to Google there is between you and Google.
         </li>
+        <li>
+          <strong>The Agent Client Protocol registry</strong>, when you add a provider in the desktop app, for its
+          list of agents.
+        </li>
+        <li><strong>Open VSX</strong>, when you search for a theme in the desktop app.</li>
       </ul>
       <p>
         This website sets no cookies and runs no scripts or analytics. Cloudflare serves it and processes each
@@ -367,8 +376,10 @@
         not with your sign-in, so deleting the account doesn't disconnect it. Until you act, each one keeps sending
         notifications to the phones registered on the account, receiving its webhooks, serving the guest links you
         made, and reaching the account's other computers. To stop this, remove each computer before you delete the
-        account, as described above, or turn off Reach from anywhere in that computer's Settings &gt; Connections,
-        or run <code>plx connect unlink</code> on it.
+        account, as described above, or turn off Reach from anywhere in that computer's Settings &gt; Connections
+        &gt; Sharing &amp; access, or run <code>plx connect unlink</code> on it. Turning it off disconnects the
+        computer and keeps its registration, so the relay still accepts webhooks sent to it and holds each for up to
+        24 hours. Only removing the computer stops that.
       </p>
       <p>
         To have what the relay still keeps removed, <a href="/support">contact us</a>.
