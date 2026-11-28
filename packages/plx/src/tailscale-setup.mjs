@@ -132,7 +132,7 @@ export async function add(query, options) {
     if (error instanceof StepFailed) return 1;
     throw error;
   } finally {
-    runner.close();
+    await runner.close();
   }
 }
 
