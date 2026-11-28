@@ -509,7 +509,8 @@ async fn host_update_waits_for_a_handle_that_holds_plxd_exe() {
         while !checked() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_secs(2));
+        // Longer than a slow runner's probe, and well inside the move's 10 s of retries.
+        std::thread::sleep(Duration::from_secs(5));
         drop(held);
     });
 

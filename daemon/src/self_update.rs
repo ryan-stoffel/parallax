@@ -595,7 +595,7 @@ async fn probe(launcher: &Launcher, new: &Path, version: &str) -> Result<(), Str
 
 /// Moves `new` over the plxd at `program`, setting the old one aside first when `aside`, as on
 /// Windows. When `new` can't move in, the old one goes back, so `program` is never left missing.
-/// A set-aside that failed is named in the error, since the move in then finds the old plxd
+/// If even that fails, the error says where the old one is and how to put it back. A set-aside that failed is named in the error, since the move in then finds the old plxd
 /// still running there, which Windows reports only as access denied.
 async fn move_in(new: &Path, program: &Path, aside: bool) -> Result<(), String> {
     let aside_to = program.with_file_name(ASIDE);
@@ -609,10 +609,15 @@ async fn move_in(new: &Path, program: &Path, aside: bool) -> Result<(), String> 
     };
     let into = format!("Couldn't move plxd into {}: {error}", program.display());
     Err(match set {
-        Some(Ok(())) => {
-            let _ = rename_patiently(&aside_to, program).await;
-            format!("{into}.")
-        }
+        Some(Ok(())) => match rename_patiently(&aside_to, program).await {
+            Ok(()) => format!("{into}."),
+            Err(back) => format!(
+                "{into}, and the old plxd couldn't move back: {back}. It is at {}. Rename it to {} \
+                 to run plxd again.",
+                aside_to.display(),
+                program.display()
+            ),
+        },
         Some(Err(set)) if set.kind() != std::io::ErrorKind::NotFound => format!(
             "{into}, since the plxd there couldn't move aside to {}: {set}.",
             aside_to.display()
