@@ -64,7 +64,9 @@ pub(crate) async fn try_listening(client: &mut Client, port: u16) -> Result<(), 
         match (status.listening, status.fingerprint, status.problem) {
             (false, _, Some(problem)) => return Err(problem),
             (true, Some(fingerprint), _) => {
-                if let Ok((_, seen)) = remote::open(&format!("127.0.0.1:{port}"), None).await {
+                // A socket that takes the connection and never answers TLS can't hold this up.
+                let route = format!("127.0.0.1:{port}");
+                if let Ok(Ok((_, seen))) = timeout(PATIENCE, remote::open(&route, None)).await {
                     return if seen == fingerprint {
                         Ok(())
                     } else {

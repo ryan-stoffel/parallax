@@ -168,9 +168,16 @@ async fn host_as(
         let id = client.call::<RelayId>(RelayIdParams {}).await.unwrap();
         assert_eq!(id.host_id, signed.host_id);
         set_remote(&mut client, true).await;
+        // Only a port another socket holds starts again. Any other bind error is a real failure.
         match try_listening(&mut client, port).await {
             Ok(()) => return (server, client, format!("127.0.0.1:{port}"), id.host_id),
-            Err(problem) => eprintln!("plxd couldn't listen on {port}, starting again: {problem}"),
+            Err(problem)
+                if problem.contains("is in use by another program")
+                    || problem.contains("another listener answers") =>
+            {
+                eprintln!("plxd couldn't listen on {port}, starting again: {problem}");
+            }
+            Err(problem) => panic!("plxd couldn't listen on {port}: {problem}"),
         }
         drop(client);
         server.stop().await;

@@ -157,11 +157,12 @@ pub(crate) fn free_port() -> u16 {
     for attempt in 0..span {
         let random = std::collections::hash_map::RandomState::new().hash_one(attempt);
         let port = TEST_PORTS.start + u16::try_from(random % span).expect("below the span");
-        let free = |ip: IpAddr| std::net::TcpListener::bind((ip, port)).is_ok();
-        if !given.contains(&port)
-            && free(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-            && free(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED))
-        {
+        let v4 = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok();
+        // Only a socket holding the port makes it busy on `[::]`, so a computer without IPv6
+        // checks `0.0.0.0` alone.
+        let v6 = std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, port))
+            .map_or_else(|e| e.kind() != std::io::ErrorKind::AddrInUse, |_| true);
+        if !given.contains(&port) && v4 && v6 {
             given.insert(port);
             return port;
         }
