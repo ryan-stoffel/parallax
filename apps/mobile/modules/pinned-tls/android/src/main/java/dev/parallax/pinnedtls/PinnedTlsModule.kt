@@ -259,7 +259,11 @@ class PinnedTlsModule : Module() {
     /** This build's version and build number. */
     Function("appVersion") {
       val info = context.packageManager.getPackageInfo(context.packageName, 0)
-      mapOf("version" to info.versionName.orEmpty(), "build" to info.longVersionCode.toString())
+      mapOf(
+        "name" to context.applicationInfo.loadLabel(context.packageManager).toString(),
+        "version" to info.versionName.orEmpty(),
+        "build" to info.longVersionCode.toString(),
+      )
     }
 
     Function("send") { id: String, text: String ->

@@ -245,6 +245,7 @@ public class PinnedTlsModule: Module {
     Function("appVersion") { () -> [String: String] in
       let info = Bundle.main.infoDictionary ?? [:]
       return [
+        "name": info["CFBundleDisplayName"] as? String ?? info["CFBundleName"] as? String ?? "",
         "version": info["CFBundleShortVersionString"] as? String ?? "",
         "build": info["CFBundleVersion"] as? String ?? "",
       ]

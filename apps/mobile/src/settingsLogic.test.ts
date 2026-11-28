@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import type { ProviderInstance } from "../../desktop/src/protocol/generated/protocol";
 import { presets } from "../../desktop/src/renderer/providerKinds";
-import { newInstance } from "./settingsLogic";
+import { newInstance, versionLine } from "./settingsLogic";
 
 const preset = (name: string) => presets.find((p) => p.name === name)!;
 const instance = (id: string, name: string, kind = id) =>
@@ -23,4 +23,10 @@ test("a model service's secret is filled in, and its other variables kept", () =
   ]);
   // Its program is the kind's own, which plxd picks.
   expect(made.program).toBeUndefined();
+});
+
+test("the version line names the installed build, with Parallax for a native module that gives no name", () => {
+  expect(versionLine({ name: "Parallax (Nightly)", version: "1.0.0", build: "12" })).toBe("Parallax (Nightly) 1.0.0 (12)");
+  expect(versionLine({ name: "Parallax", version: "1.0.0", build: "" })).toBe("Parallax 1.0.0");
+  expect(versionLine({ version: "1.0.0", build: "12" })).toBe("Parallax 1.0.0 (12)");
 });

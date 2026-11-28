@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "Parallax (Nightly)",
+    "name": "Parallax",
     "slug": "parallax",
     "scheme": "parallax",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
+    "icon": "../../design/icon/masters/Parallax-dark-full-1024.png",
     "ios": {
       "bundleIdentifier": "dev.parallax.mobile",
       "appleTeamId": "9D3GQSX699",
-      "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
+      "icon": "../../design/icon/masters/Parallax-dark-full-1024.png",
       "supportsTablet": false,
       "infoPlist": {
         "NSAppTransportSecurity": {
@@ -54,6 +54,14 @@
           },
           {
             "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeDeviceID",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeCoarseLocation",
             "NSPrivacyCollectedDataTypeLinked": true,
             "NSPrivacyCollectedDataTypeTracking": false,
             "NSPrivacyCollectedDataTypePurposes": [

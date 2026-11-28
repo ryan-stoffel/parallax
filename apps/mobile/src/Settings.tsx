@@ -20,6 +20,7 @@ import {
   HardDrive,
   Info,
   KeyRound,
+  LifeBuoy,
   MessageSquare,
   Monitor,
   Moon,
@@ -29,6 +30,7 @@ import {
   RefreshCw,
   Server,
   Settings as SettingsIcon,
+  ShieldCheck,
   SquareTerminal,
   Star,
   Sun,
@@ -60,11 +62,14 @@ import { allAccess } from "./offers";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
 import { askForNotifications, notificationsOn, notify, registerWithRelay } from "./push";
 import { isRelay, ordered } from "./routes";
-import { pages, type SettingsPage } from "./settingsLogic";
+import { pages, versionLine, type SettingsPage } from "./settingsLogic";
 import { Action, can, Page, Section, SelectRow, SwitchRow } from "./SettingsParts";
 import { DeviceIcon, Dot, GitHubLogo, Icon, Mark, Row, T, useColors } from "./ui";
 
 const REPO = "https://github.com/ryan-stoffel/parallax";
+/** Parallax's public pages (`site/`): the privacy policy both stores want linked in the app, and support. */
+const PRIVACY = "https://parallax.codes/privacy";
+const SUPPORT = "https://parallax.codes/support";
 
 function status(m: Computer): string {
   if (m.gate?.kind === "setup") return t("New computer · Needs setup");
@@ -88,11 +93,7 @@ function StatusDot({ m }: { m: Computer }) {
   return <Dot color={m.shownConnected ? c.added : m.state.status === "connecting" && !m.gate ? c.warning : c.faintForeground} />;
 }
 
-/** "Parallax (Nightly) 1.2.3 (45)": this build's name and version. */
-function versionName() {
-  const { version, build } = appVersion();
-  return `Parallax (Nightly) ${version}${build ? ` (${build})` : ""}`;
-}
+const versionName = () => versionLine(appVersion());
 
 /** A small pill of a color, such as a computer's Default. */
 function Pill({ label, color }: { label: string; color: string }) {
@@ -473,7 +474,7 @@ export function ConnectionLogScreen() {
   );
 }
 
-/** About, from the Settings sheet's info button: the version, and Parallax on GitHub. */
+/** About, from the Settings sheet's info button: the version, Parallax on GitHub, and its privacy policy and support page. */
 export function AboutScreen() {
   const c = useColors();
   const nav = useNav();
@@ -503,6 +504,10 @@ export function AboutScreen() {
           onPress={() => void Linking.openURL(REPO)}
         />
         <Row icon={Bug} title={t("Report a problem")} chevron last onPress={() => void Linking.openURL(`${REPO}/issues/new`)} />
+      </Section>
+      <Section>
+        <Row icon={ShieldCheck} title={t("Privacy policy")} chevron onPress={() => void Linking.openURL(PRIVACY)} />
+        <Row icon={LifeBuoy} title={t("Support")} chevron last onPress={() => void Linking.openURL(SUPPORT)} />
       </Section>
     </ScrollView>
   );
