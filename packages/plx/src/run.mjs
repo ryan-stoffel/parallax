@@ -22,7 +22,7 @@ import { POWERSHELL_ARGS } from "./scripts.mjs";
  * @property {(os: import("./releases.mjs").Os) => import("node:child_process").ChildProcess} attach
  *   Starts `plxd attach` from `~/.parallax-plxd` there, where the install put it (0072), with
  *   stdin and stdout piped for plxd's JSON-RPC.
- * @property {() => void} close Ends what the runner keeps open.
+ * @property {() => Promise<void>} close Ends what the runner keeps open, settling once it has.
  */
 
 /** Where the install puts plxd on this computer (0072). */
@@ -75,10 +75,14 @@ export function sshRunner(destination, options) {
     script: (shell, script, capture) => exec(ssh, args(remoteReader(shell)), { input: script, capture }),
     attach: (os) => spawn(ssh, args([remoteAttach(os)]), { stdio: "pipe" }),
     close() {
-      if (!controlDir) return;
-      spawn(ssh, ["-O", "exit", ...args([])], { stdio: "ignore" }).once("close", () =>
-        rmSync(controlDir, { recursive: true, force: true }),
-      );
+      if (!controlDir) return Promise.resolve();
+      return new Promise((resolve) => {
+        const done = () => {
+          rmSync(controlDir, { recursive: true, force: true });
+          resolve();
+        };
+        spawn(ssh, ["-O", "exit", ...args([])], { stdio: "ignore" }).once("error", done).once("close", done);
+      });
     },
   };
 }
@@ -92,7 +96,7 @@ export function localRunner() {
         ? exec("sh", ["-s"], { input: script, capture })
         : exec("powershell.exe", POWERSHELL_ARGS, { input: script, capture }),
     attach: () => spawn(localPlxd(), ["attach"], { stdio: "pipe" }),
-    close() {},
+    close: () => Promise.resolve(),
   };
 }
 

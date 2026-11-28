@@ -515,13 +515,15 @@ test("add signs in here, then installs and links over ssh", { skip: process.plat
     assert.match(out, /✓ Added to Parallax from MacBook Air\./);
     const ssh = readFileSync(path.join(home, "ssh.log"), "utf8");
     assert.match(ssh, /-p 2222 -- ryan@box\.local "\$HOME\/\.parallax-plxd\/plxd" attach/);
+    // add waits for the shared connection to end, so nothing writes here once it's done.
+    assert.match(ssh, /-O exit .*ryan@box\.local\n$/);
     assert.equal(fake.calls()[0], 'relay/register {"token":"good-token"}');
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     fake.done();
   }
 });
