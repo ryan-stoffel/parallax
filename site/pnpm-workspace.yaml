@@ -1,0 +1,5 @@
+# One package, not a workspace. pnpm 11 reads these settings only from here.
+allowBuilds:
+  # wrangler serves the pages under `pnpm dev` with esbuild and workerd.
+  esbuild: true
+  workerd: true

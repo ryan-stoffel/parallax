@@ -1,5 +1,6 @@
 // What keeps deploy-staging.mjs on the staging Worker (PLX-1495), apart from it so its test never
-// loads a script that deploys.
+// loads a script that deploys. `site/scripts/deploy-staging.mjs` imports these too (PLX-1648), so a
+// change here changes the site's staging deploy.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
