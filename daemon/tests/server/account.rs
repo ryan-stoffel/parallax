@@ -31,7 +31,7 @@ use tokio::time::{Instant, sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::connect::free_port;
-use crate::remote::{LOOPBACK, https, open_account, refusal, set_remote, wait_listening};
+use crate::remote::{LOOPBACK, https, listening, open_account, refusal, set_remote, try_listening};
 use crate::support::{Client, InProcess, kind, temp_dir};
 
 pub(crate) const USER: &str = "user_1";
@@ -124,6 +124,21 @@ async fn host(dir: &Path, issuer: &str) -> (InProcess, Client, String, String) {
     host_at(config(dir, issuer, "http://127.0.0.1:9", free_port())).await
 }
 
+/// A port another listener took before plxd bound it, as another test's can: plxd says it can't
+/// listen, and the host starts again on a new port, rather than going on with the other listener
+/// answering at its route (PLX-1643).
+#[tokio::test]
+async fn a_host_whose_port_was_taken_starts_again_on_another() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let port = free_port();
+    let _taken = std::net::TcpListener::bind((LOOPBACK, port)).unwrap();
+    let (server, _, route, _) =
+        host_at(config(dir.path(), &issuer, "http://127.0.0.1:9", port)).await;
+    assert_ne!(route, format!("127.0.0.1:{port}"));
+    server.stop().await;
+}
+
 /// [`host`], from `config`.
 pub(crate) async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, String) {
     let issuer = config.clerk.issuer.clone();
@@ -131,28 +146,44 @@ pub(crate) async fn host_at(config: plxd::server::Config) -> (InProcess, Client,
 }
 
 /// [`host_at`], with [`USER`] on the instance `issuer`, which absent is the development one, as an
-/// app from before PLX-1465 names none.
+/// app from before PLX-1465 names none. A host that can't bind its port, which another listener
+/// took, starts again on a new one, up to three times (PLX-1643).
 async fn host_as(
-    config: plxd::server::Config,
+    mut config: plxd::server::Config,
     issuer: Option<String>,
 ) -> (InProcess, Client, String, String) {
-    let port = config.remote_port;
-    let server = InProcess::start(config);
-    let mut client = Client::ready(&server.socket).await;
-    // The signing computer's app names the account; the relay never does.
-    let signed = client
-        .call::<RelaySign>(RelaySignParams {
-            token_hash: "hash".to_owned(),
-            user_id: Some(USER.to_owned()),
-            issuer,
-        })
-        .await
-        .unwrap();
-    let id = client.call::<RelayId>(RelayIdParams {}).await.unwrap();
-    assert_eq!(id.host_id, signed.host_id);
-    set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
-    (server, client, format!("127.0.0.1:{port}"), id.host_id)
+    for _ in 0..3 {
+        let port = config.remote_port;
+        let server = InProcess::start(config.clone());
+        let mut client = Client::ready(&server.socket).await;
+        // The signing computer's app names the account; the relay never does.
+        let signed = client
+            .call::<RelaySign>(RelaySignParams {
+                token_hash: "hash".to_owned(),
+                user_id: Some(USER.to_owned()),
+                issuer: issuer.clone(),
+            })
+            .await
+            .unwrap();
+        let id = client.call::<RelayId>(RelayIdParams {}).await.unwrap();
+        assert_eq!(id.host_id, signed.host_id);
+        set_remote(&mut client, true).await;
+        // Only a port another socket holds starts again. Any other bind error is a real failure.
+        match try_listening(&mut client, port).await {
+            Ok(()) => return (server, client, format!("127.0.0.1:{port}"), id.host_id),
+            Err(problem)
+                if problem.contains("is in use by another program")
+                    || problem.contains("another listener answers") =>
+            {
+                eprintln!("plxd couldn't listen on {port}, starting again: {problem}");
+            }
+            Err(problem) => panic!("plxd couldn't listen on {port}: {problem}"),
+        }
+        drop(client);
+        server.stop().await;
+        config.remote_port = free_port();
+    }
+    panic!("plxd couldn't listen on three ports");
 }
 
 async fn set_relay(client: &mut Client, on: bool) {
@@ -1719,7 +1750,7 @@ async fn a_move_trusts_the_production_account_beside_the_development_one() {
     let relay = relay_answering("200 OK", "{}").await;
     let server = InProcess::start(start(&relay));
     let mut client = Client::ready(&server.socket).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     client
         .call::<RelayMove>(moving(token(&production, MOVED)))
         .await

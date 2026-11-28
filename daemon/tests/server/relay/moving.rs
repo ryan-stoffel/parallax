@@ -9,7 +9,7 @@ use parallax_protocol::{AccessGetParams, RelayHostsParams, RelayMoveParams, Rela
 
 use super::{relay_status, set_relay};
 use crate::connect::free_port;
-use crate::remote::{set_remote, wait_listening};
+use crate::remote::{listening, set_remote};
 use crate::support::{Client, InProcess, temp_dir};
 
 /// A computer on the account of the development `token`, connected to the relay at `url`, taking
@@ -31,7 +31,7 @@ async fn on_development(
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let registered = client
         .call::<RelayRegister>(RelayRegisterParams {
             token: token.to_owned(),

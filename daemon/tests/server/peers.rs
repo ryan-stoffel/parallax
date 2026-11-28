@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::agents::{Host, end_turn, fake, init};
 use crate::connect::free_port;
 use crate::mcp::{Mcp, mcp_command};
-use crate::remote::{LOOPBACK, https, set_remote, wait_listening};
+use crate::remote::{LOOPBACK, https, listening, set_remote};
 use crate::support::{Client, InProcess, temp_dir};
 
 async fn set_agent_work(client: &mut Client, on: bool) {
@@ -73,7 +73,7 @@ async fn a_computer_gets_a_session_only_while_agent_work_is_on_and_it_is_approve
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let key = DpopKey::generate();
     let other = key.thumbprint();
     let sessions = async |client: &mut Client| {
@@ -207,7 +207,7 @@ async fn peer_methods_are_only_for_the_local_socket() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_agent_work(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let key = DpopKey::generate();
     approve(&mut client, &key.thumbprint()).await;
     let (status, answer) = ask(port, &key).await;

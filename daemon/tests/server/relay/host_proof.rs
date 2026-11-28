@@ -215,7 +215,7 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     client
         .call::<RelayRegister>(RelayRegisterParams {
             token: token.clone(),

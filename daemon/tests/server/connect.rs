@@ -136,12 +136,38 @@ async fn closes_within(framed: &mut Framed<TcpStream, FrameCodec>, within: Durat
     }
 }
 
+/// The ports [`free_port`] hands out: below every OS's ephemeral range (Linux starts at 32768,
+/// macOS at 49152), so no `bind(0)` or outgoing connection in another test takes one between
+/// `free_port` returning it and plxd binding it (PLX-1643).
+const TEST_PORTS: std::ops::Range<u16> = 20_000..32_000;
+
+/// A port for a test's server to bind later, free on every address now. Each is picked at random
+/// and never handed out twice in this process. Two test binaries running at once, as on a
+/// computer with several worktrees, can still pick the same one, rarely, and [`host_at`] starts
+/// again on another when plxd can't bind it.
+///
+/// [`host_at`]: crate::account::host_at
 pub(crate) fn free_port() -> u16 {
-    std::net::TcpListener::bind((LOOPBACK, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::collections::HashSet;
+    use std::hash::BuildHasher as _;
+    static GIVEN: Mutex<Option<HashSet<u16>>> = Mutex::new(None);
+    let span = u64::from(TEST_PORTS.end - TEST_PORTS.start);
+    let mut given = GIVEN.lock().unwrap();
+    let given = given.get_or_insert_with(HashSet::new);
+    for attempt in 0..span {
+        let random = std::collections::hash_map::RandomState::new().hash_one(attempt);
+        let port = TEST_PORTS.start + u16::try_from(random % span).expect("below the span");
+        let v4 = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok();
+        // Only a socket holding the port makes it busy on `[::]`, so a computer without IPv6
+        // checks `0.0.0.0` alone.
+        let v6 = std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, port))
+            .map_or_else(|e| e.kind() != std::io::ErrorKind::AddrInUse, |_| true);
+        if !given.contains(&port) && v4 && v6 {
+            given.insert(port);
+            return port;
+        }
+    }
+    panic!("no free port in {TEST_PORTS:?}");
 }
 
 pub(crate) async fn set_connect(client: &mut Client, on: bool) {
