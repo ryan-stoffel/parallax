@@ -13,7 +13,8 @@
 //!   A standalone plxd, such as the `~/.local/bin/plxd` `plx connect` installs on Linux, is replaced
 //!   in place, falling back to `~/.parallax-plxd` when its folder isn't writable. A cargo build
 //!   (`target/debug`, `target/release`) refuses. Windows won't replace a running exe but renames
-//!   one, so the old one moves aside to [`ASIDE`] first, and the next `serve` deletes it.
+//!   one, so the old one moves aside to [`ASIDE`] first, and the next `serve` deletes it. Both
+//!   moves keep trying for [`MOVE_PATIENCE`] while another process holds the file (PLX-1644).
 //! - **Never older**: when the plxd already there reports a version that isn't older than the
 //!   one asked for, as when the app refreshed `~/.parallax-plxd` while this plxd waited for its
 //!   agents (PLX-825), nothing is downloaded, and plxd hands over to that one.
@@ -56,6 +57,13 @@ pub const ASIDE: &str = "plxd.old.exe";
 
 /// How long [`remove_aside`] keeps trying while the plxd that ran from it exits.
 const ASIDE_PATIENCE: Duration = Duration::from_secs(10);
+
+/// How long moving the old plxd aside, and the new one in, keep trying on Windows while another
+/// process holds the file, as antivirus does a new exe it scans, or a plxd that is still exiting.
+const MOVE_PATIENCE: Duration = Duration::from_secs(10);
+
+/// How often a held move tries again.
+const MOVE_RETRY: Duration = Duration::from_millis(100);
 
 /// How long the checksum may take to download.
 const SMALL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -540,7 +548,7 @@ pub(crate) async fn install_release(
     }
     // plxd first, then its version: if the second move fails, the new plxd reports the old
     // version, which only makes the app try again, never the old plxd claiming the new one.
-    move_in(&new, &program, cfg!(windows))?;
+    move_in(&new, &program, cfg!(windows)).await?;
     let version_to = program.with_file_name(crate::VERSION_FILE);
     std::fs::rename(&version_file, &version_to)
         .map_err(|error| format!("Couldn't move plxd into {}: {error}.", version_to.display()))?;
@@ -587,14 +595,51 @@ async fn probe(launcher: &Launcher, new: &Path, version: &str) -> Result<(), Str
 
 /// Moves `new` over the plxd at `program`, setting the old one aside first when `aside`, as on
 /// Windows. When `new` can't move in, the old one goes back, so `program` is never left missing.
-fn move_in(new: &Path, program: &Path, aside: bool) -> Result<(), String> {
-    let set = aside && set_aside(program);
-    std::fs::rename(new, program).map_err(|error| {
-        if set {
-            let _ = std::fs::rename(program.with_file_name(ASIDE), program);
+/// A set-aside that failed is named in the error, since the move in then finds the old plxd
+/// still running there, which Windows reports only as access denied.
+async fn move_in(new: &Path, program: &Path, aside: bool) -> Result<(), String> {
+    let aside_to = program.with_file_name(ASIDE);
+    let set = if aside {
+        Some(rename_patiently(program, &aside_to).await)
+    } else {
+        None
+    };
+    let Err(error) = rename_patiently(new, program).await else {
+        return Ok(());
+    };
+    let into = format!("Couldn't move plxd into {}: {error}", program.display());
+    Err(match set {
+        Some(Ok(())) => {
+            let _ = rename_patiently(&aside_to, program).await;
+            format!("{into}.")
         }
-        format!("Couldn't move plxd into {}: {error}.", program.display())
+        Some(Err(set)) if set.kind() != std::io::ErrorKind::NotFound => format!(
+            "{into}, since the plxd there couldn't move aside to {}: {set}.",
+            aside_to.display()
+        ),
+        _ => format!("{into}."),
     })
+}
+
+/// Renames `from` to `to` over any file there, trying again for [`MOVE_PATIENCE`] while another
+/// process holds either on Windows.
+async fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
+    let deadline = tokio::time::Instant::now() + MOVE_PATIENCE;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(error) if held(&error) && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(MOVE_RETRY).await;
+            }
+            renamed => return renamed,
+        }
+    }
+}
+
+/// Whether `error` is how Windows refuses a rename while another process holds the file:
+/// `ERROR_ACCESS_DENIED` (5), as over a running exe or one being scanned, or
+/// `ERROR_SHARING_VIOLATION` (32), for a handle opened without `FILE_SHARE_DELETE`.
+fn held(error: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32))
 }
 
 /// The version of the plxd at `program`, by the `plxd.version` beside it, when it's there and
@@ -605,13 +650,6 @@ fn not_older(program: &Path, version: &str) -> Option<String> {
     let there = crate::stamped_version(program)?;
     (program.is_file() && parse_version(&there).is_some_and(|got| compare(&got, &wanted).is_ge()))
         .then_some(there)
-}
-
-/// Renames the plxd at `program` to [`ASIDE`] beside it, over an earlier one, so that the new one
-/// can move in while it runs: Windows renames a running exe, but won't replace one. Returns
-/// whether it did. When it didn't, as while the earlier one still runs, the move in reports it.
-fn set_aside(program: &Path) -> bool {
-    std::fs::rename(program, program.with_file_name(ASIDE)).is_ok()
 }
 
 /// Deletes [`ASIDE`] beside `exe`, which the plxd an update replaced on Windows ran from. That
