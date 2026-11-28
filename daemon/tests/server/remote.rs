@@ -44,6 +44,41 @@ pub(crate) async fn set_remote(client: &mut Client, on: bool) {
     assert_eq!(settings.remote, Some(on));
 }
 
+/// Waits until the host `client` talks to listens at `port` itself: `remote/sessions` says it's
+/// listening, and `127.0.0.1:port` presents the certificate it reports. Fails at once with plxd's
+/// problem when it couldn't bind, as when another listener took the port (PLX-1643).
+pub(crate) async fn listening(client: &mut Client, port: u16) {
+    if let Err(problem) = try_listening(client, port).await {
+        panic!("plxd isn't listening on {port}: {problem}");
+    }
+}
+
+/// [`listening`], with plxd's problem as the error, for a caller that starts again on another port.
+pub(crate) async fn try_listening(client: &mut Client, port: u16) -> Result<(), String> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let status = client
+            .call::<RemoteSessions>(RemoteSessionsParams {})
+            .await
+            .unwrap();
+        match (status.listening, status.fingerprint, status.problem) {
+            (false, _, Some(problem)) => return Err(problem),
+            (true, Some(fingerprint), _) => {
+                if let Ok((_, seen)) = remote::open(&format!("127.0.0.1:{port}"), None).await {
+                    return if seen == fingerprint {
+                        Ok(())
+                    } else {
+                        Err(format!("another listener answers on port {port}"))
+                    };
+                }
+            }
+            _ => {}
+        }
+        assert!(Instant::now() < deadline, "plxd never listened on {port}");
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// Waits until something accepts at `port`, or stops accepting.
 pub(crate) async fn wait_listening(port: u16, listening: bool) {
     let deadline = Instant::now() + PATIENCE;
@@ -208,7 +243,7 @@ async fn a_read_only_device_reads_threads_and_is_refused_writes_and_terminals() 
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let laptop = temp_dir();
     let code = new_code(&mut client).await;
     let route = format!("127.0.0.1:{port}");
@@ -407,7 +442,7 @@ async fn a_read_only_device_runs_nothing_the_repository_configures() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
 
     let repos = temp_dir();
     let repo = real_repo(repos.path());
@@ -648,7 +683,7 @@ async fn a_client_pairs_with_the_code_and_every_other_is_refused() {
             .is_err()
     );
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     client
         .call::<HostSettingsSet>(HostSettingsSetParams {
             device_name: Some("Studio".to_owned()),
@@ -786,7 +821,7 @@ async fn an_expired_code_ends_the_pairing_and_its_advertisement() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
 
     let code = new_code(&mut client).await;
     let status = client
@@ -926,7 +961,7 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let key = remote::DpopKey::generate();
     let base = format!("https://127.0.0.1:{port}");
     let pair = |code: &str| serde_json::json!({ "code": code, "clientLabel": "Phone" }).to_string();
@@ -1134,7 +1169,7 @@ async fn the_ws_upgrade_takes_a_sessions_proof_once_from_its_own_key() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     set_web(&mut client, true).await;
     let key = remote::DpopKey::generate();
     let base = format!("https://127.0.0.1:{port}");
@@ -1316,7 +1351,7 @@ async fn device_name(client: &mut Client) -> Option<String> {
 /// A listening host and a laptop paired with it: the session's key, token, and id.
 async fn paired_laptop(port: u16, client: &mut Client) -> (remote::DpopKey, String, String) {
     set_remote(client, true).await;
-    wait_listening(port, true).await;
+    listening(client, port).await;
     let laptop = temp_dir();
     let code = new_code(client).await;
     let route = format!("127.0.0.1:{port}");
@@ -1543,7 +1578,7 @@ async fn a_dial_through_the_local_plxd_resumes_with_early_data_until_the_host_re
     let host = InProcess::start(host_config());
     let mut client = Client::ready(&host.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let laptop = temp_dir();
     let code = new_code(&mut client).await;
     let route = format!("127.0.0.1:{port}");
@@ -1589,7 +1624,7 @@ async fn a_dial_through_the_local_plxd_resumes_with_early_data_until_the_host_re
     drop(client);
     host.stop().await;
     let host = InProcess::start(host_config());
-    wait_listening(port, true).await;
+    listening(&mut Client::ready(&host.socket).await, port).await;
     dial(Some("early_data_refused")).await;
     dial(Some("early_data_accepted")).await;
     local.stop().await;
@@ -1679,7 +1714,7 @@ async fn a_request_other_than_ws_in_early_data_waits_for_the_handshake() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let answered = tokio::task::spawn_blocking(move || {
         use std::io::{Read as _, Write as _};
         let provider = Arc::new(rustls::crypto::ring::default_provider());

@@ -26,7 +26,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::agents::{Conn, create, end_turn, fake, init, orchestrator_params, start_params, text};
 use crate::connect::free_port;
-use crate::remote::{App, LOOPBACK, open_account, set_remote, wait_listening};
+use crate::remote::{App, LOOPBACK, listening, open_account, set_remote};
 use crate::support::{Client, InProcess, PATIENCE, socket_path, temp_dir};
 
 use super::{pair_through, relay_status, set_relay};
@@ -373,7 +373,7 @@ fn relay_under_test() -> Option<(String, String)> {
 /// Registers `host` with the relay through its proxy and connects it. Its `relay:` route.
 async fn connected(host: &mut Host, token: &str) -> String {
     set_remote(&mut host.client, true).await;
-    wait_listening(host.remote_port, true).await;
+    listening(&mut host.client, host.remote_port).await;
     set_relay(&mut host.client, true).await;
     let registered = host
         .client

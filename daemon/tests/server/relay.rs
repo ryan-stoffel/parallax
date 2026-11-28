@@ -41,9 +41,7 @@ use tokio::time::{Instant, sleep};
 use crate::agents::{end_turn, fake, git, init, real_repo};
 use crate::connect::free_port;
 use crate::mcp::{Mcp, mcp_command};
-use crate::remote::{
-    App, INITIALIZE, LOOPBACK, new_code, open_account, set_remote, wait_listening,
-};
+use crate::remote::{App, INITIALIZE, LOOPBACK, listening, new_code, open_account, set_remote};
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 use crate::thread_tools::Keys;
 use crate::threads::start_params;
@@ -261,7 +259,7 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
 
     // On, but not registered: the relay doesn't know this host's key yet.
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     set_relay(&mut client, true).await;
     let unregistered = relay_status(&mut client, |s| s.problem.is_some()).await;
     assert!(
@@ -465,7 +463,7 @@ async fn computer(
     let server = InProcess::start(crate::account::config(dir, issuer, url, port));
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let registered = client
         .call::<RelayRegister>(RelayRegisterParams {
             token: token.to_owned(),
@@ -678,7 +676,7 @@ async fn the_connection_check_crosses_the_relay_and_names_the_part_that_failed()
     assert_eq!(off.failed, Some(RelayCheckPart::Listener), "{off:?}");
 
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let passed = check(&mut client, Some(&token)).await;
     assert_eq!(passed.failed, None, "{passed:?}");
     assert!(passed.round_trip_ms.is_some(), "{passed:?}");
@@ -795,7 +793,7 @@ impl Computer {
             .await
             .unwrap();
         set_remote(&mut client, true).await;
-        wait_listening(port, true).await;
+        listening(&mut client, port).await;
         let registered = client.call::<RelayRegister>(RelayRegisterParams {
             token: token.to_owned(),
             signed: None,
@@ -1299,7 +1297,7 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let registered = client.call::<RelayRegister>(RelayRegisterParams {
         token: token.clone(),
         signed: None,
@@ -1684,7 +1682,7 @@ async fn online_through(
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let registered = client.call::<RelayRegister>(RelayRegisterParams {
         token: token.to_owned(),
         signed: None,

@@ -19,7 +19,7 @@ use plxd::tailnet::{Node, NotRunning, Status, Tailnet, Whois};
 use tokio::time::{Instant, sleep};
 
 use crate::connect::{ME, free_port, set_connect, whois};
-use crate::remote::{new_code, open, refusal, set_remote, wait_listening};
+use crate::remote::{listening, new_code, open, refusal, set_remote};
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -224,7 +224,7 @@ async fn a_paired_device_may_not_sync() {
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     set_remote(&mut client, true).await;
-    wait_listening(port, true).await;
+    listening(&mut client, port).await;
     let (device, code) = (temp_dir(), new_code(&mut client).await);
     let route = format!("127.0.0.1:{port}");
     let routes = std::slice::from_ref(&route);
