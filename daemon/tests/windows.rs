@@ -471,6 +471,55 @@ async fn host_update_replaces_a_running_plxd_and_starts_the_new_serve() {
     kill(&update.path("data")).await;
 }
 
+/// A handle on the running plxd.exe that refuses renames, as antivirus can hold while it scans,
+/// only delays `host/update`: moving the old plxd aside keeps trying until it closes (PLX-1644).
+/// Without that, the new one lands on the running plxd.exe, which Windows denies.
+#[tokio::test]
+async fn host_update_waits_for_a_handle_that_holds_plxd_exe() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    /// Read sharing only, so no rename gets the DELETE access it needs.
+    const FILE_SHARE_READ: u32 = 1;
+
+    let update = Update::new();
+    let _old = update.serve(&format!("{TEST_LABEL}.held")).spawn().unwrap();
+    update.listened(1).await;
+    let program = update.program.clone();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&program)
+        .unwrap();
+    // Closed a while after the new plxd is checked, when its move is next.
+    let release = std::thread::spawn(move || {
+        let shared = program.parent().unwrap();
+        let checked = || {
+            std::fs::read_dir(shared)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".plxd-update-")
+                        && entry.path().join("plxd.version").exists()
+                })
+        };
+        let deadline = std::time::Instant::now() + PATIENCE;
+        while !checked() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Longer than a slow runner's probe, and well inside the move's 10 s of retries.
+        std::thread::sleep(Duration::from_secs(5));
+        drop(held);
+    });
+
+    update.update().await;
+    release.join().unwrap();
+    update.listened(2).await;
+    kill(&update.path("data")).await;
+}
+
 /// With the logon task installed but not running, as while nobody is logged on, `host/update`
 /// starts the new `serve` itself rather than through `--replace`, which would stop this `serve`
 /// and leave Task Scheduler to start nothing (PLX-825).

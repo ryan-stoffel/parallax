@@ -147,20 +147,22 @@ async fn a_dev_plxd_refuses_host_update() {
 }
 
 /// A new plxd that can't move in puts the one it set aside back, so none goes missing.
-#[test]
-fn a_failed_move_in_puts_the_old_plxd_back() {
+#[tokio::test]
+async fn a_failed_move_in_puts_the_old_plxd_back() {
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join(PLXD);
     fs::write(&program, "running").unwrap();
 
-    let error = move_in(&dir.path().join("missing"), &program, true).unwrap_err();
+    let error = move_in(&dir.path().join("missing"), &program, true)
+        .await
+        .unwrap_err();
     assert!(error.contains("Couldn't move plxd into"), "{error}");
     assert_eq!(fs::read_to_string(&program).unwrap(), "running");
     assert!(!dir.path().join(ASIDE).exists());
 
     let new = dir.path().join("new");
     fs::write(&new, "new").unwrap();
-    move_in(&new, &program, true).unwrap();
+    move_in(&new, &program, true).await.unwrap();
     assert_eq!(fs::read_to_string(&program).unwrap(), "new");
     assert_eq!(
         fs::read_to_string(dir.path().join(ASIDE)).unwrap(),
