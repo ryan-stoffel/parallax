@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy - Parallax</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3CclipPath id='c'%3E%3Ccircle cx='9.5' cy='9.5' r='7'/%3E%3C/clipPath%3E%3Ccircle cx='9.5' cy='9.5' r='7' fill='%232b5cff'/%3E%3Ccircle cx='14.5' cy='14.5' r='7' fill='%23ff4a1f'/%3E%3Ccircle cx='14.5' cy='14.5' r='7' clip-path='url(%23c)' fill='%23e4e4e7'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+<header>
+<svg viewBox="0 0 24 24" aria-hidden="true"><clipPath id="overlap"><circle cx="9.5" cy="9.5" r="7"/></clipPath><circle cx="9.5" cy="9.5" r="7" fill="#2b5cff"/><circle cx="14.5" cy="14.5" r="7" fill="#ff4a1f"/><circle cx="14.5" cy="14.5" r="7" clip-path="url(#overlap)" fill="var(--overlap)"/></svg>
+<a href="/">Parallax</a>
+</header>
+
+<h1>Privacy</h1>
+<p>Last updated November 6, 2026.</p>
+<p>This page says what Parallax keeps about you and where. Parallax is open source, so each statement here can be checked against <a href="https://github.com/ryan-stoffel/parallax">its code</a>. It covers the desktop app, the iPhone app, <code>plxd</code>, <code>plx-cli</code>, Parallax Relay at <code>relay.parallax.codes</code>, and this site.</p>
+<p>In short: your threads, prompts, and code stay on your computers. The relay carries traffic between your devices encrypted to each computer's own key, so it can't read it. The desktop app sends usage counts to PostHog, and you can turn that off.</p>
+
+<h2>Your account</h2>
+<p>Parallax accounts are held by <a href="https://clerk.com">Clerk</a>, at <code>clerk.parallax.codes</code> and <code>accounts.parallax.codes</code>. Parallax keeps no account database of its own.</p>
+<ul>
+<li>Clerk keeps your first and last name, your email address, your profile picture, your password if you set one, and which GitHub, Google, or Apple account you sign in with. It also keeps the sign-in sessions it issues. Clerk's own <a href="https://clerk.com/legal/privacy">privacy policy</a> covers how it handles them.</li>
+<li>Parallax's apps ask Clerk only for your profile and email address. Parallax uses them to show who is signed in, and your Clerk user id to tie your computers to your account. Parallax never receives a token for your GitHub, Google, or Apple account, and reads nothing from them.</li>
+<li>The desktop app keeps its sign-in on your computer, encrypted with the OS's keychain. Where there is no keychain, it keeps the sign-in in memory only.</li>
+</ul>
+
+<h2>Parallax Relay</h2>
+<p>The relay runs on Cloudflare Workers. It lets your devices reach your computers, gives a computer's webhooks a public address, and sends notifications to your iPhone.</p>
+<p><strong>It can't read your threads.</strong> Your device gets the list of your computers from the relay. Each computer's id there is a hash of its public key, and your device runs TLS to <code>plxd</code> through the relay, accepting only a certificate whose key matches that id. So the relay only ever sees encrypted traffic for the computer your device connects to, and it can't pose as one of your computers or read or change what goes through. It passes those encrypted bytes along without keeping them.</p>
+<p>The relay does choose which computers are listed. A compromised relay could list a fake computer of its own, which would show up as an extra computer on your devices and could read anything you send to it. It could also delay or drop any connection.</p>
+<p>What the relay stores:</p>
+<ul>
+<li><strong>For each computer you add:</strong> your account's Clerk user id, the computer's id (a hash of its public key), that public key, the computer's name, the time it last connected, the ids of its open connections, a hash of each webhook address it serves, and how many bytes its connections carried in the current UTC day, which starts over each day. All of it is kept until you remove the computer in Settings &gt; Connections, which deletes it.</li>
+<li><strong>For your account:</strong> the ids of your computers, up to 10, the ids of up to 100 computers removed from it, and the push tokens of up to 20 iPhones, which Apple issues so the relay can send them notifications. A removed computer's id stays in that list with no expiry, until it's pushed out by newer ones or the computer is added again. A push token is deleted when Apple says it's no longer valid.</li>
+<li><strong>Held webhooks.</strong> When a webhook arrives while your computer is offline, the relay holds the request, its headers without cookies and proxy headers, and its body of up to 1 MiB, until the computer takes it, for at most 24 hours. The relay can read a webhook, as any webhook endpoint can.</li>
+</ul>
+<p><strong>Notifications.</strong> When a thread needs you, finishes, or fails, <code>plxd</code> tells the relay the thread's id and which of those happened. The thread's title and the start of its reply come encrypted with a key only your iPhone holds. The relay sends Apple a fixed text, such as "A thread finished.", with the computer's and thread's ids and that encrypted text, and keeps none of it.</p>
+<p><strong>Logs.</strong> The relay writes its own log lines, such as when a computer connects or a connection closes and why. They cut every id to 8 characters and hold no user id, token, or content. Cloudflare's per-request logs, which would hold full addresses with ids and tokens in them, are turned off. Cloudflare keeps the relay's log lines for 7 days.</p>
+<p><strong>IP addresses.</strong> The relay limits how many requests each IP address can make per minute, in Cloudflare's rate limiter, and stores no addresses itself. Cloudflare carries the relay's traffic under its <a href="https://www.cloudflare.com/privacypolicy/">own privacy policy</a>.</p>
+<p><strong>The sign-in code page.</strong> When <code>plx-cli connect</code> can't open a browser, Clerk sends you to <code>relay.parallax.codes/connect/code</code>, which shows a code to paste into the terminal. The relay doesn't log or keep that code.</p>
+
+<h2>On your computers</h2>
+<p><code>plxd</code> keeps its data on each computer it runs on, in <code>~/.parallax</code> (<code>%USERPROFILE%\.parallax</code> on Windows). That includes your projects, your threads and everything in them, agents' git worktrees, and its log. API keys you give it, and the signing secret of each webhook task, go in the OS's keychain. A webhook task's secret stays there as long as the task exists, and is deleted with it. Secrets you give an agent for its commands are deleted after 24 hours. None of it is sent to Parallax's servers. Your own devices read it over the encrypted connection above.</p>
+<p>Agents such as Claude Code and Codex run on your computer with your own sign-in to their provider, and send your prompts and code to that provider under its terms. Parallax doesn't receive them.</p>
+<p>The iPhone app keeps its sign-in, the computers it paired with, and the keys that open its notifications on the phone, in the iOS keychain.</p>
+
+<h2>Usage data</h2>
+<p>The installed desktop app sends three kinds of event to <a href="https://posthog.com">PostHog</a>, so we can count how many installs are in use and how much they do:</p>
+<ul>
+<li><code>app_active</code>, at launch, at each sign-in, and once a day while the app runs.</li>
+<li><code>prompt_sent</code>, for each prompt you send from the app, saying whether it started a thread or followed one up. It doesn't carry the prompt.</li>
+<li><code>tokens_used</code>, while you're signed in, once an hour for each hour and model the agents on your computers ran, with the tokens used and the cost when the provider reports one.</li>
+</ul>
+<p>Each event carries an id, the app's version and release channel, the OS and processor type, and whether you're signed in. Signed in, the id is a one-way hash of your account's user id, the same on all your devices. Signed out, it's a random id made for the install. No event carries your name, email, account id, a file path, a prompt, or code. The events ask PostHog to keep no profile for the id and not to look up a location from your IP address.</p>
+<p>To turn it off, set <code>DO_NOT_TRACK=1</code> in the app's environment. On macOS an app opened from the Dock or Finder doesn't read your shell profile, so run <code>launchctl setenv DO_NOT_TRACK 1</code> and restart the app.</p>
+<p>The iPhone app, <code>plxd</code>, <code>plx-cli</code>, the relay, and this site send no usage data. This site sets no cookies, runs no script, and loads nothing from other servers.</p>
+
+<h2>Other services</h2>
+<ul>
+<li>The desktop app checks GitHub's releases page for updates and downloads them from GitHub.</li>
+<li>The install commands download from GitHub and npm.</li>
+<li>Notifications to your iPhone go through Apple's push service.</li>
+</ul>
+
+<h2>Deleting your data</h2>
+<p>Remove a computer in Settings &gt; Connections to delete what the relay keeps for it, except its id, which stays in your account's list of removed computers, as above.</p>
+<p>Delete the <code>~/.parallax</code> folder to delete what <code>plxd</code> keeps on a computer. That leaves its API keys and webhook secrets in the OS's keychain. To remove them, delete the entries under the service name <code>io.github.ryan-stoffel.parallax</code>: in Keychain Access on macOS, or with <code>secret-tool clear service io.github.ryan-stoffel.parallax</code> on Linux. Deleting a webhook task in Parallax also deletes its secret.</p>
+<p>Clerk's account page, under Manage account &gt; Security, has Delete account. Deleting your account at Clerk doesn't yet clear your account's list of computers and push tokens on the relay, so remove your computers first, or ask us to delete it.</p>
+
+<h2>Contact</h2>
+<p>For questions about this page or to have your data deleted, email <span class="todo">[CONTACT EMAIL: Ryan to fill in]</span>. Report security problems privately through <a href="https://github.com/ryan-stoffel/parallax/security/advisories/new">GitHub's private vulnerability reporting</a>.</p>
+<p>Changes to this page are in <a href="https://github.com/ryan-stoffel/parallax/commits/develop/site/public/privacy.html">its history on GitHub</a>.</p>
+
+<nav>
+<a href="/">Home</a>
+<a href="https://github.com/ryan-stoffel/parallax">GitHub</a>
+<a href="https://github.com/ryan-stoffel/parallax/blob/develop/docs/connect/README.md">Docs</a>
+</nav>
+</main>
+</body>
+</html>
